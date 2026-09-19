@@ -5,8 +5,8 @@ forward-looking, no build history. **The link goes in the first comment, not
 the body** — LinkedIn suppresses reach on posts carrying an outbound link, and
 a bare URL in the body gets auto-linked even inside a code block, so the
 install commands are left to the README rather than pasted here. Figures come from
-[`docs/skill-validation/demo-under-harness.md`](../skill-validation/demo-under-harness.md)
-and [`docs/skill-validation/payload-2k.md`](../skill-validation/payload-2k.md).
+[demo-under-harness.md](https://github.com/jimzucker/flink-training/blob/main/docs/skill-validation/demo-under-harness.md)
+and [payload-2k.md](https://github.com/jimzucker/flink-training/blob/main/docs/skill-validation/payload-2k.md).
 
 ---
 

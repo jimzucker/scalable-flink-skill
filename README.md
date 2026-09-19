@@ -119,13 +119,4 @@ built and validated in:
 | the 4,096-key suite above | [demo-under-harness.md](https://github.com/jimzucker/flink-training/blob/main/docs/skill-validation/demo-under-harness.md) |
 | the six-times-larger message result | [payload-2k.md](https://github.com/jimzucker/flink-training/blob/main/docs/skill-validation/payload-2k.md) |
 
-## History
-
-The skill was named `prove-it-scales` until 2026-09-19, and the validation
-records still use that name, because that is the name they were written under.
-This repository was seeded from
-[flink-training@6df4f84](https://github.com/jimzucker/flink-training/commit/6df4f84),
-where the skill was developed; that repository keeps a working copy so the
-skill is available while working in it.
-
-`docs/` holds the write-up and card used to introduce the skill.
+Those records call the skill `prove-it-scales`, its name until 2026-09-19.

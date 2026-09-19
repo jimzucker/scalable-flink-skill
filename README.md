@@ -32,16 +32,16 @@ One measured suite, at 4,096 distinct keys:
 
 | capacity | throughput | step |
 |---|---:|---|
-| 1 CPU | 58,326 records/s | |
-| 2 CPUs | 120,115 records/s | **2.06×** [1.92, 2.18] |
-| 4 CPUs | 238,804 records/s | **1.99×** [1.95, 2.03] |
+| 1 core | 58,326 records/s | |
+| 2 cores | 120,115 records/s | **2.06×** [1.92, 2.18] |
+| 4 cores | 238,804 records/s | **1.99×** [1.95, 2.03] |
 
 Every case ran at 96.3–98.1% of its CPU cap, so the worker was the constraint
 and not something beside it. Garbage collection was 3.8 / 0.8 / 0.3% of
 capacity.
 
 Make each message six times larger and the same pipeline still returns **4.57×**
-across 1→4 CPUs.
+across 1→4 cores.
 
 Both results, with their raw output, are in the validation repository linked
 under [Evidence](#evidence).

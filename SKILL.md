@@ -31,7 +31,14 @@ report and stop — do not fork it.
 
 **Ask one question at a time. Wait for the answer. Do not start building until
 the claim and the fan-out are known.** Offer a default with each question so the
-user can say "yes". Stop as soon as you can state the claim — usually four to
+user can say "yes".
+
+**When there is no human to ask** — a clean-room run, an unattended agent — do
+not stall and do not skip the interview. Answer all nine yourself, write each
+answer down as a stated assumption in `ASSUMPTIONS.md` beside the claim it
+feeds, and build against that. The claim still has to be written verbatim; it
+is simply yours rather than theirs. Every later decision is judged against it
+the same way, and a reader can see what was assumed rather than agreed. Stop as soon as you can state the claim — usually four to
 six questions. Anything still unknown becomes a stated assumption in the plan.
 
 1. **What is the input event, and what comes out?** One sentence, in domain

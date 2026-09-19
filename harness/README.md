@@ -18,10 +18,14 @@ nohup python3 $H all > results/all.log 2>&1 &        # the whole chain below, on
 stopping at the first step that does not pass; `results/DONE` holds the
 verdict and the wall time, `results/phases.log` the timestamps the harness
 wrote (run 11 wrote its own by hand and spent 20 minutes between commands).
-Wait with `until [ -f results/DONE ]; do sleep 30; done` and nothing more: a
-shell whose command line names `prove.py` from inside the project is a
-watcher by the reaper's rule and is killed with the rest (it took the
-author's own `pgrep -f 'prove.py all'` loop).
+Wait with `until [ -f results/DONE ]; do sleep 30; done` and nothing more.
+**During `tinyproof` and `down` the reaper kills any host process whose
+command line names the project directory** — not only one naming `prove.py`.
+A plain `tail -4 <project>/results/all.log` is enough to be killed, as clean-room
+run 30 found; the author's own `pgrep -f 'prove.py all'` loop went the same way.
+Check on a run from a script whose own command line does not contain the
+project path, or from a shell whose working directory is the project so the
+path never appears as an argument.
 **`--quick` is a smoke run, not a result.** `prove.py all --quick` runs two
 passes per case instead of the configured number (the sentinel still follows,
 so the baseline is measured three times). It measured *one* pass until
@@ -234,7 +238,7 @@ self-test) and `completeness` have passed **for the same build hash**.
 | `generator.manifestCountField` | the manifest field holding the record count |
 | `verifier.cmd` | reads the outputs and `{manifest}`; exits 0 iff every completeness assertion holds with no tolerance |
 | `cases`, `baseline`, `passes` | the cases, which one is the baseline, passes per case (≥2; odd numbers alternate asc/desc/asc). The suite then measures the baseline once more as a **sentinel** — the first and last measurements of the suite are the same case, so a rig that drifts across the suite shows up as baseline spread rather than hiding inside the alternation. No threshold of its own: the 20% ceiling counts it. `suite.md` reports the first→last drift |
-| `backlog.count`, `.seed`, `.smallCount`, `.tinyCount`, `.killAtFraction` | the drain backlog; the completeness backlog (must drain to the last record); the tiny-proof backlog; where the worker is killed. **Size the backlogs for the largest case's rate × (warm-up ceiling + window + two checkpoint intervals)**: the suite at up to 240 + 70 + 20 s, the tiny proof at 120 + 40 + 20 s. The completeness backlog must span **several checkpoint intervals** at the baseline rate, or the kill cannot land where `killAtFraction` says (offsets commit once per interval). A backlog that drains under the job is a refusal, and the refusal says so |
+| `backlog.count`, `.seed`, `.smallCount`, `.tinyCount`, `.killAtFraction` | the drain backlog; the completeness backlog (must drain to the last record); the tiny-proof backlog; where the worker is killed. **Size the backlogs for the largest case's rate × (warm-up ceiling + window + two checkpoint intervals)**: the suite at up to 240 + 70 + 20 s, the tiny proof at 120 + 40 + 20 s. The completeness backlog must span **several checkpoint intervals** at the baseline rate, or the kill cannot land where `killAtFraction` says (offsets commit once per interval). A backlog that drains under the job is a refusal, and the refusal says so. **On a first attempt you cannot know the rate** — that is what the tiny proof measures. Guess high, run the tiny proof, and re-size from the rate it reports: a wrong guess costs one tiny proof, a too-small suite backlog costs the suite. For a fast pipeline `tinyCount` is not small — clean-room run 30 needed 150,000,000, which was 43% of its suite backlog |
 | `caps` | `kafka`, `jobmanager` CPU caps; `tmMemory` (Flink process size), `tmMemoryLimit`, `kafkaMemory`, `kafkaHeap` |
 | `images.flink`, `images.kafka` | pinned tags; preflight checks they are native to the host |
 | `jdk` | the host JDK home; preflight checks its major version matches the engine image |

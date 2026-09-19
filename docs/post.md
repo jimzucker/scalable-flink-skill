@@ -5,22 +5,22 @@ forward-looking, no build history. **The link goes in the first comment, not
 the body** — LinkedIn suppresses reach on posts carrying an outbound link, and
 a bare URL in the body gets auto-linked even inside a code block, so the
 install commands are left to the README rather than pasted here. Figures come from
-[demo-under-harness.md](https://github.com/jimzucker/flink-training/blob/main/docs/skill-validation/demo-under-harness.md)
-and [payload-2k.md](https://github.com/jimzucker/flink-training/blob/main/docs/skill-validation/payload-2k.md).
+[`docs/skill-validation/demo-under-harness.md`](../skill-validation/demo-under-harness.md)
+and [`docs/skill-validation/payload-2k.md`](../skill-validation/payload-2k.md).
 
 ---
 
 Ask Claude to build a data pipeline. An hour later you have the pipeline — and a scaling table you can put in front of a skeptic.
 
-**scalable-flink-skill** is a free Claude Code skill. It interviews you first: what goes in, what comes out, how many distinct keys, what has to be exactly right, and the claim you want to be able to make. It builds in reviewable steps. Then it proves nothing is lost, and measures what actually happens when you double the hardware.
+**scalable-flink-skill** is a free Claude Code skill. It interviews you first: what goes in, what comes out, how many distinct keys, what has to be exactly right, and the claim you want to be able to make. It builds it in reviewable steps. Then it verifies the results are correct and complete, and measures and compares scaling.
 
 What lands on your desk looks like this:
 
 | capacity | throughput | step |
 |---|---:|---|
-| 1 unit | 58,326 records/s | |
-| 2 units | 120,115 records/s | **2.06×** |
-| 4 units | 238,804 records/s | **1.99×** |
+| 1 core | 58,326 records/s | |
+| 2 cores | 120,115 records/s | **2.06×** |
+| 4 cores | 238,804 records/s | **1.99×** |
 
 Near-linear, with the range around each step, and the resource columns beside the throughput so anyone can see the machine was the limit and not something else. Six times the message size, and the same pipeline still returns 4.57× across the same range.
 
@@ -34,7 +34,7 @@ It's free and open, and every validation run behind that table is public. Link i
 
 ---
 
-**First comment:** "What it does, how to install it, and what a result looks like: https://github.com/jimzucker/flink-training/tree/main/docs/scalable-flink-skill"
+**First comment:** "What it does, how to install it, and what a result looks like: https://github.com/jimzucker/scalable-flink-skill"
 
 
 ---

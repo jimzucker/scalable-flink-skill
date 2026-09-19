@@ -1655,11 +1655,15 @@ def render_table(out):
     L.append(hdr)
     L.append("-" * len(hdr))
     for r in out["runs"]:
-        if r.get("status") == "OK":
+        if r.get("status") in ("OK", "CEILING"):
+            # A ceiling was measured: it keeps its rate and its resource columns,
+            # and is excluded from the ratios rather than from the table.
             L.append(f"{r['cores']:>5} {r['pass']:>8} {r['recordsPerSec']:>11,.0f} {r['outputRecsPerSec']:>11,.0f} "
                      f"{r['tmCores']:>6.2f}/{r['cores']:<3} {r['tmCapFrac']:>5.1%} {r['tmThrottledPeriodsPct']:>5.0f} "
                      f"{r['kafkaCores']:>6.2f}/{c.kafka_cap:<3g} {r['sourceIdle']:>7.1%} {r['sourceBackpressured']:>6.1%} "
-                     f"{r['headroomS']:>5.0f}s {r['vantageDisagreement']:>5.1%} {'OK':>8}")
+                     f"{r['headroomS']:>5.0f}s {r['vantageDisagreement']:>5.1%} {r.get('status', 'OK'):>8}")
+            if r.get("status") == "CEILING":
+                L.append(f"        ceiling: {r.get('ceiling')}")
         else:
             L.append(f"{r['cores']:>5} {r['pass']:>8} {'—':>11} {'—':>11} {'—':>10} {'—':>6} {'—':>5} "
                      f"{'—':>10} {'—':>8} {'—':>7} {'—':>6} {'—':>6} {'REFUSED':>8}")
@@ -1735,8 +1739,9 @@ def render_markdown(out):
     L += ["", "| cores | pass | records/s | tm cores | % of cap | throttled | broker cores | src idle | src BP | headroom | vantage |",
           "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for r in out["runs"]:
-        if r.get("status") == "OK":
-            L.append(f"| {r['cores']} | {r['pass']} | {r['recordsPerSec']:,.0f} | {r['tmCores']:.2f} | {r['tmCapFrac']:.1%} | "
+        if r.get("status") in ("OK", "CEILING"):
+            mark = " **(ceiling)**" if r.get("status") == "CEILING" else ""
+            L.append(f"| {r['cores']} | {r['pass']}{mark} | {r['recordsPerSec']:,.0f} | {r['tmCores']:.2f} | {r['tmCapFrac']:.1%} | "
                      f"{r['tmThrottledPeriodsPct']:.0f}% | {r['kafkaCores']:.2f} / {c.kafka_cap:g} | {r['sourceIdle']:.1%} | "
                      f"{r['sourceBackpressured']:.1%} | {r['headroomS']:.0f} s | {r['vantageDisagreement']:.2%} |")
         else:

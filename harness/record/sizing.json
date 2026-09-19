@@ -1,0 +1,191 @@
+{
+ "what": "Backlog sizing replayed against every recorded suite. Each row is the rate the top case actually reached, its measured warm-up, the checkpoint interval and the backlog that suite actually used. size_backlog must not demand more than the backlog these valid tables were produced with.",
+ "sizingWindowS": 30.0,
+ "whyThatWindow": "The guard runs inside cmd_tinyproof, where T is overridden to minWindowS 30 for the tiny proof itself, so that is the window sizing actually uses. Sizing on the suite's own 60 s window was tried and rejected: replayed here it refuses run-11 (wants 216,628,068 against 200,000,000), run-17 (225,451,973 against 192,000,000) and phase3 (215,934,416 against 200,000,000), all three of which produced tables we accepted. The x1.5 margin absorbs the difference in practice.",
+ "suites": [
+  {
+   "run": "run-11",
+   "cores": 4,
+   "rateAtTop": 775610.7,
+   "warmupS": 96.2,
+   "ckptS": 10.0,
+   "backlog": 200000000
+  },
+  {
+   "run": "run-12",
+   "cores": 4,
+   "rateAtTop": 330331.2,
+   "warmupS": 128.6,
+   "ckptS": 10.0,
+   "backlog": 130000000
+  },
+  {
+   "run": "run-13",
+   "cores": 4,
+   "rateAtTop": 611800.3,
+   "warmupS": 90.4,
+   "ckptS": 10.0,
+   "backlog": 230000000
+  },
+  {
+   "run": "run-14",
+   "cores": 4,
+   "rateAtTop": 539902.2,
+   "warmupS": 90.3,
+   "ckptS": 10.0,
+   "backlog": 264000000
+  },
+  {
+   "run": "run-15",
+   "cores": 4,
+   "rateAtTop": 964912.6,
+   "warmupS": 90.3,
+   "ckptS": 10.0,
+   "backlog": 400000000
+  },
+  {
+   "run": "run-16",
+   "cores": 4,
+   "rateAtTop": 584031.4,
+   "warmupS": 104.9,
+   "ckptS": 10.0,
+   "backlog": 190000000
+  },
+  {
+   "run": "run-17",
+   "cores": 4,
+   "rateAtTop": 832233.2,
+   "warmupS": 90.6,
+   "ckptS": 10.0,
+   "backlog": 192000000
+  },
+  {
+   "run": "run-18",
+   "cores": 4,
+   "rateAtTop": 889406.0,
+   "warmupS": 90.2,
+   "ckptS": 10.0,
+   "backlog": 300000000
+  },
+  {
+   "run": "run-19",
+   "cores": 4,
+   "rateAtTop": 718137.9,
+   "warmupS": 90.5,
+   "ckptS": 10.0,
+   "backlog": 240000000
+  },
+  {
+   "run": "run-20",
+   "cores": 4,
+   "rateAtTop": 794486.6,
+   "warmupS": 95.3,
+   "ckptS": 10.0,
+   "backlog": 300000000
+  },
+  {
+   "run": "run-21",
+   "cores": 4,
+   "rateAtTop": 735375.4,
+   "warmupS": 90.1,
+   "ckptS": 10.0,
+   "backlog": 300000000
+  },
+  {
+   "run": "run-23",
+   "cores": 4,
+   "rateAtTop": 670749.1,
+   "warmupS": 90.4,
+   "ckptS": 10.0,
+   "backlog": 240000000
+  },
+  {
+   "run": "run-24",
+   "cores": 4,
+   "rateAtTop": 513209.2,
+   "warmupS": 90.5,
+   "ckptS": 10.0,
+   "backlog": 300000000
+  },
+  {
+   "run": "run-25",
+   "cores": 4,
+   "rateAtTop": 914166.3,
+   "warmupS": 90.4,
+   "ckptS": 10.0,
+   "backlog": 280000000
+  },
+  {
+   "run": "run-26",
+   "cores": 4,
+   "rateAtTop": 580361.5,
+   "warmupS": 113.1,
+   "ckptS": 10.0,
+   "backlog": 200000000
+  },
+  {
+   "run": "run-27",
+   "cores": 4,
+   "rateAtTop": 510045.8,
+   "warmupS": 90.3,
+   "ckptS": 10.0,
+   "backlog": 160000000
+  },
+  {
+   "run": "run-28",
+   "cores": 4,
+   "rateAtTop": 786237.0,
+   "warmupS": 90.4,
+   "ckptS": 10.0,
+   "backlog": 300040000
+  },
+  {
+   "run": "results-A-4keys-mem",
+   "cores": 4,
+   "rateAtTop": 296655.0,
+   "warmupS": 90.4,
+   "ckptS": 5.0,
+   "backlog": 150000000
+  },
+  {
+   "run": "results-C-4096keys",
+   "cores": 4,
+   "rateAtTop": 241302.7,
+   "warmupS": 90.5,
+   "ckptS": 5.0,
+   "backlog": 150000000
+  },
+  {
+   "run": "results-demo-4keys",
+   "cores": 4,
+   "rateAtTop": 305852.0,
+   "warmupS": 90.5,
+   "ckptS": 5.0,
+   "backlog": 150000000
+  },
+  {
+   "run": "harness-live-1",
+   "cores": 4,
+   "rateAtTop": 440984.4,
+   "warmupS": 90.3,
+   "ckptS": 10.0,
+   "backlog": 160000000
+  },
+  {
+   "run": "phase3",
+   "cores": 4,
+   "rateAtTop": 773542.6,
+   "warmupS": 96.1,
+   "ckptS": 10.0,
+   "backlog": 200000000
+  },
+  {
+   "run": "rig-2026-09-04",
+   "cores": 4,
+   "rateAtTop": 731807.4,
+   "warmupS": 90.3,
+   "ckptS": 10.0,
+   "backlog": 200000000
+  }
+ ]
+}

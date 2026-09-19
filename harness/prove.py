@@ -80,6 +80,36 @@ def replay_cases():
     return 1 if bad else 0
 
 
+def replay_sizing():
+    """Backlog sizing against the backlogs that produced valid tables.
+
+    size_backlog decides whether a suite is allowed to run at all, but nothing
+    replayed it: a key-name slip (reading "seconds" where warmup_verdict returns
+    "warmupS") left it falling back to the tiny proof's own 20 s override for
+    however long it stood, and the suite replay cannot see that because it never
+    calls size_backlog. Each recorded suite here produced a table we accepted,
+    so demanding more records than that suite actually used is a guard that
+    disagrees with the record -- and wrong.
+    """
+    path = os.path.join(L.HERE, "record", "sizing.json")
+    if not os.path.exists(path):
+        return 0
+    doc = json.load(open(path))
+    bad = 0
+    for s in doc["suites"]:
+        # the same window the live call site sizes on -- see whyThatWindow
+        want = L.size_backlog(s["rateAtTop"], s["cores"], s["ckptS"],
+                              warmup_max_s=s.get("warmupS"),
+                              window_s=doc.get("sizingWindowS"))
+        if want > s["backlog"]:
+            print(f"REPLAY FAIL: {s['run']} would be refused -- sizing wants {want:,} "
+                  f"records, the suite ran on {s['backlog']:,} and its table was accepted")
+            bad += 1
+    if not bad:
+        print(f"replayed {len(doc['suites'])} recorded backlog sizings")
+    return bad
+
+
 def replay_configs():
     """Config guards against configurations whose verdict we already know.
 
@@ -125,7 +155,7 @@ def cmd_replay():
     import glob
     rec_dir = os.path.join(L.HERE, "record")
     files = [f for f in sorted(glob.glob(os.path.join(rec_dir, "*.json")))
-             if os.path.basename(f) not in ("configs.json", "cases.json")]
+             if os.path.basename(f) not in ("configs.json", "cases.json", "sizing.json")]
     bad, n = [], 0
     for f in files:
         d = json.load(open(f))
@@ -151,7 +181,7 @@ def cmd_replay():
     if bad:
         print("REPLAY FAILED: a threshold disagrees with the record. Fix the threshold, not the record.")
         return 1
-    if replay_names() or replay_cases() or replay_configs():
+    if replay_names() or replay_cases() or replay_configs() or replay_sizing():
         print("REPLAY FAILED: a guard disagrees with a recorded configuration. Fix the guard, not the record.")
         return 1
     print("REPLAY OK: no recorded valid table would be refused, no recorded invalid one reported, "
@@ -752,7 +782,10 @@ def cmd_tinyproof():
                 f"need {d['neededBytes']/1e9:.1f} GB incl. the {d['floorBytes']/1e9:.0f} GB floor, "
                 f"{d['hostFreeBytesNow']/1e9:.1f} GB free now + {d['reclaimableBytes']/1e9:.1f} GB the tiny proof gives back "
                 f"= {d['hostFreeBytes']/1e9:.1f} GB: FITS")
-            warm = (recs[hi].get("warmup") or {}).get("seconds")
+            # warmup_verdict returns "warmupS"; reading "seconds" silently
+            # yielded None, so sizing fell back to the tiny proof's own
+            # warmupMinS override (20 s) instead of the measured warm-up.
+            warm = (recs[hi].get("warmup") or {}).get("warmupS")
             want = L.size_backlog(recs[hi]["recordsPerSec"], hi, c.ckpt_ms / 1000.0,
                                   warmup_max_s=warm)
             out["backlogNeeded"] = want

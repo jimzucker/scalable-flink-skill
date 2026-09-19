@@ -120,3 +120,7 @@ built and validated in:
 | the six-times-larger message result | [payload-2k.md](https://github.com/jimzucker/flink-training/blob/main/docs/skill-validation/payload-2k.md) |
 
 Those records call the skill `prove-it-scales`, its name until 2026-09-19.
+
+## Licence
+
+[Apache License 2.0](LICENSE) — use it, change it, ship it.

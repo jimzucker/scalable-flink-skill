@@ -1,0 +1,39 @@
+# The harness's own guards, run on every push.
+#
+# Neither job needs Docker, a stack or a built pipeline: the harness is
+# standard library only, and both commands work against the recorded runs
+# in harness/record/. That is the point -- the skill's own rule is that a
+# new threshold is replayed against every recorded run before it can block
+# anything, so the rule is enforced here rather than written down and hoped
+# for.
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  guards:
+    name: Harness guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Replay every threshold against the recorded runs
+        run: |
+          cp harness/pipeline.example.json pipeline.json
+          python3 harness/prove.py replay
+
+      - name: Break every guard on purpose
+        run: python3 harness/prove.py selftest-pure
+
+      - name: The skill's name matches the directory it installs into
+        run: |
+          name=$(sed -n 's/^name: //p' SKILL.md | head -1)
+          echo "SKILL.md declares: $name"
+          [ "$name" = "scalable-flink-skill" ]

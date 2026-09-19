@@ -1,5 +1,7 @@
 # scalable-flink-skill
 
+[![CI](https://github.com/jimzucker/scalable-flink-skill/actions/workflows/ci.yml/badge.svg)](https://github.com/jimzucker/scalable-flink-skill/actions/workflows/ci.yml)
+
 A free Claude Code skill that builds your data pipeline and proves it scales.
 
 ![What the skill does, and the scaling table it produces](docs/card.png)
@@ -108,6 +110,10 @@ self-test, or was deleted. The harness carries 38 such guards, and
 `prove.py selftest` breaks all of them on purpose to check each one fires.
 `harness/record/` holds the recorded runs every new threshold is replayed
 against before it can block anything.
+
+CI runs both on every push: `prove.py replay` against the recorded runs, and
+`prove.py selftest-pure`, which breaks all 32 stack-free guards on purpose and
+checks each one fires. Neither needs Docker.
 
 Every run, and every measured pass, is public in the repository the skill was
 built and validated in:

@@ -103,7 +103,7 @@ you the rig runs clean and roughly how fast, not what the ratio is.
 
 ## Evidence
 
-The skill was validated by running it 29 times from a clean room — a fresh
+The skill was validated by running it 30 times from a clean room — a fresh
 directory, one prompt, no human help, and Claude not allowed to read the
 repository that wrote the rules. Every rule a run broke became a guard with a
 self-test, or was deleted. The harness carries 38 such guards, and

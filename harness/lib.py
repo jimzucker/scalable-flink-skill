@@ -1768,7 +1768,7 @@ def render_table(out):
                 L.append(f"        ceiling: {r.get('ceiling')}")
         else:
             L.append(f"{r['cores']:>5} {r['pass']:>8} {'—':>11} {'—':>11} {'—':>10} {'—':>6} {'—':>5} "
-                     f"{'—':>10} {'—':>8} {'—':>7} {'—':>6} {'—':>6} {'REFUSED':>8}")
+                     f"{'—':>10} {'—':>8} {'—':>7} {'—':>6} {'—':>6} {'FAILED':>8}")
             L.append(f"        refusal ({r.get('refusalScope')}): {r.get('refusal')}")
     L.append("-" * len(hdr))
     for cs in t["cases"].values():
@@ -1847,7 +1847,7 @@ def render_markdown(out):
                      f"{r['tmThrottledPeriodsPct']:.0f}% | {r['kafkaCores']:.2f} / {c.kafka_cap:g} | {r['sourceIdle']:.1%} | "
                      f"{r['sourceBackpressured']:.1%} | {r['headroomS']:.0f} s | {r['vantageDisagreement']:.2%} |")
         else:
-            L.append(f"| {r['cores']} | {r['pass']} | REFUSED ({r.get('refusalScope')}) — {r.get('refusal','')[:80]} | | | | | | | | |")
+            L.append(f"| {r['cores']} | {r['pass']} | FAILED ({r.get('refusalScope')}) — {r.get('refusal','')[:80]} | | | | | | | | |")
     L += ["", "| cores | passes | mean records/s | spread | reportable |", "|---:|---:|---:|---:|---|"]
     for cs in t["cases"].values():
         L.append(f"| {cs['cores']} | {cs['passes']} | {cs['meanRecordsPerSec']:,.0f} | {cs['spread']:.1%} | "

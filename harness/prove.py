@@ -102,7 +102,7 @@ def replay_sizing():
                               warmup_max_s=s.get("warmupS"),
                               window_s=doc.get("sizingWindowS"))
         if want > s["backlog"]:
-            print(f"REPLAY FAIL: {s['run']} would be refused -- sizing wants {want:,} "
+            print(f"REPLAY FAIL: {s['run']} would fail -- sizing wants {want:,} "
                   f"records, the suite ran on {s['backlog']:,} and its table was accepted")
             bad += 1
     if not bad:
@@ -184,7 +184,7 @@ def cmd_replay():
     if replay_names() or replay_cases() or replay_configs() or replay_sizing():
         print("REPLAY FAILED: a guard disagrees with a recorded configuration. Fix the guard, not the record.")
         return 1
-    print("REPLAY OK: no recorded valid table would be refused, no recorded invalid one reported, "
+    print("REPLAY OK: no recorded valid table would fail, no recorded invalid one reported, "
           "and every recorded configuration still gets its recorded verdict")
     return 0
 
@@ -207,7 +207,7 @@ def cmd_selftest(live=True, topic=None):
                        result="CEILING", message=e.msg[:200])
         except (Refusal, CaseRefused) as e:
             msg = e.msg if isinstance(e, Refusal) else e.refusal.msg
-            res = dict(guard=name, ok=should_fire and needle.lower() in msg.lower(), result="REFUSED", message=msg[:200])
+            res = dict(guard=name, ok=should_fire and needle.lower() in msg.lower(), result="FAILED", message=msg[:200])
         except Exception as e:
             res = dict(guard=name, ok=False, result=f"WRONG ERROR {type(e).__name__}: {e}"[:200])
         results.append(res)
@@ -769,7 +769,7 @@ def cmd_tinyproof():
                     f"vantage {rec['vantageDisagreement']:.2%}")
             except CaseRefused as e:
                 out["cases"].append(e.rec)
-                log(f"  REFUSED ({e.refusal.scope}): {e.refusal.msg}")
+                log(f"  FAILED ({e.refusal.scope}): {e.refusal.msg}")
                 out["result"] = "FAIL"
                 rc = 1
         if rc == 0:
@@ -779,7 +779,7 @@ def cmd_tinyproof():
             except Refusal as e:
                 out["disk"] = getattr(e, "detail", None)
                 out["result"] = "FAIL"
-                log(f"  REFUSED ({e.scope}): {e.msg}")
+                log(f"  FAILED ({e.scope}): {e.msg}")
                 rc = 1
         if rc == 0:
             d = out["disk"]
@@ -799,7 +799,7 @@ def cmd_tinyproof():
             out["backlogConfigured"] = c.backlog
             if c.backlog < want:
                 out["result"] = "FAIL"
-                log(f"  REFUSED (rig): backlog {c.backlog:,} is short of the {want:,} records the "
+                log(f"  FAILED (rig): backlog {c.backlog:,} is short of the {want:,} records the "
                     f"{hi}-core case needs at its measured {recs[hi]['recordsPerSec']:,.0f} rec/s "
                     f"(warm-up + window + headroom, x1.5); set backlog.count to at least that")
                 rc = 1
@@ -810,29 +810,28 @@ def cmd_tinyproof():
             ideal = hi / lo
             out["ratio"] = round(ratio, 3)
             bound = (T["tinyRatioLo"] * ideal / 2, T["tinyRatioHi"] * ideal / 2)
-            # The low case's rate as a share of the high case's, against the share
-            # its resource buys. Naming the ratio "superlinear" points suspicion
-            # at the fast case; the fault is almost always the slow one, so the
-            # verdict says which case is short and by how much.
+            # Say which case is wrong, not that the ratio looks odd. A big ratio
+            # is almost always the small case running slow, so print both rates
+            # and what the small one should have been.
             share = recs[lo]["recordsPerSec"] / recs[hi]["recordsPerSec"]
             out["baselineShare"] = round(share, 4)
             out["baselineShareExpected"] = round(1 / ideal, 4)
             print(f"\ntiny proof {lo} -> {hi} ratio: {ratio:.3f}x (bounds {bound[0]:.2f}-{bound[1]:.2f})")
-            print(f"  {lo}-core case is {share:.1%} of the {hi}-core case; "
-                  f"{lo} of {hi} cores should return about {1 / ideal:.0%}")
+            print(f"  {lo} core(s)  {recs[lo]['recordsPerSec']:>12,.0f} rec/s")
+            print(f"  {hi} core(s)  {recs[hi]['recordsPerSec']:>12,.0f} rec/s")
+            print(f"  {lo} of {hi} cores did {share:.0%} of the work. It should be about {1 / ideal:.0%}.")
             if not (bound[0] <= ratio <= bound[1]):
                 out["result"] = "FAIL"
                 if ratio > bound[1]:
-                    print(f"STOPPING: the {lo}-core case is the suspect, not the {hi}-core one. It read "
-                          f"{recs[lo]['recordsPerSec']:,.0f} rec/s, {share:.1%} of the {hi}-core case's "
-                          f"{recs[hi]['recordsPerSec']:,.0f}, where {lo} of {hi} cores should return about "
-                          f"{1 / ideal:.0%}. A baseline that far short is a different job graph (chaining "
-                          f"at parallelism 1) or a case time-sharing its threads — read the graph shape "
-                          f"and the cap back before trusting either number.")
+                    print(f"STOPPING: the {lo}-core case is too slow. The {hi}-core case is fine.")
+                    print(f"  Look at the {lo}-core case only. Two things make it slow:")
+                    print(f"  its job graph is a different shape, or its threads are sharing one core.")
+                    print(f"  Check the graph shape and the CPU cap on that case before using either number.")
                 else:
-                    print(f"STOPPING: the {hi}-core case returned {ratio:.3f}x of the {lo}-core case "
-                          f"against an ideal {ideal:.0f}x. Sublinear at this size means the rig is not "
-                          f"what you think it is — the cap, the partitions or the backlog.")
+                    print(f"STOPPING: {hi} cores did only {ratio:.2f}x the work of {lo}. "
+                          f"It should be about {ideal:.0f}x.")
+                    print(f"  The rig is not set up the way you think. Check three things:")
+                    print(f"  the CPU cap, the partition count, and the backlog size.")
                 rc = 1
             else:
                 out["result"] = "PASS"
@@ -1016,9 +1015,10 @@ def cmd_suite():
             except CaseRefused as e:
                 out["runs"].append(e.rec)
                 kind = "CEILING" if e.refusal.scope == "ceiling" else "REFUSED"
+                label = "CEILING" if kind == "CEILING" else "FAILED"
                 out.setdefault("ceilings" if kind == "CEILING" else "refusals", []).append(
                     {"case": cores, "pass": pass_id, "scope": e.refusal.scope, "message": e.refusal.msg})
-                log(f"  {kind}: {e.refusal.msg}")
+                log(f"  {label}: {e.refusal.msg}")
                 if e.refusal.scope == "rig":
                     stop = ("rig refusal", e.refusal.msg)
             save()
@@ -1175,7 +1175,7 @@ def cmd_all(steps=None, results=None):
         try:
             rc = fn()
         except Refusal as e:
-            log(f"REFUSED ({e.scope}): {e.msg}")
+            log(f"FAILED ({e.scope}): {e.msg}")
             rc = 1
         finally:
             if name in ("completeness", "tinyproof", "suite"):
@@ -1234,12 +1234,12 @@ if __name__ == "__main__":
     if name not in ("replay", "selftest-pure", "report"):
         rc = cmd_replay()
         if rc:
-            print("refusing to run with a threshold that disagrees with the record")
+            print("not running: a threshold disagrees with the record")
             sys.exit(rc)
     try:
         rc = COMMANDS[name]()
     except Refusal as e:
-        print(f"REFUSED ({e.scope}): {e.msg}")
+        print(f"FAILED ({e.scope}): {e.msg}")
         rc = 1
     except KeyboardInterrupt:
         rc = 130

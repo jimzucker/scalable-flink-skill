@@ -4,7 +4,7 @@ This directory is the skill's guards as code. **Use it verbatim.** An agent
 following the skill supplies a pipeline and a `pipeline.json`; it does not
 write a sampler, a suite runner, a spread rule, a warm-up rule or a report
 table. Ten clean-room runs each rewrote those from prose, and every one
-re-decided something the rule had already decided — what a refusal does, what
+re-decided something the rule had already decided — what a failed check does, what
 the window is anchored on, what counts as flat — and paid for it in hours.
 
 ```
@@ -51,13 +51,13 @@ self-test's "a case measured only once" guard stopped firing. A guard that
 does not fire, or a record that changes under a flag, is a broken harness.
 
 **Give the broker enough memory to hold the working set.** The harness now
-refuses any case where the broker hit its container memory limit inside the
+fails any case where the broker hit its container memory limit inside the
 window. Measured 2026-09-05, one rig, one build, one backlog, one variable:
 at a 2 GiB limit the broker hit it 310,423 times with 6.3M file-page refaults
-and 649 MB of cache, and all three 4-core passes were refused at 93.1-93.8%
+and 649 MB of cache, and all three 4-core passes failed at 93.1-93.8%
 of cap; at 4 GiB the same case held 99.6-100.1% of cap at 651,653 rec/s and
 the cache grew to 2.14 GB. Back-to-back single cases minutes apart: 2 GiB
-refused with 30,927 hits at 562,907 rec/s and **96.4% of cap** — above the
+failed with 30,927 hits at 562,907 rec/s and **96.4% of cap** — above the
 cap floor, so nothing else would have caught it — and 4 GiB clean with zero
 hits at 646,423 rec/s. A 264M-record backlog wanted 4 GiB here.
 
@@ -88,14 +88,14 @@ reach the people using it.
 
 Cap it deliberately if the study is about memory: `tmMemoryPerCore` (with
 `tmMemoryBase`) gives every subtask the same, and `perCase` gives a case its
-own. A flat `tmMemory` across more than one case is still refused, because it
+own. A flat `tmMemory` across more than one case still fails, because it
 divides across each case's subtasks.
 
 **When capped, worker memory is a fixed base plus a per-subtask share.**
 `caps.tmMemoryBase` covers what does not scale with cores — metaspace, JVM
 overhead, the network buffer floor — and `caps.tmMemoryPerCore` (with optional
 `tmMemoryLimitPerCore`) is multiplied by the case's core count, so every case
-gives each subtask the same memory; a flat `tmMemory` is refused when there is
+gives each subtask the same memory; a flat `tmMemory` fails when there is
 more than one case. Measured 2026-09-07 on one build, cap == parallelism,
 cases interleaved: flat 2048m gave 2c 558,059 and 4c 917,807 rec/s — 2→4 =
 1.645, GC 9.3% at four cores — and per-core memory gave 2c 549,380 (unchanged)
@@ -108,17 +108,17 @@ core with no base, the rig read GC 17.4% at one core against 3.4% at two and
 size. Hence the base term.
 
 **The tiny proof sizes the backlog.** It measures the largest case's rate and
-refuses the chain if `backlog.count` is short of what that case needs to
+fails the chain if `backlog.count` is short of what that case needs to
 survive warm-up, the window and more than one checkpoint interval of headroom
 (x1.5). Every clean-room run from 15 to 20 lost an attempt to a backlog sized
 by guess before anything ran — run 18 sized for 500k rec/s against an actual
 930k, run 20 drained 50M records mid-window. Preflight states the ceiling the
-current guess covers, and the refusal names the number to use.
+current guess covers, and the message names the number to use.
 
 **Broker memory is named, not guessed.** When the broker hits its cgroup
-limit inside a window the refusal now carries the figure to use — the step that
+limit inside a window the message now carries the figure to use — the step that
 worked on this host was x1.6 (3,840 MiB gave 995 hits, 6,144 gave none) — and
-preflight refuses a configuration where the worker at its largest case plus the
+preflight fails a configuration where the worker at its largest case plus the
 broker plus the job manager do not leave the VM a spare gigabyte. Runs 20 and
 21 lost five tiny proofs between them discovering both by trial.
 
@@ -136,7 +136,7 @@ what: worker memory that does not scale per subtask, about 14%; a broker
 starved of page cache, about 13%; four subtasks instead of two on the same
 cores, about 8%, of which roughly 3 points is the source idling. Partition
 count (8 against 16) and network buffer fraction (0.15 against 0.30) were each
-tested with the cases interleaved and changed nothing: 16 partitions refused
+tested with the cases interleaved and changed nothing: 16 partitions failed
 every parallelism-4 case for an unstable warm-up, and the buffers moved the
 per-core rate 0.6%.
 
@@ -161,7 +161,7 @@ morning — 9.4% away, with its 2-core figure down 5.6% and its 4-core up 3.3%.
 Tight pairs next to a ratio that moved between sessions locate the movement
 outside the suite. What moves it is not known.
 
-**A case that is not the constraint is a ceiling, not a refusal.** When the
+**A case that is not the constraint is a ceiling, not a failure.** When the
 worker sits below its cap, the source idles past the ceiling, or the broker
 hits its memory limit while the worker is off its cap, the case is measured,
 kept, reported as `CEILING` with its rate — and excluded from every ratio,
@@ -221,14 +221,14 @@ python3 $H down            # everything this project started, gone; asserted; fs
 ```
 
 Every command writes to `results/` next to `pipeline.json` and appends to
-`results/harness.log`. `suite` refuses to start unless `tinyproof` (with its
+`results/harness.log`. `suite` will not start unless `tinyproof` (with its
 self-test) and `completeness` have passed **for the same build hash**.
 
 ## What the pipeline supplies
 
 | field | what |
 |---|---|
-| `project` | short lowercase token; every container, volume and network is prefixed with it, and `down` asserts nothing with the prefix survives — nor any host process holding a file under `results/` open, naming the project directory on its command line, or naming `prove.py` while running from inside the project (those are killed and listed; a survivor is a refusal — another project's harness, or a shell merely sitting in the directory, is left alone) |
+| `project` | short lowercase token; every container, volume and network is prefixed with it, and `down` asserts nothing with the prefix survives — nor any host process holding a file under `results/` open, naming the project directory on its command line, or naming `prove.py` while running from inside the project (those are killed and listed; a survivor fails the run — another project's harness, or a shell merely sitting in the directory, is left alone) |
 | `topics.in`, `topics.out[]` | the input topic the job consumes and every topic it writes. The harness sets retention on the outputs and recreates them per case |
 | `outputsPerInput` | records written to all outputs per input record. The two-vantage guard divides sink growth by this and compares to committed source offsets |
 | `job.jar`, `job.mainClass`, `job.args` | the job. `args` is a template: `{bootstrap}` `{in}` `{out0}` `{out1}`… `{group}` `{par}` `{ckptMs}`. The job **must** consume `{in}` with consumer group `{group}`, commit offsets on checkpoint, and run at parallelism `{par}` |
@@ -238,8 +238,8 @@ self-test) and `completeness` have passed **for the same build hash**.
 | `generator.manifestCountField` | the manifest field holding the record count |
 | `verifier.cmd` | reads the outputs and `{manifest}`; exits 0 iff every completeness assertion holds with no tolerance |
 | `cases`, `baseline`, `passes` | the cases, which one is the baseline, passes per case (≥2; odd numbers alternate asc/desc/asc). The suite then measures the baseline once more as a **sentinel** — the first and last measurements of the suite are the same case, so a rig that drifts across the suite shows up as baseline spread rather than hiding inside the alternation. No threshold of its own: the 20% ceiling counts it. `suite.md` reports the first→last drift |
-| `extraServices` | optional. Services to splice into the generated stack -- a dashboard, an exporter -- as a map of name to compose service body. The container name must start with the project prefix or `down` refuses for a survivor it did not create, and it must carry a CPU cap: anything sharing the cores under test changes the number being measured. Recorded in `suite.json` under `heldStill.extraServices`. Section 7 of the skill asks for a dashboard and section 6 requires it to live in the compose file; this is how both are satisfied without forking the harness |
-| `backlog.count`, `.seed`, `.smallCount`, `.tinyCount`, `.killAtFraction` | the drain backlog; the completeness backlog (must drain to the last record); the tiny-proof backlog; where the worker is killed. **Size the backlogs for the largest case's rate × (warm-up ceiling + window + two checkpoint intervals)**: the suite at up to 240 + 70 + 20 s, the tiny proof at 120 + 40 + 20 s. The completeness backlog must span **several checkpoint intervals** at the baseline rate, or the kill cannot land where `killAtFraction` says (offsets commit once per interval). A backlog that drains under the job is a refusal, and the refusal says so. **On a first attempt you cannot know the rate** — that is what the tiny proof measures. Guess high, run the tiny proof, and re-size from the rate it reports: a wrong guess costs one tiny proof, a too-small suite backlog costs the suite. For a fast pipeline `tinyCount` is not small — clean-room run 30 needed 150,000,000, which was 43% of its suite backlog |
+| `extraServices` | optional. Services to splice into the generated stack -- a dashboard, an exporter -- as a map of name to compose service body. The container name must start with the project prefix or `down` fails for a survivor it did not create, and it must carry a CPU cap: anything sharing the cores under test changes the number being measured. Recorded in `suite.json` under `heldStill.extraServices`. Section 7 of the skill asks for a dashboard and section 6 requires it to live in the compose file; this is how both are satisfied without forking the harness |
+| `backlog.count`, `.seed`, `.smallCount`, `.tinyCount`, `.killAtFraction` | the drain backlog; the completeness backlog (must drain to the last record); the tiny-proof backlog; where the worker is killed. **Size the backlogs for the largest case's rate × (warm-up ceiling + window + two checkpoint intervals)**: the suite at up to 240 + 70 + 20 s, the tiny proof at 120 + 40 + 20 s. The completeness backlog must span **several checkpoint intervals** at the baseline rate, or the kill cannot land where `killAtFraction` says (offsets commit once per interval). A backlog that drains under the job fails the run, and says so. **On a first attempt you cannot know the rate** — that is what the tiny proof measures. Guess high, run the tiny proof, and re-size from the rate it reports: a wrong guess costs one tiny proof, a too-small suite backlog costs the suite. For a fast pipeline `tinyCount` is not small — clean-room run 30 needed 150,000,000, which was 43% of its suite backlog |
 | `caps` | `kafka`, `jobmanager` CPU caps; `tmMemory` (Flink process size), `tmMemoryLimit`, `kafkaMemory`, `kafkaHeap` |
 | `images.flink`, `images.kafka` | pinned tags; preflight checks they are native to the host |
 | `jdk` | the host JDK home; preflight checks its major version matches the engine image |
@@ -257,14 +257,14 @@ milliseconds, and reports that defect exactly.
 
 Config guards are replayed too: `record/configs.json` holds configurations
 whose verdict is already known — run 20's and run 21's, the rig's, plus two
-that must be refused (flat worker memory, six partitions with a four-core
+that must fail (flat worker memory, six partitions with a four-core
 case) — and `replay` builds each one and checks it still gets that verdict. It
-exists because #68 shipped a rule that refused two configurations which had
+exists because #68 shipped a rule that failed two configurations which had
 already produced accepted runs, and run 22 spent two chains and produced no
 ratios finding out. With this in place that rule fails replay in a second.
 
 `prove.py replay` re-derives every recorded suite in `record/` with the current
-thresholds before any command that touches a stack, and refuses to run if a
+thresholds before any command that touches a stack, and will not run if a
 threshold would void a table the record marks valid or report one it marks
 invalid. **To change a threshold: change it, run `replay`, and if it fails, the
 threshold is wrong — not the record.** A new suite worth remembering goes into
@@ -283,7 +283,7 @@ What the harness measures and how:
 - the cap is read back from `NanoCpus` and `cpu.max`; slots from the engine;
   vertex parallelism and graph shape from the running plan
 - every case tears the job, sampler and worker down on every exit path
-- a refusal about the **rig** stops the suite; a refusal about a **case's data**
+- a failure about the **rig** stops the suite; a failure about a **case's data**
   marks the case, voids the ratios it is in, and moves on
 
 ## Results files

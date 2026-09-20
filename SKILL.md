@@ -8,7 +8,7 @@ description: Use when the user wants to build a data pipeline or service AND dem
 Building the thing is the easy half. Producing a number that survives a skeptical
 reader is the hard half. Everything below is either a **question** to ask before
 building, a **preflight** check that prints PASS/FAIL, a **guard** the harness
-refuses on, or a **rule of judgment** kept short enough to read. The
+fails a run on, or a **rule of judgment** kept short enough to read. The
 validation record behind each rule lives with the project that wrote it, not
 here.
 
@@ -21,9 +21,9 @@ writes `results/DONE` when it is over. You supply the pipeline: a job jar, a
 deterministic generator, a verifier that exits non-zero on any loss, and a
 `pipeline.json` describing them — `harness/README.md` is the contract. Ten
 runs each rewrote the harness from this prose, and every one re-decided
-something it had already decided: what a refusal does, what the window is
+something it had already decided: what a failed check does, what the window is
 anchored on, what counts as flat. Sections 3–6 below say what the harness
-enforces and why, so you can read its refusals; they are not a specification
+enforces and why, so you can read why it stopped a run; they are not a specification
 to re-implement. If the harness cannot express your pipeline, say so in the
 report and stop — do not fork it.
 
@@ -146,7 +146,7 @@ bad window voids one case — so anything checkable now is checked now.
 | disk budget on the **host**, not the container | `backlog + backlog × fan-out × undrained cases + checkpoint state` against host `df` | full disk with no shell to recover in |
 | retention on every topic written but never drained | `retention.bytes` set; it is a periodic sweep, not a bound | sink log 7× its cap between sweeps |
 | the generator is deterministic | two fills with one seed are byte-identical | no expected answer can be computed |
-| CPU cap mechanism chosen once | `--cpus` throughout **or** quota/period throughout; `--cpus 0` is a no-op, `--cpu-quota=-1` sets a period the daemon then refuses to change | second case measured at the first case's cap |
+| CPU cap mechanism chosen once | `--cpus` throughout **or** quota/period throughout; `--cpus 0` is a no-op, `--cpu-quota=-1` sets a period the daemon then will not change | second case measured at the first case's cap |
 | slots ≥ parallelism × jobs | compare before submitting | job waits for resources while the harness times an empty pipeline |
 | transactional-ID prefix and consumer group are scoped per run | include the run id | 470-second cold start after ten runs; 22 dead series on the backlog panel |
 | back-pressure counters exist on the endpoint you will read | dump the endpoint and read what is there | ten minutes on a deprecated path |
@@ -157,7 +157,7 @@ bad window voids one case — so anything checkable now is checked now.
 - run **two** cases, one unit and two, and assert cap consumption in both;
 - **bound the ratio to 0.75×–1.25× of the ideal** — 1.5×–2.5× when the two
   cases are one unit and two, 3×–5× when they are one and four. Beating the
-  ideal is not an error in itself, and nothing refuses for it outside the tiny
+  ideal is not an error in itself, and nothing fails a run for it outside the tiny
   proof: the suite has a floor, not a ceiling. Read a *large* overshoot from
   the other end — one core of two should return about **half** the two-core
   rate, so a ratio of 3× is a baseline at a third of its share, and it is the
@@ -170,7 +170,7 @@ bad window voids one case — so anything checkable now is checked now.
   claim about failure and is untested until something has failed; finding out
   after the suite discards the suite;
 - run one full case with a 10–15 s window so every line of the harness
-  executes, **and fire one refusal on purpose** so you know refusals refuse.
+  executes, **and fail one check on purpose** so you know the checks can fail.
 
 Anything that can void the whole table is tested before the table exists.
 
@@ -235,7 +235,7 @@ on one build, changing only that:
 | chained, no shuffle | 211,533 | 2.16× |
 | same graph as every other case | 140,308 | **3.26×** |
 
-So **read the job graph back off the running plan and refuse any row whose
+So **read the job graph back off the running plan and fail any row whose
 shape differs from the others**, and **lead with step ratios** — 2→4, not 1→4.
 A step ratio has no privileged case in it, a faster single-thread
 implementation cannot be punished by it, and it is the step someone will
@@ -266,7 +266,7 @@ boundaries. This took one run's vantage-point disagreement from 25% to 0.5%.
 
 **Read CPU from the cumulative cgroup counter** (`cpu.stat usage_usec` at open
 and close, divided by elapsed), not `docker stats`, which samples: a valid case
-was refused at 94.4% sampled while the counter said 97.8%. The same file gives
+failed at 94.4% sampled while the counter said 97.8%. The same file gives
 `throttled_usec`, which is direct evidence the cap is what binds.
 
 **Put the resource columns next to the throughput** for every case: what the
@@ -283,7 +283,7 @@ spread exceeds 20% — set above the band the valid cases occupy and below every
 outlier — is **unreportable on its own and voids every ratio it is part of**;
 it does not void the suite. One run's 1-core case spread 14–42% in
 seven consecutive suites while its 2- and 4-core cases held under 6%, and a
-suite-wide refusal threw away six valid 2→4 measurements.
+failing the whole suite threw away six valid 2→4 measurements.
 
 **Ascending then descending.** If the curve differs, something warms or
 accumulates between cases and the shape is partly the order.
@@ -315,7 +315,7 @@ case 12% higher ten minutes after the suite than in it). Budget one extra case.
 **Start the fill the moment the tiny proof passes** and build the dashboard
 while it runs. Nothing but the cases depends on it.
 
-## 6. The harness refuses
+## 6. The checks that fail a run
 
 **A benchmark that prints a number for every input will eventually print a
 wrong one.** The shipped harness implements and self-tests every guard below;
@@ -323,7 +323,7 @@ wrong one.** The shipped harness implements and self-tests every guard below;
 it has passed for the build under test. Each guard exists because a run paid
 for it.
 
-| the harness refuses when | how it checks |
+| what fails a run | how it checks |
 |---|---|
 | the resource cap was not applied | read it back from the container, never the environment variable |
 | parallelism ≠ cap ≠ allocated slots | all three read back from the engine on every case |
@@ -332,7 +332,7 @@ for it.
 | the input divides evenly across subtasks | partition count divisible by every parallelism under test (8 partitions serves 1, 2, 4; 6 would leave the 4-core case reading 2/2/1/1 and never reaching its cap) |
 | memory is not the constraint | worker memory uncapped by default (the demo caps none); a case whose GC exceeds 5.5% of its capacity is a ceiling, not a result. Cap deliberately with `tmMemoryPerCore` or `perCase` when the study is about memory |
 | the claim itself | each step returns ≥95% of linear, or the chain fails with the per-core, idle, GC and cap figures for both cases — a valid table that does not scale is a result about the pipeline, not a table to publish |
-| a refused case still owns the cluster | job torn down on **every** exit path |
+| a failed case still owns the cluster | job torn down on **every** exit path |
 | no job is actually running | engine reports RUNNING with the expected parallelism |
 | the cluster is still busy from the last case | assert idle by asking the engine, not by killing what you think is there |
 | the backlog lacks headroom at window close | a full checkpoint interval of records remains **at the measured rate** — not merely `remaining > 0` |
@@ -347,12 +347,12 @@ for it.
 | host free disk is below the next case's write | checked **before** the case — a full disk takes the shell down with it |
 | a monitor outlived the thing it watched | at teardown, no child the run started survives, and no host process watching `results/`, naming the project, or running `prove.py`-shaped loops from inside it either |
 
-**A refusal stops the suite — when it is about the rig.** A cap that did not
+**A failed check stops the suite — when it is about the rig.** A cap that did not
 apply at one core will not apply at two; a busy cluster, a bad window anchor,
 disagreeing vantage points are the same at every case. A guard about one
 case's *data* — spread, headroom at close — marks that case and moves on. Retry the same case once if the failure is
-plainly transient; if it refuses again, say *"stopping here: the remaining
-cases would fail the same way"* and exit. "REFUSED — continuing" produces a
+plainly transient; if it fails again, say *"stopping here: the remaining
+cases would fail the same way"* and exit. "FAILED — continuing" produces a
 table with holes that look like data.
 
 **Assert the effect, never the exit code.** `docker update --cpus 0` reports
@@ -364,7 +364,7 @@ service recreates its dependencies — **re-verify the backlog against its
 recorded manifest** before trusting it.
 
 **A guard that has never fired is a guess.** Break each one on purpose — wrong
-cap, stopped cluster, truncated backlog — and confirm it refuses. Assert that
+cap, stopped cluster, truncated backlog — and confirm it fails the run. Assert that
 anything launched unattended is alive before waiting on it, and log its stderr
 to a file from the first version; `DEVNULL` turns a one-line diagnosis into a
 half-hour one.
@@ -377,7 +377,7 @@ prose for five runs and broken on every one of them, so `down` now also looks
 for strangers: any host process holding a file under `results/` open, naming
 the project directory on its command line, or naming `prove.py` on its
 command line while running from inside the project, is killed and listed, and
-`down` refuses if one survives. Another project's harness and a shell that
+`down` fails if one survives. Another project's harness and a shell that
 merely sits in the directory are left alone — an earlier, wider rule killed a
 live tiny proof in another directory. A watcher you start on the host will be
 killed by the teardown it was waiting for — start none.
@@ -385,7 +385,7 @@ killed by the teardown it was waiting for — start none.
 **The promotion rule:** when a run breaks a rule, that rule becomes a guard
 in `harness/lib.py` with a self-test in `prove.py selftest`, or it is deleted. **And before any new guard or threshold
 goes into a run, replay it against every result already recorded**: if it
-would have refused a table considered valid, it is wrong, and it is cheaper
+would have failed a table considered valid, it is wrong, and it is cheaper
 to learn that in a minute than in a run. Thresholds come from measured
 spread, not round numbers — a 10% spread guard written when the record
 already showed 10–17% cost two runs; `prove.py replay` is that check, and
@@ -398,7 +398,7 @@ preflight row in §3), *judgment* (prose, and keep that pile small).
 **Add it through `extraServices` in `pipeline.json`** — a map of service name to
 a compose service body, spliced into the stack the harness generates. Two rules,
 because the measurement depends on them: the container name must start with the
-project prefix, or teardown leaves it behind and then refuses for a survivor it
+project prefix, or teardown leaves it behind and then fails for a survivor it
 did not create; and give it a CPU cap, because anything sharing the cores under
 test changes the number being measured. Whatever you add is recorded in the
 results header, so a reader knows what else was on the machine. That is the only

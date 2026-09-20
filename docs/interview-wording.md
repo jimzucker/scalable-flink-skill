@@ -145,21 +145,33 @@ instruction to the harness, not a question to a person, and already lives in §5
 
 > **What has to be exactly right?**
 >
-> *If an output is a running total, a record processed twice is a wrong number,
-> not a duplicate — so this usually matters more than it first sounds.*
+> *Default: positions and market values must be published in order. At the end
+> the positions, at both symbol and account / sub-account / symbol, must match
+> the input, and market values must be final position x latest price.
+> Duplicates have to be handled and not double counted, in all cases.*
 >
-> *If it does matter, there are two separate settings and both are needed:*
-> - *the **sink**, where sending the absolute total per key rather than "add 3"
->   makes a repeat harmless;*
-> - *the **saved state** the total is computed from, which needs exactly-once
->   checkpointing, or a replayed record is counted twice inside the snapshot.*
+> *Two settings, both needed:*
+> - ***Sink**: emit the absolute position per key, not a delta. A repeat is then
+>   harmless.*
+> - ***State**: exactly-once checkpointing. Without it a replayed record is
+>   counted twice inside the snapshot.*
 >
-> *(Default: exactly-once checkpointing, at-least-once sink. Both get named in
-> the report, and it gets tested by killing a worker mid-run.)*
+> *Name both in the report. It gets tested by killing a worker mid-run.*
 
-The question is now one short line. The jargon survives, in the explanation,
-where a reader who needs it will find it and a reader who does not can take the
-default.
+The question is now one short line, and the default is the author's. It states
+invariants rather than settings, which is the right order: the invariants are
+what the verifier asserts, and the two settings are how they are met.
+
+**It adds a requirement the skill did not carry: ordering.** "Published in
+order" is a constraint on the design, not only on the check — Flink gives
+ordering per key within a keyed stream, so it holds for a position per key and
+does not hold across keys or across a rebalance. Worth saying out loud, because
+a reader who assumes global ordering will design for something the engine does
+not offer.
+
+Dropped from the old paragraph: *idempotent*, and "no transactions, no
+commit-interval latency floor" — a real consequence, but one that belongs where
+the sink is configured, not in an interview question.
 
 ### 3 — the question stands; the default says to specify cardinality
 

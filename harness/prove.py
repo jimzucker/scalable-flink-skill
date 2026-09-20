@@ -657,6 +657,32 @@ def cmd_preflight():
             sh(f"docker rm -f {probe}", check=False)
         return f"--cpus throughout; read back NanoCpus={nano} and cgroup cpu.max = 2.0 cores"
 
+    def cred_helper():
+        """A docker credential helper in the path is a hang waiting to happen.
+
+        Reported, not enforced: a private registry legitimately needs one. But
+        the images a scaling study pulls are public, and clean-room run 31 lost
+        about 25 minutes to docker-credential-desktop never answering, with a
+        900 s timeout and a raw traceback for a diagnosis. It also makes macOS
+        ask permission to read another app's data on every run.
+        """
+        cfg_dir = os.environ.get("DOCKER_CONFIG") or os.path.expanduser("~/.docker")
+        path = os.path.join(cfg_dir, "config.json")
+        if not os.path.exists(path):
+            return f"no docker config at {path}: nothing to hang"
+        try:
+            d = json.load(open(path))
+        except Exception as e:
+            return f"{path} is not readable as JSON ({e}); leaving it alone"
+        store, helpers = d.get("credsStore"), list((d.get("credHelpers") or {}).keys())
+        if not store and not helpers:
+            return f"none configured in {path}"
+        which = f"credsStore={store}" if store else f"credHelpers for {', '.join(helpers[:3])}"
+        return (f"{which} in {path} — every docker command may call it. Public images need "
+                f"none: `mkdir -p ~/.docker-nohelper && echo '{{}}' > ~/.docker-nohelper/"
+                f"config.json && export DOCKER_CONFIG=~/.docker-nohelper` takes it out of the "
+                f"path for this shell")
+
     def memory_budget():
         """Worker at its largest case, broker and job manager must fit the VM with
         room to spare. Runs 20 and 21 each lost attempts discovering this by
@@ -780,6 +806,7 @@ def cmd_preflight():
         return "; ".join(parts)
     check("what this host's own cores do", host_ceiling)
     check("backlog covers warm-up, window and headroom", backlog_sizing_hint)
+    check("docker credential helper (reported)", cred_helper)
     check("worker, broker and job manager against the VM (reported)", memory_budget)
     check("group / txn-id prefix scoped per run", scoping)
     check("back-pressure counters exist on the endpoint read", bp_endpoint)

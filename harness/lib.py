@@ -383,7 +383,21 @@ def log(*a):
 
 def sh(cmd, check=True, timeout=600):
     """Never silence a command while you are still finding out whether it works."""
-    r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+    try:
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        # A timeout used to come out as a raw traceback with no idea what to do
+        # about it. Clean-room run 31 lost about 25 minutes to one: Docker's
+        # credential helper hung, so every docker command sat there until the
+        # timeout, and the traceback said only that a subprocess had expired.
+        hint = ""
+        if cmd.strip().startswith("docker"):
+            hint = ("\nA docker command that hangs rather than failing is usually the credential "
+                    "helper. Check `credsStore` in ~/.docker/config.json: run "
+                    "`echo '{}' > $TMPDIR/dockercfg/config.json` and set DOCKER_CONFIG to that "
+                    "directory to take the helper out of the path, then try again.")
+        raise Refusal("rig", f"this command was still running after {timeout}s and was given up on:"
+                             f"\n  {cmd}\nIt did not fail, it never answered.{hint}")
     if r.returncode != 0 and check:
         raise Refusal("rig", f"command failed ({r.returncode}): {cmd}\n"
                              f"stdout: {r.stdout[-2000:]}\nstderr: {r.stderr[-2000:]}")
@@ -1405,6 +1419,35 @@ def size_broker_memory(limit_bytes, hits):
     if hits <= T["brokerLimitHits"] or not limit_bytes:
         return None
     return int(limit_bytes * 1.6 / 268435456) * 256
+
+
+def run_case_retrying(run, on_retry=None, attempts=2):
+    """Run one case, retrying once if it fails on this case's own data.
+
+    Section 6 has said to do this for as long as it has existed -- "Retry the
+    same case once if the failure is plainly transient" -- and nothing did it.
+    Clean-room run 31 lost a whole chain attempt to one tiny-proof case whose
+    two vantage points disagreed by 5.7%; the same case passed on the very next
+    attempt with nothing changed.
+
+    Only a `case`-scope failure is retried. A `rig` failure is not transient --
+    a cap that did not apply at one core will not apply at two -- and a ceiling
+    is a result, not a failure, so neither is retried.
+
+    `run` is called with no arguments and either returns or raises. `on_retry`
+    is called with the failure that is about to be retried.
+    """
+    last = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return run()
+        except CaseRefused as e:
+            if e.refusal.scope != "case" or attempt == attempts:
+                raise
+            last = e
+            if on_retry:
+                on_retry(e, attempt)
+    raise last
 
 
 def drained(tick):

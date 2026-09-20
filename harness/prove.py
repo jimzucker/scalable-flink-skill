@@ -255,6 +255,29 @@ def cmd_selftest(live=True, topic=None):
         return lambda: L.check_case(r, 4, kw.pop("_baseline", False))
 
     print("pure guards (synthetic case records through check_case):")
+    # Retrying one transient case is a section 6 rule that nothing implemented
+    # until run 31 lost a chain attempt to a tiny-proof case that passed on the
+    # next try. Each message carries its attempt number, so a needle of
+    # "attempt 1" fails if anything retried that should not have.
+    def flaky(scope, times):
+        st = {"n": 0}
+
+        def run():
+            st["n"] += 1
+            if st["n"] <= times:
+                raise CaseRefused({"cores": 1}, Refusal(scope, f"attempt {st['n']} failed"))
+            return "ok", None
+
+        def go():
+            got, _ = L.run_case_retrying(run)
+            assert got == "ok" and st["n"] == 2, f"expected 2 attempts, took {st['n']}"
+        return go
+
+    expect("a transient case is retried and passes (must not fire)", flaky("case", 1), "",
+           should_fire=False)
+    expect("a case that fails twice is not retried again", flaky("case", 5), "attempt 2")
+    expect("a rig failure is never retried", flaky("rig", 5), "attempt 1")
+    expect("a ceiling is never retried", flaky("ceiling", 5), "attempt 1")
     expect("window has < 3 commit boundaries", case(boundaries=2), "commit boundaries")
     expect("measured rate is zero", case(recordsConsumed=0), "not positive")
     expect("rate came from the engine", case(rateSource="engine numRecordsIn"), "engine")
@@ -792,8 +815,14 @@ def cmd_tinyproof():
         for cores in (lo, hi):
             log(f"---- tiny case {cores} cores ----")
             try:
-                rec, shape_ref = L.run_case(cores, "tiny", "tiny", shape_ref, cores == lo, man,
-                                            warmup_max_s=120.0, reporter_s=2)
+                def once(cores=cores):
+                    return L.run_case(cores, "tiny", "tiny", shape_ref, cores == lo, man,
+                                      warmup_max_s=120.0, reporter_s=2)
+
+                def again(e, attempt):
+                    log(f"  {cores}c failed on its own data, retrying once (section 6): {e.refusal.msg}")
+
+                rec, shape_ref = L.run_case_retrying(once, on_retry=again)
                 recs[cores] = rec
                 out["cases"].append(rec)
                 log(f"  {cores}c: {rec['recordsPerSec']:,.0f} rec/s, tm {rec['tmCapFrac']:.1%} of cap, "
@@ -1067,7 +1096,16 @@ def cmd_suite():
         for cores in order:
             log(f"---- case {cores} cores, pass {pass_id} ----")
             try:
-                rec, shape_ref = L.run_case(cores, pass_id, run_id, shape_ref, cores == c.baseline, man)
+                def once(cores=cores, pass_id=pass_id):
+                    return L.run_case(cores, pass_id, run_id, shape_ref, cores == c.baseline, man)
+
+                def again(e, attempt):
+                    log(f"  {cores}c {pass_id} failed on its own data, retrying once "
+                        f"(section 6): {e.refusal.msg}")
+                    out.setdefault("retries", []).append(
+                        {"case": cores, "pass": pass_id, "message": e.refusal.msg})
+
+                rec, shape_ref = L.run_case_retrying(once, on_retry=again)
                 out["runs"].append(rec)
                 log(f"  {cores}c {pass_id}: {rec['recordsPerSec']:,.0f} rec/s  tm {rec['tmCores']:.2f}/{cores} "
                     f"({rec['tmCapFrac']:.1%})  kafka {rec['kafkaCores']:.2f}/{c.kafka_cap:g}  "

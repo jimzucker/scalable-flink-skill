@@ -311,6 +311,26 @@ def cmd_selftest(live=True, topic=None):
            labelled(dict(tmCapFrac=0.9495, sourceBackpressured=0.6738), "Kafka writes"), "", should_fire=False)
     expect("bottleneck label: Input feed (must not fire)",
            labelled(dict(tmCapFrac=0.80, sourceIdle=0.40), "Input feed"), "", should_fire=False)
+    def scorecard_width(limit=130):
+        """The scorecard stays readable. It reached 175 characters once, a word
+        at a time, because nobody measured it after each addition."""
+        def go():
+            # pinned on CPU with steps that fall short, so the row takes the
+            # longest branch there is; wide numbers everywhere else
+            runs = [{"cores": n, "pass": f"p{i}", "status": "OK", "recordsPerSec": 1234567.0,
+                     "tmCapFrac": 0.9912, "gcFracOfCapacity": 0.031, "kafkaCores": 0.4,
+                     "brokerLimitBytes": 4 * 1024**3, "brokerLimitHits": 1234567,
+                     "sourceBackpressured": 0.05, "sourceIdle": 0.01}
+                    for n in (1, 2, 4) for i in (1, 2)]
+            out = {"runs": runs, "table": L.build_table(runs)}
+            wide = [ln for ln in L.scorecard(out).splitlines() if len(ln) > limit]
+            assert not wide, (f"the scorecard runs to {max(len(x) for x in wide)} characters; "
+                              f"the limit is {limit}. Put the words under the table, not in the row.")
+        return go
+
+    expect("the scorecard stays under 130 characters (must not fire)",
+           scorecard_width(), "", should_fire=False)
+
     def sizes(byts, want):
         def go():
             got = L.gib_str(byts)

@@ -1587,7 +1587,7 @@ def scorecard(out):
     # Each column is what it was given, then how much of it was used, so a
     # reader sees the size and the utilisation without looking anything up.
     L.append(f"  {'cores':>5}{'speed':>13}   {'pipeline CPU':>14}{'pipeline memory':>19}"
-             f"{'Kafka CPU':>13}{'Kafka memory':>19}   {'blocked by':<16}what to do")
+             f"{'Kafka CPU':>13}{'Kafka memory':>22}   {'blocked by':<16}what to do")
     # the key for those pairs goes under the table, where there is room for words
 
     notes = []
@@ -1596,7 +1596,7 @@ def scorecard(out):
                      if r.get("cores") == cs["cores"] and r.get("status") in ("OK", "CEILING")), None)
         if not last:
             L.append(f"  {cs['cores']:>5}{cs['meanRecordsPerSec']:>12,.0f}/s   "
-                     f"{'—':>14}{'—':>19}{'—':>13}{'—':>19}   "
+                     f"{'—':>14}{'—':>19}{'—':>13}{'—':>22}   "
                      f"{'Investigating':<16}find out what it is")
             continue
         gc = last.get("gcFracOfCapacity")
@@ -1616,7 +1616,7 @@ def scorecard(out):
         # "raise kafkaMemory to 6400m (not in the table)" read as one sentence.
         mark = "" if cs.get("reportable") else " *"
         L.append(f"  {str(cs['cores']) + mark:>5}{cs['meanRecordsPerSec']:>12,.0f}/s   "
-                 f"{cpu:>14}{mem:>19}{kcpu:>13}{kmemcol:>19}"
+                 f"{cpu:>14}{mem:>19}{kcpu:>13}{kmemcol:>22}"
                  f"   {bottleneck_short(last):<16}"
                  f"{corrective_action(last, step_into.get(cs['cores']), cs['cores'] == lowest)}")
         detail = action_detail(last, cs["cores"], step_into.get(cs["cores"]),

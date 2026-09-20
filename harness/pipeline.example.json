@@ -34,10 +34,12 @@
   "baseline": 1,
   "passes": 3,
   "backlog": {
-    "count": 160000000,
+    "_count": "The suite drains this at every case. Size it with the same rule the tiny proof checks: the fastest case's rate x (warm-up ceiling + window + two checkpoint intervals). Shipped at 160,000,000, it was short at every rate this rig has produced -- 199,832,940 needed at run 31's measured 740,122/s -- and a short suite backlog costs the suite, not the tiny proof. 275,000,000 covers the fastest rate on record (964,913/s, run 15) and costs a few minutes more fill.",
+    "count": 275000000,
     "seed": 20260903,
     "smallCount": 20000000,
-    "tinyCount": 60000000,
+    "_tinyCount": "The tiny proof drains this. Size it for the warm-up ceiling plus the window plus two checkpoint intervals at the fastest case's rate -- 120 + 40 + 20 s. Guess high: a wrong guess costs one tiny proof, and too small costs the chain. Clean-room runs 30 and 31 both needed 150,000,000; run 32 shipped with 60,000,000, which held 94 s at the rate its 4-core case read, against a 55 s warm-up, and neither tiny case could settle. 175,000,000 covers the fastest rate on record.",
+    "tinyCount": 175000000,
     "killAtFraction": 0.35,
     "_killAtFraction": "Approximate by construction: offsets commit once per checkpoint interval, so the kill lands at the first commit past this fraction. Clean-room run 30 asked for 0.35 and it landed at 62.7%, while the log still said 35%."
   },

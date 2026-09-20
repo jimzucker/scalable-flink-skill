@@ -1085,7 +1085,15 @@ def cmd_report():
     out = load_json("suite.json")
     out["table"] = build_table(out["runs"], quick=out.get("quickLook", False))
     c = cfg()
-    short = [r for r in out["table"]["stepRatios"] if r.get("meetsClaim") is False]
+    steps = out["table"]["stepRatios"]
+    short = [r for r in steps if r.get("meetsClaim") is False]
+    # A step above its ideal is not a fast pipeline. Nothing does more than
+    # double the work on double the cores, so the lower case of that step read
+    # too low, and every step it appears in means less than it looks like.
+    # Judged on the low end of the interval, so a noisy pair is not called
+    # impossible on one bad pass.
+    impossible = [r for r in steps if r.get("reportable")
+                  and (r.get("ratioLowCI") or 0) > r["idealRatio"]]
     with open(os.path.join(c.results, "suite.txt"), "w") as f:
         f.write(render_table(out) + "\n")
     with open(os.path.join(c.results, "suite.md"), "w") as f:
@@ -1094,19 +1102,51 @@ def cmd_report():
     print("wrote results/suite.txt and results/suite.md")
     if short:
         t = out["table"]
-        for r in short:
-            print(f"CLAIM NOT MET: {r['step']} returned {r['ratio']:.3f}x of an ideal {r['idealRatio']:.0f}x "
-                  f"— {r['efficiency']:.1%} of linear, floor {T['scalingFloor']:.0%}. The table stands; "
-                  f"the pipeline did not scale on this rig.")
+        need = 2 * T["scalingFloor"]
+
+        def why(r, pad):
+            """What changed across one step, for whoever has to chase it."""
             a, b = t["cases"].get(r["from"]), t["cases"].get(r["to"])
-            if a and b:
-                pa = a["meanRecordsPerSec"] / r["from"]
-                pb = b["meanRecordsPerSec"] / r["to"]
-                print(f"  per core        {pa:>12,.0f} -> {pb:>12,.0f}   ({pb / pa - 1:+.1%})")
-                for k, label in (("tmCapFrac", "% of cap"), ("sourceIdle", "source idle"),
-                                 ("gcFracOfCapacity", "GC"), ("sourceBackpressured", "back-pressure")):
-                    if a.get(k) is not None and b.get(k) is not None:
-                        print(f"  {label:<15} {a[k]:>11.1%} -> {b[k]:>11.1%}")
+            if not (a and b):
+                return
+            pa = a["meanRecordsPerSec"] / r["from"]
+            pb = b["meanRecordsPerSec"] / r["to"]
+            print(f"{pad}per core        {pa:>12,.0f} -> {pb:>12,.0f}   ({pb / pa - 1:+.1%})")
+            for k, label in (("tmCapFrac", "% of cap"), ("sourceIdle", "source idle"),
+                             ("gcFracOfCapacity", "GC"), ("sourceBackpressured", "back-pressure")):
+                if a.get(k) is not None and b.get(k) is not None:
+                    print(f"{pad}{label:<15} {a[k]:>11.1%} -> {b[k]:>11.1%}")
+
+        print("\nCLAIM NOT MET\n")
+
+        # The whole picture first: every case, with each step beside the case
+        # it lands on. A reader should not have to hunt for the good step.
+        print(f"  {'cores':>6}{'speed':>15}" + "".join(f"{r['step'] + ' cores':>15}" for r in steps))
+        for cs in t["cases"].values():
+            cells = [f"{r['ratio']:.2f}x" if r["to"] == cs["cores"] and r.get("reportable") else ""
+                     for r in steps]
+            print(f"  {cs['cores']:>6}{cs['meanRecordsPerSec']:>13,.0f}/s"
+                  + "".join(f"{x:>15}" for x in cells))
+        print(f"\n  Doubling the cores should give 2.00x. This run needs {need:.2f}x or better.")
+
+        print("\n  Fix these in order:\n")
+        n = 1
+        for r in impossible:
+            print(f"  {n}. {r['step']} cores reads {r['ratio']:.2f}x. Nothing does more than "
+                  f"{r['idealRatio']:.2f}x, so the {r['from']}-core reading is too low.")
+            print(f"     Fix this one first. While it is wrong, every step it appears in is")
+            print(f"     wrong too. Check the {r['from']}-core case: is its job graph the same")
+            print(f"     shape as the others, and did it get the cores it asked for?")
+            why(r, "     ")
+            print()
+            n += 1
+        for r in short:
+            print(f"  {n}. {r['step']} cores reads {r['ratio']:.2f}x, under the {need:.2f}x it needs."
+                  f" This is the real shortfall.")
+            why(r, "     ")
+            print()
+            n += 1
+
         try:
             pf = load_json("preflight.json")
             h = (pf.get("hostScaling") if isinstance(pf, dict) else None) or {}
@@ -1131,6 +1171,11 @@ def cmd_report():
               "\n  a broker starved of page cache costs about 13%; four subtasks instead of two costs about"
               "\n  8% on the same cores, of which ~3 points is the source idling. Partition count and network"
               "\n  buffers were tested and changed nothing. See harness/README.md.")
+        print("\n  The table stands. The pipeline did not scale on this machine.\n")
+        print("  This is a list, not a decision. Take it to whoever asked for the run as a")
+        print("  plan -- what you would change, in this order, and what you expect it to")
+        print("  move -- and get a yes before changing anything and measuring again. A")
+        print("  re-run costs about what the run that just finished cost.")
         return 1
     return 0
 

@@ -347,6 +347,16 @@ for it.
 | host free disk is below the next case's write | checked **before** the case — a full disk takes the shell down with it |
 | a monitor outlived the thing it watched | at teardown, no child the run started survives, and no host process watching `results/`, naming the project, or running `prove.py`-shaped loops from inside it either |
 
+**When the claim is not met, show the whole picture and ask before iterating.**
+The report prints every case and every step together, then the steps to fix in
+order — a step reading *above* 2× first, because nothing does more than double
+the work on double the cores, so its lower case read too low and every step it
+appears in means less than it looks like. Fixing the shortfall first while a
+case is under-reading is work against a moving target. Take that list to
+whoever asked for the run as a plan — what you would change, in what order,
+what you expect it to move — and get a yes before measuring again. A re-run
+costs what the last one cost.
+
 **A failed check stops the suite — when it is about the rig.** A cap that did not
 apply at one core will not apply at two; a busy cluster, a bad window anchor,
 disagreeing vantage points are the same at every case. A guard about one

@@ -39,11 +39,12 @@
     "killAtFraction": 0.35,
     "_killAtFraction": "Approximate by construction: offsets commit once per checkpoint interval, so the kill lands at the first commit past this fraction. Clean-room run 30 asked for 0.35 and it landed at 62.7%, while the log still said 35%."
   },
+  "_caps": "Kafka's memory is the setting that most often costs a suite. What matters is kafkaMemory minus kafkaHeap -- the rest is page cache, and a broker that cannot cache the backlog reads it back off disk and becomes the constraint. Every configuration in record/configs.json that produced a usable table left 4.25-5.00 GB; these values leave 5.00 GB and are the pair behind the best recorded result (2->4 = 2.114x).",
   "caps": {
     "kafka": 2.5,
     "jobmanager": 0.5,
-    "kafkaMemory": "4g",
-    "kafkaHeap": "3G"
+    "kafkaMemory": "6g",
+    "kafkaHeap": "1G"
   },
   "images": {
     "flink": "flink:1.20.1-scala_2.12-java17",

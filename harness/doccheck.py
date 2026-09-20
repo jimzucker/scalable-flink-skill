@@ -56,6 +56,51 @@ def check_tiny_ratio_band(fail):
     return f"tiny-proof band {band} of ideal"
 
 
+def check_example_broker_memory(fail):
+    """The shipped example gives Kafka at least as much page cache as the
+    configurations on record that actually produced a table.
+
+    What matters is kafkaMemory minus kafkaHeap: the remainder is page cache,
+    and a broker that cannot hold the backlog reads it back off disk and
+    becomes the constraint instead of the worker. Clean-room run 31 lost a
+    whole 44-minute suite to this -- the example shipped 4g with a 3G heap,
+    leaving 1.00 GB where every accepted configuration in record/configs.json
+    leaves 4.25-5.00 GB. Three cases came back as ceilings and both steps were
+    voided. The floor here is measured, not chosen: it is the smallest page
+    cache any recorded configuration produced a usable table with.
+    """
+    def mb(v):
+        if not v:
+            return None
+        v = str(v).strip()
+        return float(v[:-1]) * 1024 if v[-1] in "gG" else float(v[:-1])
+
+    rec = json.loads(read(HERE, "record", "configs.json"))
+    good = []
+    for c in rec.get("configs", []):
+        if c.get("expect") != "accept":
+            continue
+        caps = c.get("caps") or {}
+        total, heap = mb(caps.get("kafkaMemory")), mb(caps.get("kafkaHeap"))
+        if total and heap:
+            good.append(total - heap)
+    if not good:
+        return "no recorded broker sizes to check against"
+    floor = min(good)
+
+    caps = json.loads(read(HERE, "pipeline.example.json")).get("caps") or {}
+    total, heap = mb(caps.get("kafkaMemory")), mb(caps.get("kafkaHeap"))
+    if not (total and heap):
+        fail("pipeline.example.json sets no kafkaMemory/kafkaHeap to check")
+        return "broker memory not set"
+    cache = total - heap
+    if cache < floor:
+        fail(f"pipeline.example.json leaves Kafka {cache / 1024:.2f} GB for caching "
+             f"({caps['kafkaMemory']} total minus {caps['kafkaHeap']} heap). Every recorded "
+             f"configuration that produced a table left at least {floor / 1024:.2f} GB.")
+    return f"example leaves Kafka {cache / 1024:.2f} GB of page cache (floor {floor / 1024:.2f} GB)"
+
+
 def check_example_comments(fail):
     """A `_field` comment that derives a number and the `field` beside it agree.
 
@@ -87,7 +132,8 @@ def check_example_comments(fail):
 def main():
     problems = []
     lines = []
-    for check in (check_spread_ceiling, check_tiny_ratio_band, check_example_comments):
+    for check in (check_spread_ceiling, check_tiny_ratio_band,
+                  check_example_broker_memory, check_example_comments):
         lines.append(check(problems.append))
     for p in problems:
         print(f"doccheck: {p}")

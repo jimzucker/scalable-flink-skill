@@ -114,11 +114,8 @@ sentence, and the detail is the point.
 > allocation. If the order has 4 allocations it emits 5 records. For the market
 > value we want to throttle it to a configurable interval defaulting to 10
 > seconds.*
->
-> *At 5 outputs per input the write side is 5x the read side. The write side
-> runs out of speed first, and fills the disk.*
 
-The term is gone and the consequence leads. The default is the author's
+The term is gone. The default is the author's
 wording, and it settles the market value in the right place: a throttle you
 choose, not an accident of the design. It stays out of the 5 because the
 fan-out number counts outputs *per input*, and a throttled emit is per

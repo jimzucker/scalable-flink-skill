@@ -227,20 +227,20 @@ def cmd_selftest(live=True, topic=None):
     expect("window has < 3 commit boundaries", case(boundaries=2), "commit boundaries")
     expect("measured rate is zero", case(recordsConsumed=0), "not positive")
     expect("rate came from the engine", case(rateSource="engine numRecordsIn"), "engine")
-    expect("two vantage points disagree", case(vantageDisagreement=0.12), "vantage")
-    expect("backlog lacks headroom at close", case(backlogRemaining=1000, headroomS=0.006), "headroom")
-    expect("external-boundary samples missing", case(sourceIdle=None), "samples")
-    expect("too few reporter samples in the window", case(bpSamples=2), "samples")
-    expect("worker is not the constraint (baseline, run 5\'s 94%)", case(tmCapFrac=0.94, _baseline=True), "not the constraint", ceiling=True)
+    expect("two vantage points disagree", case(vantageDisagreement=0.12), "do not agree")
+    expect("backlog lacks headroom at close", case(backlogRemaining=1000, headroomS=0.006), "nearly ran out")
+    expect("external-boundary samples missing", case(sourceIdle=None), "no back-pressure reading")
+    expect("too few reporter samples in the window", case(bpSamples=2), "readings landed inside")
+    expect("worker is not the constraint (baseline, run 5\'s 94%)", case(tmCapFrac=0.94, _baseline=True), "only used", ceiling=True)
     expect("baseline at 95.9% is the constraint (run 12 p3; must not fire)",
            case(tmCapFrac=0.959, _baseline=True), "", should_fire=False)
-    expect("worker is not the constraint (other)", case(tmCapFrac=0.90), "not the constraint", ceiling=True)
-    expect("source idle past the ceiling", case(sourceIdle=0.4), "waited on input", ceiling=True)
+    expect("worker is not the constraint (other)", case(tmCapFrac=0.90), "only used", ceiling=True)
+    expect("source idle past the ceiling", case(sourceIdle=0.4), "waiting for input", ceiling=True)
     expect("garbage collection is the constraint", case(gcFracOfCapacity=0.13), "garbage collection", ceiling=True)
     expect("GC at the worst level that behaved, 4.8% (must not fire)",
            case(gcFracOfCapacity=0.048), "", should_fire=False)
     expect("the broker was starved of page cache (worker off its cap)",
-           case(brokerLimitHits=310423, brokerRefaults=6270562, tmCapFrac=0.964), "memory limit", ceiling=True)
+           case(brokerLimitHits=310423, brokerRefaults=6270562, tmCapFrac=0.964), "ran out of memory", ceiling=True)
     expect("broker limit hits while the worker is pinned (must not fire)",
            case(brokerLimitHits=9437, brokerRefaults=572000, tmCapFrac=0.996), "", should_fire=False)
     expect("a broker that never hit its limit (must not fire)",
@@ -413,7 +413,7 @@ def cmd_selftest(live=True, topic=None):
                  n_out_topics=2, ckpt_bytes=1e9)
     expect("disk: run 11's build A fitted (must not fire)",
            lambda: L.disk_verdict(103e9, **run11), "", should_fire=False)
-    expect("disk: the suite would not fit", lambda: L.disk_verdict(60e9, **run11), "would not fit")
+    expect("disk: the suite would not fit", lambda: L.disk_verdict(60e9, **run11), "of disk and only")
 
     def chain():
         # in its own directory: the first version wrote its fake chain into the
@@ -888,8 +888,10 @@ def cmd_completeness():
                 cm = max([t.get("committed", -1) for t in ticks] or [-1])
                 if kill_at and not killed and cm >= c.small:
                     # run 5: a kill after the drain has finished proves nothing
-                    raise Refusal("rig", f"the drain finished ({cm} committed) before the kill at {kill_at:.0%} could land: "
-                                         f"smallCount must span several checkpoint intervals at the baseline rate")
+                    raise Refusal("rig", f"the drain finished ({cm:,} records committed) before the worker "
+                                         f"could be killed at {kill_at:.0%}. Nothing was proved. Make "
+                                         f"backlog.smallCount big enough to span several checkpoint "
+                                         f"intervals at the baseline rate.")
                 if kill_at and not killed and cm >= c.small * kill_at:
                     log(f"KILL: committed={cm}, killing the task manager mid-drain")
                     sh(f"docker kill {c.tm}")

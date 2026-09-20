@@ -13,7 +13,10 @@ scalable-flink-skill harness — the one entry point.
   fill          write the full test data set and results/manifest.json     (run it detached)
   completeness  process a small test data set twice — once cleanly, once killed and restarted
                 partway — and check nothing was lost either time
-  suite         the measurements: every core count, several times, up then down
+  suite         the measurements: every core count several times over, going up the sizes
+                then back down then up again (if the order changes the answer, something is
+                warming up between them), then a repeat of the first to check the machine
+                did not slow down while it ran
   ceiling       hold the largest case and squeeze Kafka in steps, to find where it gives out
   report        results/suite.json -> results/suite.txt + results/suite.md
   down          stop everything, check nothing survived, give the disk space back

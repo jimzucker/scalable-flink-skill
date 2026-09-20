@@ -401,6 +401,14 @@ metric service starves at exactly the load you care about. Render images
 server-side, with the timezone passed explicitly, so the picture in the
 write-up is the window the number came from.
 
+**Set the default time range to cover the whole suite, and the metrics store's
+retention to outlast it.** What is being measured is a drain: the producer is
+stopped, the backlog empties, and every panel goes flat the moment the last
+case ends. A dashboard left on a five-minute default is therefore empty for
+everyone who opens it afterwards — which is everyone except the run. The span
+is already on disk: `suite.json` carries `startedAt` and `savedAt`, and every
+case its `tOpen` and `tClose`.
+
 | panel | the question it answers |
 |---|---|
 | rate per stage | is the fan-out real? lines a constant factor apart |
@@ -414,7 +422,10 @@ write-up is the window the number came from.
 On the first render check five things: the legend fits; nothing is secretly on
 a second axis; the timezone is right; every panel has data (a "No data" panel
 usually means provisioning half-applied — verify the artifact loaded, the
-success code lies); and no panel is a ratio of counters on different clocks or
+success code lies — and check this at the suite's range once the suite has
+ended, not only while it is running: a panel that was full live and is empty at
+rest is a range or a retention problem, not a provisioning one); and no panel
+is a ratio of counters on different clocks or
 a signed sum, because both are unstable for reasons unrelated to the pipeline.
 **A panel you cannot explain is a liability** — either it says what the number
 means or it goes.

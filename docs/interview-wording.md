@@ -291,9 +291,47 @@ pipeline, say so and stop. Two coherent readings:
 Until that is settled the question should say which it means, or a reader who
 answers "Confluent Cloud" will expect the harness to go there.
 
+### 9 — say what the choice costs
+
+> **Which Flink API should we use?** DataStream, where the developer has more
+> control over the execution graph, or SQL, where the optimizer makes more of
+> the decisions.
+>
+> *Default: DataStream.*
+
+"Which API level?" assumed the phrase meant something. This names the two and
+says what you give up either way, which is the actual decision.
+
+### New — which Kafka?
+
+Proposed by the author. It passes the test the others are held to: the answer
+changes what gets built, and only the reader knows it, because an organisation
+standardises on one.
+
+> **Which Kafka do you want to use?** Apache or Confluent.
+>
+> *Default: Apache.*
+
+**Possible, and not free.** The harness does not merely run the broker image,
+it mines it: `/opt/kafka/libs` is hardcoded in three places — listing the
+directory to find the kafka-clients jar (`lib.py` 814), copying that jar out to
+compile the offset sampler against (818), and running the sampler *inside* the
+broker image with `-cp '/opt/kafka/libs/*'` (832). Confluent's `cp-kafka` keeps
+its jars in `/usr/share/java/kafka/`, so all three miss. The broker environment
+mostly carries over — `cp-kafka` takes the same `KAFKA_*` KRaft variables — but
+it wants a `CLUSTER_ID`, which Apache's image generates for itself.
+
+So: one config field for the libs path, one environment addition, and a run to
+prove it. The failure mode is already guarded — *"no kafka-clients jar in the
+broker image"* — so a wrong path refuses rather than producing a bad number.
+
+**Land the support in the same change as the question.** Adding the question
+first is the §7 dashboard mistake again: asking for something the skill then
+forbids.
+
 ### Left alone
 
-7 and 9 (6 and 8 after renumbering). They already read plainly, and the
+7 (6 after renumbering). It already reads plainly, and the
 claim question in particular should stay blunt: *"What claim do you want to make? I write it down verbatim."*
 
 Their **defaults** follow from question 1 rather than being canned. If the

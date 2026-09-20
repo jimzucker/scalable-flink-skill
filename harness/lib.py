@@ -1525,15 +1525,31 @@ def gib_str(byts):
     return f"{byts / 1073741824:g}g"
 
 
-def corrective_action(rec):
+def corrective_action(rec, step=None, is_baseline=False):
     """What to do about it, in a few words.
 
     The bottleneck says what is in the way; this says what to change. For
     Kafka's memory the harness already knows the size that worked elsewhere,
     so it names the number rather than saying "more".
+
+    CPU being the limit is only good news if the step into this case actually
+    doubled. It said "nothing — add cores for more" on a case that returned
+    1.53x and on a baseline with no step into it at all, both of which are
+    wrong: the first needs looking at and the second is the thing every other
+    case is measured against.
     """
     label = bottleneck_short(rec)
     if label == "Pipeline CPU":
+        if is_baseline:
+            return "baseline — tune the pipeline to raise it"
+        if not step or not step.get("reportable"):
+            return "investigate — no usable step into this case"
+        ratio, ideal = step["ratio"], step["idealRatio"]
+        need = ideal * T["scalingFloor"]
+        if (step.get("ratioLowCI") or 0) > ideal:
+            return f"investigate — {ratio:.2f}x is above {ideal:.2f}x, so the smaller case reads low"
+        if not step.get("meetsClaim"):
+            return f"investigate — {ratio:.2f}x, short of {need:.2f}x"
         return "nothing — add cores for more"
     if label == "Pipeline memory":
         return "give the pipeline more memory"
@@ -1561,6 +1577,9 @@ def scorecard(out):
     kcap = getattr(c, "kafka_cap", 0) or 0
     kmem = getattr(c, "kafka_mem", "") or "?"
     tmem = c.tm_mem if tm_memory_capped() else "uncapped"
+    # the step that ends at each case, so the advice can ask whether it doubled
+    step_into = {r["to"]: r for r in (t.get("stepRatios") or []) if r.get("to") is not None}
+    lowest = min((cs["cores"] for cs in t.get("cases", {}).values()), default=None)
     # Each column is what it was given, then how much of it was used, so a
     # reader sees the size and the utilisation without looking anything up.
     L.append(f"  {'cores':>5}{'speed':>13}   {'pipeline CPU':>14}{'pipeline memory':>19}"
@@ -1592,7 +1611,8 @@ def scorecard(out):
         mark = "" if cs.get("reportable") else " *"
         L.append(f"  {str(cs['cores']) + mark:>5}{cs['meanRecordsPerSec']:>12,.0f}/s   "
                  f"{cpu:>14}{mem:>19}{kcpu:>13}{kmemcol:>19}"
-                 f"   {bottleneck_short(last):<16}{corrective_action(last)}")
+                 f"   {bottleneck_short(last):<16}"
+                 f"{corrective_action(last, step_into.get(cs['cores']), cs['cores'] == lowest)}")
         if not cs.get("reportable"):
             notes.append(f"  * the {cs['cores']}-core row is not counted in the table: "
                          f"{cs.get('unreportableReason')}. Its numbers are still shown, "
@@ -2259,6 +2279,8 @@ def render_markdown(out):
         else:
             L.append(f"**{r['step'].replace('->', '→')} cores: not reported — {r['reason']}.**")
     kcap = getattr(c, "kafka_cap", 0) or 0
+    step_into = {r["to"]: r for r in (t.get("stepRatios") or []) if r.get("to") is not None}
+    lowest = min((cs["cores"] for cs in t.get("cases", {}).values()), default=None)
     L += ["", "| cores | speed | pipeline CPU | pipeline memory | Kafka CPU | Kafka memory | "
           "blocked by | what to do |", "|---:|---:|---|---|---|---|---|---|",
           "| | | cores it could use / how much it used | memory it could use / share of the time "
@@ -2286,7 +2308,8 @@ def render_markdown(out):
                    if hits is not None else "—")
         mark = "" if cs.get("reportable") else " \\*"
         L.append(f"| {cs['cores']}{mark} | {cs['meanRecordsPerSec']:,.0f}/s | {cpu} | {mem} | "
-                 f"{kcpu} | {kmemcol} | {bottleneck_short(last)} | {corrective_action(last)} |")
+                 f"{kcpu} | {kmemcol} | {bottleneck_short(last)} | "
+                 f"{corrective_action(last, step_into.get(cs['cores']), cs['cores'] == lowest)} |")
     for cs in t.get("cases", {}).values():
         last = next((r for r in reversed(out.get("runs") or [])
                      if r.get("cores") == cs["cores"] and r.get("status") in ("OK", "CEILING")), None)

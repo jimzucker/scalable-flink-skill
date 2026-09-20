@@ -342,8 +342,27 @@ def cmd_selftest(live=True, topic=None):
             assert want in got, f"action said {got!r}, expected {want!r}"
         return go
 
+    def steps(kw, step, baseline, want):
+        r = dict(good); r.update(kw)
+
+        def go():
+            got = L.corrective_action(r, step, baseline)
+            assert want in got, f"action said {got!r}, expected {want!r}"
+        return go
+
+    met = dict(reportable=True, meetsClaim=True, ratio=1.95, idealRatio=2.0, ratioLowCI=1.91)
+    short = dict(reportable=True, meetsClaim=False, ratio=1.53, idealRatio=2.0, ratioLowCI=1.41)
+    over = dict(reportable=True, meetsClaim=True, ratio=2.76, idealRatio=2.0, ratioLowCI=2.41)
+    expect("action: the baseline has no step into it (must not fire)",
+           steps(dict(tmCapFrac=0.99), None, True, "baseline"), "", should_fire=False)
+    expect("action: a step that doubled needs nothing (must not fire)",
+           steps(dict(tmCapFrac=0.99), met, False, "add cores"), "", should_fire=False)
+    expect("action: a short step says investigate (must not fire)",
+           steps(dict(tmCapFrac=0.99), short, False, "short of 1.90x"), "", should_fire=False)
+    expect("action: a step above 2x says the smaller case reads low (must not fire)",
+           steps(dict(tmCapFrac=0.99), over, False, "reads low"), "", should_fire=False)
     expect("action: nothing to do when CPU is the block (must not fire)",
-           acts(dict(tmCapFrac=0.99), "add cores"), "", should_fire=False)
+           acts(dict(tmCapFrac=0.99), "investigate"), "", should_fire=False)
     expect("action: names the Kafka memory to try, in gigabytes (must not fire)",
            acts(dict(tmCapFrac=0.96, brokerLimitHits=12780, brokerLimitBytes=4096 * 1048576),
                 "to about 6.25g"), "", should_fire=False)

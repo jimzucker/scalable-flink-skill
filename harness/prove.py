@@ -976,10 +976,12 @@ def cmd_suite():
                          # anything else that was on the machine while this was measured
                          "extraServices": sorted((c.raw.get("extraServices") or {}).keys()) or None},
            "thresholds": dict(T), "harness": harness_version(),
-           "startedAt": time.strftime("%Y-%m-%d %H:%M:%S %Z"), "runs": [], "refusals": []}
+           "startedAt": time.strftime("%Y-%m-%d %H:%M:%S %Z"), "startedAtEpoch": time.time(),
+           "runs": [], "refusals": []}
 
     def save():
         out["savedAt"] = time.strftime("%Y-%m-%d %H:%M:%S %Z")
+        out["savedAtEpoch"] = time.time()
         out["table"] = build_table(out["runs"], quick=out.get("quickLook", False))
         save_json("suite.json", out)
 

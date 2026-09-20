@@ -293,6 +293,24 @@ def cmd_selftest(live=True, topic=None):
             assert want in got, f"bottleneck said {got!r}, expected {want!r}"
         return go
 
+    def labelled(kw, want):
+        r = dict(good); r.update(kw)
+
+        def go():
+            got = L.bottleneck_short(r)
+            assert got == want, f"short label said {got!r}, expected {want!r}"
+        return go
+
+    expect("bottleneck label: Pipeline CPU (must not fire)",
+           labelled(dict(tmCapFrac=0.99), "Pipeline CPU"), "", should_fire=False)
+    expect("bottleneck label: Kafka memory (must not fire)",
+           labelled(dict(tmCapFrac=0.96, brokerLimitHits=12780), "Kafka memory"), "", should_fire=False)
+    expect("bottleneck label: Pipeline memory (must not fire)",
+           labelled(dict(tmCapFrac=0.99, gcFracOfCapacity=0.064), "Pipeline memory"), "", should_fire=False)
+    expect("bottleneck label: Kafka writes (must not fire)",
+           labelled(dict(tmCapFrac=0.9495, sourceBackpressured=0.6738), "Kafka writes"), "", should_fire=False)
+    expect("bottleneck label: Input feed (must not fire)",
+           labelled(dict(tmCapFrac=0.80, sourceIdle=0.40), "Input feed"), "", should_fire=False)
     expect("bottleneck: CPU is the block (must not fire)",
            names(dict(tmCapFrac=0.99), "blocking higher throughput"), "", should_fire=False)
     expect("bottleneck: Kafka out of memory (must not fire)",

@@ -293,8 +293,8 @@ def cmd_selftest(live=True, topic=None):
             assert want in got, f"bottleneck said {got!r}, expected {want!r}"
         return go
 
-    expect("bottleneck: cores (must not fire)",
-           names(dict(tmCapFrac=0.99), "Cores. The pipeline used"), "", should_fire=False)
+    expect("bottleneck: ran out of CPU (must not fire)",
+           names(dict(tmCapFrac=0.99), "Ran out of CPU"), "", should_fire=False)
     expect("bottleneck: Kafka out of memory (must not fire)",
            names(dict(tmCapFrac=0.96, brokerLimitHits=12780), "Kafka ran out of memory"),
            "", should_fire=False)
@@ -302,7 +302,7 @@ def cmd_selftest(live=True, topic=None):
            names(dict(tmCapFrac=0.99, gcFracOfCapacity=0.064), "cleaning up memory"),
            "", should_fire=False)
     expect("bottleneck: waiting to write (must not fire)",
-           names(dict(tmCapFrac=0.9495, sourceBackpressured=0.6738), "Waiting to write"),
+           names(dict(tmCapFrac=0.9495, sourceBackpressured=0.6738), "Waiting to write to Kafka"),
            "", should_fire=False)
     expect("bottleneck: unknown says investigating (must not fire)",
            names(dict(tmCapFrac=0.80, sourceBackpressured=0.05, sourceIdle=0.02), "Investigating"),

@@ -1464,29 +1464,31 @@ def bottleneck(rec):
     cap = rec.get("tmCapFrac") or 0
     if (rec.get("brokerLimitHits") or 0) > T["brokerLimitHits"] and cap < T["brokerHitsCapExempt"]:
         return (f"Kafka ran out of memory. It hit its limit {rec['brokerLimitHits']:,} times and had to "
-                f"read the backlog off disk. The pipeline was waiting on Kafka instead of using its cores.")
+                f"read the test data back off disk, so the pipeline was waiting on Kafka rather than "
+                f"using its CPU.")
     if (rec.get("gcFracOfCapacity") or 0) > T["gcCeil"]:
-        return (f"Ran out of memory. The pipeline spent {rec['gcFracOfCapacity']:.0%} of the time cleaning "
-                f"up memory instead of working. Give it more memory, not more cores.")
+        return (f"Ran out of memory. The pipeline spent {rec['gcFracOfCapacity']:.0%} of the time "
+                f"cleaning up memory instead of working. Give it more memory, not more CPU.")
     if (rec.get("sourceIdle") or 0) > T["sourceIdleCeil"]:
         return (f"Nothing to read. The pipeline sat idle {rec['sourceIdle']:.0%} of the time waiting for "
-                f"input, so whatever feeds it is the slow part.")
+                f"input, so whatever feeds it is the slow part, not the pipeline.")
     c = cfg()
     kcap = getattr(c, "kafka_cap", 0) or 0
     if kcap and (rec.get("kafkaCores") or 0) / kcap >= 0.90:
-        return (f"Kafka's cores. Kafka used {rec['kafkaCores']:.2f} of the {kcap:g} cores it is allowed, "
-                f"so the pipeline was waiting on Kafka.")
+        return (f"Kafka ran out of CPU. Kafka used {rec['kafkaCores']:.2f} of the {kcap:g} cores it is "
+                f"allowed, so the pipeline was waiting on Kafka rather than working.")
     if cap >= T["capFloorOther"]:
-        return (f"Cores. The pipeline used {cap:.0%} of the cores it was given. That is what we want, "
-                f"because cores are what we are changing.")
+        return (f"Ran out of CPU. The pipeline used {cap:.0%} of the cores it was given, so CPU is "
+                f"what stopped it going faster. That is what we want, because CPU is what we are "
+                f"adding.")
     bp = rec.get("sourceBackpressured") or 0
     if bp >= 0.30:
-        return (f"Waiting to write. The pipeline used only {cap:.0%} of its cores and spent {bp:.0%} of "
-                f"the time held up, because Kafka could not accept records fast enough.")
+        return (f"Waiting to write to Kafka. The pipeline used only {cap:.0%} of its CPU and spent "
+                f"{bp:.0%} of the time held up, because Kafka could not accept records fast enough.")
     # Nothing measured accounts for it. "Investigating" is the honest label and
     # it is also an instruction: go and find out.
-    return (f"Investigating. The pipeline used only {cap:.0%} of its cores and nothing we measured "
-            f"says why.")
+    return (f"Investigating. The pipeline used only {cap:.0%} of its CPU, so something was stopping "
+            f"it, and nothing we measured says what.")
 
 
 def scorecard(out):

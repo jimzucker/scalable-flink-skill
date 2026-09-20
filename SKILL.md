@@ -445,12 +445,14 @@ and whether doubling the resource doubled the work.
 SCORECARD
 
   2 cores  374,507/s
-    held back by: Cores. The pipeline used 100% of the cores it was given.
-      That is what we want, because cores are what we are changing.
+    held back by: Ran out of CPU. The pipeline used 100% of the cores it was
+      given, so CPU is what stopped it going faster. That is what we want,
+      because CPU is what we are adding.
 
   4 cores  673,414/s
-    held back by: Cores. The pipeline used 97% of the cores it was given.
-      That is what we want, because cores are what we are changing.
+    held back by: Ran out of CPU. The pipeline used 97% of the cores it was
+      given, so CPU is what stopped it going faster. That is what we want,
+      because CPU is what we are adding.
 
   2->4 cores: doubling gave 1.80x, it needed 1.90x  ->  missed
 ```
@@ -458,7 +460,7 @@ SCORECARD
 The bottleneck is named from figures already recorded per case and already
 used by the guards — cap consumption, back-pressure, idle, GC, the broker's
 limit hits and its cores — in the order the guards apply them, so it never
-contradicts a ceiling the run reported. *Cores* is the answer
+contradicts a ceiling the run reported. *Ran out of CPU* is the answer
 the table depends on; anything else means the number measures something
 other than what it claims to. **A step ratio without this column beside it is
 a number with no idea what produced it.**

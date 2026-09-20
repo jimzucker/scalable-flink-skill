@@ -161,9 +161,35 @@ The question is now one short line. The jargon survives, in the explanation,
 where a reader who needs it will find it and a reader who does not can take the
 default.
 
+### 3 — the question stands; the default says to specify cardinality
+
+Question text unchanged. The default is new:
+
+> **What are the keys, and how many distinct ones?**
+>
+> *Default: two key spaces. Symbol, and account / sub-account / symbol.*
+>
+> *Cardinality is part of the use case, so specify it. 4K keys is very
+> different from 4 and will materially impact the application design.*
+
+The old default read "symbol, 4 of them; and account+symbol, 16" with no
+indication of where the numbers came from, and it is wrong besides: the
+account key is account+subaccount+symbol.
+
+The author's second line replaces a weaker one of mine that said cardinality
+"changes the memory budget". It changes the design: state size, garbage
+collection, partitioning, and whether asserting an exact total per key is
+practical at all. This project measured it — 4,096 keys ran clean, and 32,768
+could not be measured on a 7.8 GB VM by either pipeline, both hitting the
+garbage-collection ceiling.
+
+Small fixed counts are still what make the verifier exact, which is why the
+worked example uses small ones. That is a property of the example, not advice
+to shrink a real problem.
+
 ### Left alone
 
-3, 5, 6, 7 and 9. They already read plainly, and 7 in particular should stay
+5, 6, 7 and 9. They already read plainly, and 7 in particular should stay
 blunt: *"What claim do you want to make? I write it down verbatim."*
 
 Their **defaults** follow from question 1 rather than being canned. If the

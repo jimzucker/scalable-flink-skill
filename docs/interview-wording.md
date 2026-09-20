@@ -258,9 +258,42 @@ Nine become eight. Renumbering: old 6-9 become 5-8, and **§9's "axis (§1 q8)"
 becomes q7** — a reference that must be updated in the same edit or it points
 at the API-level question.
 
+### 6 — name the deployment targets, do not just say "where"
+
+> **How do you want to run the application?** On a laptop using Docker, or
+> specify — AWS MSK/MSF, Google Cloud, Confluent Platform, Confluent Cloud, and
+> so on.
+>
+> *Default: a laptop, using Docker.*
+
+The old question was *"Where does it run? Default to a laptop; make the user
+argue you out of it."* Two faults. **"Where does it run" is too vague to
+answer** — a reader who has not chosen yet has nothing to choose between. And
+the second half is **addressed to Claude, not to the reader**: "make the user
+argue you out of it" is an instruction to the builder that, read out as part of
+the question, refers to the reader in the third person. The same fault as the
+old question 8's "parallelism = CPU cap = allocated slots".
+
+**Open, and the author's to settle: the harness runs Docker on one machine.**
+Naming MSK, Confluent Cloud and Google Cloud invites an answer the harness
+cannot execute — and §1 and §10 say that when the harness cannot express a
+pipeline, say so and stop. Two coherent readings:
+
+- **The answer names the production target; the measurement still happens on a
+  laptop**, as the proxy. This is the project's own thesis — capping one worker
+  at 1, 2 and 4 cores reproduces the curve that took 32 vCPUs and three brokers
+  the expensive way — and it has evidence behind it: this repository rented a
+  cluster at step 11 and it ran the job *slower* than the laptop, 83,031
+  against 142,340 orders/s, and was abandoned.
+- **Or the skill grows to drive a remote stack**, which is a different piece of
+  work and not a wording change.
+
+Until that is settled the question should say which it means, or a reader who
+answers "Confluent Cloud" will expect the harness to go there.
+
 ### Left alone
 
-6, 7 and 9 (5, 6 and 8 after renumbering). They already read plainly, and the
+7 and 9 (6 and 8 after renumbering). They already read plainly, and the
 claim question in particular should stay blunt: *"What claim do you want to make? I write it down verbatim."*
 
 Their **defaults** follow from question 1 rather than being canned. If the

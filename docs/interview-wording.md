@@ -78,12 +78,18 @@ rather than presuming the reader shares ours.
 > **What goes into the pipeline, and what comes out?** A few sentences, in your
 > own words. This becomes the spec.
 >
-> *(For example: "An order arrives with a unique id and a list of allocations;
-> each allocation is keyed by account / sub-account / symbol and carries a
-> quantity. The pipeline maintains positions by account+symbol and by symbol.
-> That input is the one scaled up to drive the pipeline to capacity. A second
-> input carries prices, keyed by symbol and timestamp; the pipeline joins those
-> to the positions and emits a position and market value every 10 seconds.")*
+> *(For example: "An order arrives with a unique id and symbol, order quantity
+> and a list of allocations; each allocation is keyed by account / sub-account
+> and carries a quantity. The pipeline maintains positions by
+> account+subaccount+symbol and by symbol. That input is the one scaled up to
+> drive the pipeline to capacity. A second input carries prices, keyed by symbol
+> and timestamp; the pipeline joins those to the positions and emits a position
+> and market value every 10 seconds.")*
+
+The symbol is on the **order**, not on each allocation, and an allocation is
+keyed by account / sub-account alone — which is what the code does:
+`AccountKey.of(allocation, trade.symbol())` takes the symbol from the trade. An
+earlier draft of this example had the symbol on the allocation and was wrong.
 
 **The first diagnosis was wrong.** The fault was not that the default used this
 project's problem — it was that it *referred* to it ("the same block-trade
@@ -102,14 +108,18 @@ sentence, and the detail is the point.
 
 ### 2 — "fan-out ratio" is not a phrase anyone arrives with
 
-> **Does one thing going in produce more than one thing coming out?** If each
-> order updates three tables, that is three.
+> **Does one input produce more than one output?**
 >
-> *Worth getting right: at five outputs per input the write side is five times
-> the read side, and the write side is usually what runs out of speed first —
-> and what fills the disk.*
+> *Default: one trade input produces 1 position per symbol and one position per
+> allocation. If the order has 4 allocations it emits 5 records.*
+>
+> *At 5 outputs per input the write side is 5x the read side. The write side
+> runs out of speed first, and fills the disk.*
 
-Same content; the term is gone and the consequence leads.
+The term is gone and the consequence leads. The default is the author's
+wording. The 10-second market value emit is deliberately not counted here: it
+is on a timer, not one per input, and counting timer-driven output as fan-out
+is what makes the two-vantage guard disagree.
 
 ### 8 — the question that decides what gets measured
 

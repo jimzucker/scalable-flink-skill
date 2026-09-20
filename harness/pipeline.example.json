@@ -37,7 +37,8 @@
     "count": 160000000,
     "seed": 20260903,
     "smallCount": 20000000,
-    "tinyCount": 60000000,
+    "_tinyCount": "The tiny proof drains this. Size it for the warm-up ceiling plus the window plus two checkpoint intervals at the fastest case's rate -- 120 + 40 + 20 s. Guess high: a wrong guess costs one tiny proof, and too small costs the chain. Clean-room runs 30 and 31 both needed 150,000,000; run 32 shipped with 60,000,000, which held 94 s at the rate its 4-core case read, against a 55 s warm-up, and neither tiny case could settle.",
+    "tinyCount": 150000000,
     "killAtFraction": 0.35,
     "_killAtFraction": "Approximate by construction: offsets commit once per checkpoint interval, so the kill lands at the first commit past this fraction. Clean-room run 30 asked for 0.35 and it landed at 62.7%, while the log still said 35%."
   },

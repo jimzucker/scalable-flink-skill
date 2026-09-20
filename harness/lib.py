@@ -1481,10 +1481,13 @@ def wait_flat(deadline_s):
     boundaries, last, detail = [], None, {}
     t0 = time.time()
     k = T["warmupIntervals"]
+    left = None  # records still unread, as of the last tick seen
     while time.time() - t0 < deadline_s:
         for t in sampler_tail(6):
             if t.get("committed", -1) < 0:
                 continue
+            if t.get("endIn"):
+                left = t["endIn"] - t["committed"]
             if last is None or t["committed"] > last[1]:
                 if last is not None and t["ts"] > last[0]:
                     boundaries.append((t["ts"], t["committed"]))
@@ -1497,7 +1500,22 @@ def wait_flat(deadline_s):
             if ok:
                 return detail
         time.sleep(0.5)
-    raise Refusal("case", f"the rate never settled down within {deadline_s:.0f}s. It has to hold steady for "
+    # A backlog running out looks exactly like a rate that will not settle,
+    # because it is one: the readings fall away as the source runs dry. Clean-room
+    # run 32 read 325,710 -> 129,873 -> 40,460 -> 176,347 on a tiny backlog that
+    # held 94 seconds at the rate the next case measured, against a 55-second
+    # warm-up and a 30-second window. Say how much is left, so the cause is in
+    # the message rather than in someone's head.
+    short = ""
+    if left is not None:
+        rates_seen = [r for r in (detail.get("rates") or []) if r > 0]
+        if rates_seen:
+            secs = left / (sum(rates_seen) / len(rates_seen))
+            short = (f" The backlog had {left:,} records left, about {secs:.0f}s at the rate it was "
+                     f"reading. A backlog that runs dry while warming up cannot settle: size it for "
+                     f"the warm-up plus the window plus two checkpoint intervals at the fastest "
+                     f"case's rate.") if secs < 120 else f" The backlog had {left:,} records left."
+    raise Refusal("case", f"the rate never settled down within {deadline_s:.0f}s.{short} It has to hold steady for "
                           f"{T['warmupMinS']:.0f}s, drifting less than {T['warmupFlatTol']:.0%} with scatter under "
                           f"{T['warmupScatterTol']:.0%}. Last readings were "
                           f"{[round(r) for r in detail.get('rates', [])]}, drift {detail.get('drift')}, "

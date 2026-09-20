@@ -445,14 +445,18 @@ and whether doubling the resource doubled the work.
 SCORECARD
 
   cores        speed     pipeline CPU    pipeline memory    Kafka CPU       Kafka memory   blocked by      what to do
-      2     374,507/s         2 / 100%    uncapped / 2.0%    2.5 / 12%             6g / 0   Pipeline CPU    baseline — tune the pipeline to raise it
-      4     673,414/s          4 / 97%    uncapped / 1.2%    2.5 / 25%             6g / 0   Pipeline CPU    investigate — 1.80x, short of 1.90x
+      2     374,507/s         2 / 100%    uncapped / 2.0%    2.5 / 12%     6g, never full   Pipeline CPU    tune the pipeline
+      4     673,414/s          4 / 97%    uncapped / 1.2%    2.5 / 25%     6g, never full   Pipeline CPU    investigate
 
   Each pair is what it was allowed and how much of that went:
     pipeline CPU      cores it could use / how much of them it used
     pipeline memory   memory it could use / share of the time spent tidying memory up
     Kafka CPU         cores Kafka could use / how much of them it used
-    Kafka memory      memory Kafka could use / how many times it filled up
+    Kafka memory      memory Kafka could use, and how often it filled up
+
+  2 cores is the baseline: there is nothing below it to compare against, so the way
+      up is a faster pipeline, not more cores.
+  4 cores: doubling gave 1.80x, short of the 1.90x needed.
 
   2->4 cores: doubling gave 1.80x, it needed 1.90x  ->  missed
 ```
@@ -469,8 +473,10 @@ the run reported. Four of the answers name a column, so a reader can look
 the verdict up rather than take it on trust, and each carries what to do
 about it. CPU being the limit is only good news if the step into that case
 actually doubled, so the advice reads the step as well as the case: a
-baseline has nothing below it to compare against, a short step says investigate
-and by how much, and a step above 2× says the smaller case reads low. For
+baseline has nothing below it to compare against, a short step says investigate,
+and a step above 2× means the smaller case reads low. The column holds two or
+three words and the numbers go under the table, because advice written into
+the row took it to 175 characters and stopped being a table. For
 Kafka's memory it names the size to try, not just "more". *Pipeline CPU*
 is the answer
 the table depends on; anything else means the number measures something

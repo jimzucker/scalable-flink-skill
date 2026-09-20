@@ -1526,47 +1526,51 @@ def gib_str(byts):
 
 
 def corrective_action(rec, step=None, is_baseline=False):
-    """What to do about it, in a few words.
+    """What to do, in two or three words, for the column.
 
-    The bottleneck says what is in the way; this says what to change. For
-    Kafka's memory the harness already knows the size that worked elsewhere,
-    so it names the number rather than saying "more".
-
-    CPU being the limit is only good news if the step into this case actually
-    doubled. It said "nothing — add cores for more" on a case that returned
-    1.53x and on a baseline with no step into it at all, both of which are
-    wrong: the first needs looking at and the second is the thing every other
-    case is measured against.
+    The numbers behind it go in action_detail, below the table. Putting them
+    in the row took it to 175 characters, which is not a table anyone reads.
     """
     label = bottleneck_short(rec)
     if label == "Pipeline CPU":
         if is_baseline:
-            return "baseline — tune the pipeline to raise it"
+            return "tune the pipeline"
         if not step or not step.get("reportable"):
-            return "investigate — no usable step into this case"
+            return "investigate"
+        if (step.get("ratioLowCI") or 0) > step["idealRatio"] or not step.get("meetsClaim"):
+            return "investigate"
+        return "add cores for more"
+    return {"Pipeline memory": "more memory",
+            "Kafka CPU": "more Kafka cores",
+            "Kafka memory": "raise kafkaMemory",
+            "Kafka writes": "compress the writes",
+            "Input feed": "speed up the input"}.get(label, "investigate")
+
+
+def action_detail(rec, cores, step=None, is_baseline=False):
+    """The sentence behind the advice, or None when the row speaks for itself."""
+    label = bottleneck_short(rec)
+    if label == "Pipeline CPU":
+        if is_baseline:
+            return (f"{cores} cores is the baseline: there is nothing below it to compare against, so "
+                    f"the way up is a faster pipeline, not more cores.")
+        if not step or not step.get("reportable"):
+            return f"{cores} cores: no usable step into this case, so there is nothing to judge it by."
         ratio, ideal = step["ratio"], step["idealRatio"]
         need = ideal * T["scalingFloor"]
         if (step.get("ratioLowCI") or 0) > ideal:
-            return f"investigate — {ratio:.2f}x is above {ideal:.2f}x, so the smaller case reads low"
+            return (f"{cores} cores: doubling gave {ratio:.2f}x, more than the {ideal:.2f}x a doubling "
+                    f"can give, so the smaller case reads too low.")
         if not step.get("meetsClaim"):
-            return f"investigate — {ratio:.2f}x, short of {need:.2f}x"
-        return "nothing — add cores for more"
-    if label == "Pipeline memory":
-        return "give the pipeline more memory"
-    if label == "Kafka CPU":
-        return "give Kafka more cores"
+            return f"{cores} cores: doubling gave {ratio:.2f}x, short of the {need:.2f}x needed."
+        return None
     if label == "Kafka memory":
         have = rec.get("brokerLimitBytes") or 0
         want = size_broker_memory(have, rec.get("brokerLimitHits") or 0)
-        if not want:
-            return "give Kafka more memory"
-        # from and to, in the same unit, so the size of the change is plain
-        return f"raise kafkaMemory from {gib_str(have)} to about {gib_str(want * 1048576)}"
-    if label == "Kafka writes":
-        return "compress the writes, or write less"
-    if label == "Input feed":
-        return "speed up whatever feeds it"
-    return "find out what it is"
+        if want:
+            return (f"{cores} cores: raise kafkaMemory from {gib_str(have)} to about "
+                    f"{gib_str(want * 1048576)}.")
+    return None
 
 
 def scorecard(out):
@@ -1604,8 +1608,10 @@ def scorecard(out):
         # from the record, not from today's pipeline.json: a report rendered
         # against a changed config would otherwise show a limit the run never
         # had, beside advice computed from the limit it did have.
-        kmemcol = ("{} / {:,}".format(gib_str(last.get("brokerLimitBytes")) or kmem, hits)
-                   if hits is not None else "—")
+        # "6.25g / 0" needs the key to make sense; "6.25g, never full" does not.
+        size = gib_str(last.get("brokerLimitBytes")) or kmem
+        kmemcol = ("—" if hits is None else
+                   f"{size}, never full" if hits == 0 else f"{size}, full {hits:,}x")
         # A dropped row is marked where the row is named, not after the advice:
         # "raise kafkaMemory to 6400m (not in the table)" read as one sentence.
         mark = "" if cs.get("reportable") else " *"
@@ -1613,6 +1619,10 @@ def scorecard(out):
                  f"{cpu:>14}{mem:>19}{kcpu:>13}{kmemcol:>19}"
                  f"   {bottleneck_short(last):<16}"
                  f"{corrective_action(last, step_into.get(cs['cores']), cs['cores'] == lowest)}")
+        detail = action_detail(last, cs["cores"], step_into.get(cs["cores"]),
+                               cs["cores"] == lowest)
+        if detail:
+            notes.append("  " + detail)
         if not cs.get("reportable"):
             notes.append(f"  * the {cs['cores']}-core row is not counted in the table: "
                          f"{cs.get('unreportableReason')}. Its numbers are still shown, "
@@ -1625,7 +1635,7 @@ def scorecard(out):
     L.append("    pipeline CPU      cores it could use / how much of them it used")
     L.append("    pipeline memory   memory it could use / share of the time spent tidying memory up")
     L.append("    Kafka CPU         cores Kafka could use / how much of them it used")
-    L.append("    Kafka memory      memory Kafka could use / how many times it filled up")
+    L.append("    Kafka memory     memory Kafka could use, and how often it filled up")
     L.append("")
     for n in notes:
         line = "  "
@@ -2304,8 +2314,10 @@ def render_markdown(out):
         # from the record, not from today's pipeline.json: a report rendered
         # against a changed config would otherwise show a limit the run never
         # had, beside advice computed from the limit it did have.
-        kmemcol = ("{} / {:,}".format(gib_str(last.get("brokerLimitBytes")) or kmem, hits)
-                   if hits is not None else "—")
+        # "6.25g / 0" needs the key to make sense; "6.25g, never full" does not.
+        size = gib_str(last.get("brokerLimitBytes")) or kmem
+        kmemcol = ("—" if hits is None else
+                   f"{size}, never full" if hits == 0 else f"{size}, full {hits:,}x")
         mark = "" if cs.get("reportable") else " \\*"
         L.append(f"| {cs['cores']}{mark} | {cs['meanRecordsPerSec']:,.0f}/s | {cpu} | {mem} | "
                  f"{kcpu} | {kmemcol} | {bottleneck_short(last)} | "

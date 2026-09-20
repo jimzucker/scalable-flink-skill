@@ -36,7 +36,7 @@ fan-out are known.
 **Ask only what changes what gets built.** Everything else the skill decides
 and states, it does not request: it always runs on a laptop in Docker, always
 builds the dashboard, always proves completeness, always checks correctness,
-and always measures 2 and 4 cores for near-linear scaling. Asking permission
+and always measures 1, 2 and 4 cores for near-linear scaling. Asking permission
 for those invites a "no" that will not be honoured, and spends a question. They
 are declared in the plan (§1a) instead, where the user can object to all of
 them at once.
@@ -113,7 +113,7 @@ been asked:
 
 | | |
 |---|---|
-| the objective | near-linear scaling across 2 and 4 cores, judged against ≥95% of linear per step. The one-core case is not run: §5 says not to, and it is the case that reads low and makes the step off it look impossible |
+| the objective | near-linear scaling across 1, 2 and 4 cores, judged against ≥95% of linear per step — 1.90× on a doubling. Two steps are reported, 1→2 and 2→4 |
 | where it runs | a laptop, in Docker |
 | the stack | the images in `pipeline.json` — Flink, and the Kafka chosen in question 6 |
 | what is measured | the drain rate of a fixed backlog at each core count, read from committed broker offsets, with the resource columns beside it |
@@ -253,11 +253,14 @@ shape differs from the others**, and **lead with step ratios** — 2→4, not 1�
 A step ratio has no privileged case in it, a faster single-thread
 implementation cannot be punished by it, and it is the step someone will
 actually buy. Quote the baseline ratio second, and say what it is measured
-against. **If the claim is a step from two units up, do not run the one-unit
-case at all** — it is the structurally weakest case and the noisiest in every
-run that repeated it, and every case you run is time and a guard that can
-fire. Run the cases the claim needs, plus one above if the ceiling is in
-scope.
+against. **The one-unit case is the weakest and the noisiest, so measure it
+rather than assume it** — six recorded suites returned 1.978–2.161× on 1→2,
+which is the ideal 2.00× within noise, so a healthy one-unit case is the norm
+and not a hope. A 1→2 well above 2.00× is that case reading low, and it is
+worth knowing: it says the step someone buys first is not what it appears to
+be. The tiny proof bounds every step the suite will report (§3), so a bad
+one-unit case costs ten minutes rather than a suite. Drop it only when the
+claim genuinely starts higher up.
 
 **Measure a drain, not a live generator.** Fill a backlog larger than the page
 cache, stop the producer, measure the drain. Hold partitions, checkpoint

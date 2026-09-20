@@ -25,11 +25,13 @@
   "verifier": {
     "cmd": "{java} -cp {jar} scaletest.VerifyCompleteness --bootstrap={bootstrapExt} --topicSym={out0} --topicAcct={out1} --manifest={manifest}"
   },
+  "_cases": "The cases the suite measures, and the steps it reports: 1->2 and 2->4. The one-core case is measured, not assumed -- six recorded suites returned 1.978-2.161x on 1->2, so a healthy baseline sits on the ideal 2.00x. A 1->2 well above that means the one-core case under-read, and the tiny proof bounds every one of these steps before the suite is spent.",
   "cases": [
+    1,
     2,
     4
   ],
-  "baseline": 2,
+  "baseline": 1,
   "passes": 3,
   "backlog": {
     "count": 160000000,

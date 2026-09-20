@@ -391,6 +391,16 @@ whoever asked for the run as a plan — what you would change, in what order,
 what you expect it to move — and get a yes before measuring again. A re-run
 costs what the last one cost.
 
+**When there is no human to say yes, fix one thing and measure once more.**
+Not a loop: take the *first* item on that list, apply the single change the
+scorecard names, write down in `FIXES.md` what you changed and what you
+expected it to move, re-run, and stop — whether or not it worked. Report both
+tables, before and after. One change per measurement is the rule that makes
+the second table mean anything, and an unattended agent that keeps going is
+spending hours nobody agreed to. If the first item has no named change —
+*investigate* — then there is nothing to apply, and stopping with the finding
+is the result.
+
 **A failed check stops the suite — when it is about the rig.** A cap that did not
 apply at one core will not apply at two; a busy cluster, a bad window anchor,
 disagreeing vantage points are the same at every case. A guard about one

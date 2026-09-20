@@ -1500,6 +1500,11 @@ def cmd_report():
         print("  plan -- what you would change, in this order, and what you expect it to")
         print("  move -- and get a yes before changing anything and measuring again. A")
         print("  re-run costs about what the run that just finished cost.")
+        print()
+        print("  With no one to ask: apply the first item only, write what you changed and")
+        print("  what you expected in FIXES.md, measure once more, and stop there whether")
+        print("  or not it worked. Report both tables. One change per measurement is what")
+        print("  makes the second one mean anything.")
         return 1
     return 0
 

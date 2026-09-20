@@ -224,7 +224,7 @@ python3 $H up              # stack/compose.yml generated, broker + job manager u
 python3 $H preflight       # §3, one PASS/FAIL row per check
 python3 $H tinyproof       # two cases on a small backlog, ratio bounded, every guard broken on purpose
 nohup python3 $H fill > results/fill.log 2>&1 &        # the full backlog; build the dashboard meanwhile
-python3 $H completeness    # work through a small backlog twice (clean, and killed mid-run), verify
+python3 $H completeness    # process a small test data set twice (once cleanly, once killed), check
 python3 $H suite           # the table
 python3 $H ceiling         # optional: starve the broker in steps at the largest case
 python3 $H down            # everything this project started, gone; asserted; fstrim

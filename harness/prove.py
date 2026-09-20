@@ -5,20 +5,21 @@ scalable-flink-skill harness — the one entry point.
     python3 harness/prove.py <command>     (run from the directory holding pipeline.json,
                                             or set PIPELINE_JSON=/path/to/pipeline.json)
 
-  replay        check every threshold against the recorded runs   (no stack; seconds)
-  selftest      break every guard on purpose                       (stack up; ~3 min)
-  up            generate stack/compose.yml, bring it up, compile the sampler
-  preflight     the §3 table, PASS/FAIL per row
-  tinyproof     two cases on a small backlog, ratio bounded 1.5x-2.5x, + selftest
-  fill          fill the full backlog and write results/manifest.json (run it detached)
-  completeness  work through a small backlog twice (clean, and killed mid-run), verify, no tolerances
-  suite         the table: every case, N passes, asc/desc, rig vs data refusals
-  ceiling       hold the largest case, starve the broker in steps
+  replay        check every threshold against the runs already recorded  (nothing starts; seconds)
+  selftest      break every check on purpose and confirm it catches it   (needs the stack; ~3 min)
+  up            write stack/compose.yml, start the stack, compile the offset sampler
+  preflight     the section 3 checks, PASS or FAIL per row
+  tinyproof     a short run at every core count, each step bounded, plus the self-test
+  fill          write the full test data set and results/manifest.json     (run it detached)
+  completeness  process a small test data set twice — once cleanly, once killed and restarted
+                partway — and check nothing was lost either time
+  suite         the measurements: every core count, several times, up then down
+  ceiling       hold the largest case and squeeze Kafka in steps, to find where it gives out
   report        results/suite.json -> results/suite.txt + results/suite.md
-  down          tear everything down, assert nothing survives, fstrim
+  down          stop everything, check nothing survived, give the disk space back
   all           up -> preflight -> completeness -> tinyproof -> fill -> suite -> report,
-                one stack session, stops at the first non-zero step; results/phases.log
-                carries the timestamps and results/DONE the outcome   (run it detached)
+                one stack session, stopping at the first step that fails. results/PROGRESS.txt
+                says where it is up to, results/DONE holds the outcome   (run it detached)
 
 Exit code 0 means the command's own assertion held; anything else, read the log.
 """
@@ -1007,7 +1008,7 @@ def cmd_fill():
 # ---------------------------------------------------------------- completeness
 
 def cmd_completeness():
-    """Work through a small backlog twice — clean, and killed and restarted mid-run —
+    """Process a small test data set twice — once cleanly, once killed and restarted partway —
     and compare the sinks to the generator manifest with no tolerances."""
     c = cfg()
     topic = f"{c.topic_in}-small"
@@ -1050,11 +1051,11 @@ def cmd_completeness():
                     log("KILL: job RUNNING again after the restart")
                 if cm >= c.small:
                     time.sleep(c.ckpt_s + 2)
-                    log(f"worked through every record in {time.time()-t0:.1f}s" + (" (killed and restarted mid-run)" if killed else ""))
+                    log(f"processed the full test data set in {time.time()-t0:.1f}s" + (" (killed and restarted mid-run)" if killed else ""))
                     return {"group": group, "killed": killed, "drainS": round(time.time() - t0, 1),
                             "killedAtCommitted": killed_at}
                 if time.time() - t0 > 1800:
-                    raise Refusal("rig", f"it did not work through the whole backlog: {cm:,} of {c.small:,} records")
+                    raise Refusal("rig", f"it did not process all of the input: {cm:,} of {c.small:,} records")
                 time.sleep(0.5)
         finally:
             try:

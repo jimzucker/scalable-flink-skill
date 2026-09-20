@@ -204,8 +204,8 @@ Anything that can void the whole table is tested before the table exists.
 ## 4. Prove nothing was lost, separately from proving it is fast
 
 A pipeline that drops one record in ten thousand looks fine in every throughput
-column. Completeness is a separate run on a backlog small enough to **drain to
-the last record**; measurement is a slice of a steady state and cannot check it.
+column. Completeness is a separate run on a test data set small enough to **process
+every last record**; measurement is a slice of a steady state and cannot check it.
 
 The expected answer comes from the **input**, never from the pipeline: the
 generator writes a manifest (record count, totals per key) and the sinks are

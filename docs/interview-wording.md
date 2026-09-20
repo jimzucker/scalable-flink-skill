@@ -150,17 +150,32 @@ instruction to the harness, not a question to a person, and already lives in §5
 > the input, and market values must be final position x latest price.
 > Duplicates have to be handled and not double counted, in all cases.*
 >
-> *Two settings, both needed:*
-> - ***Sink**: emit the absolute position per key, not a delta. A repeat is then
->   harmless.*
-> - ***State**: exactly-once checkpointing. Without it a replayed record is
->   counted twice inside the snapshot.*
->
-> *Name both in the report. It gets tested by killing a worker mid-run.*
+
+That is the whole question. The reader answers it from their business, not from
+any knowledge of streaming.
+
+**The two settings move out of the interview.** The old question ended with
+*emitting the absolute value per key makes the sink idempotent … the keyed state
+needs exactly-once checkpointing … name both in the report*. That is a build
+decision, and asking a reader who is not a streaming engineer to read it before
+answering is what made the question unanswerable.
+
+It is moved, not deleted. Checked before cutting:
+
+| what it carried | already carried by |
+|---|---|
+| report the guarantee as two settings | §9 header fields |
+| prove the guarantee by killing a worker | §4's completeness table |
+| **why there are two, and what they are** | **§1 q4 alone — lines 54-58** |
+
+So the requirements survive without it, but the explanation does not: §9 would
+ask for "two settings" without naming them, and §4 would test a guarantee
+nobody was told how to configure. It lands in **§4**, beside the kill test that
+proves it.
 
 The question is now one short line, and the default is the author's. It states
 invariants rather than settings, which is the right order: the invariants are
-what the verifier asserts, and the two settings are how they are met.
+what the verifier asserts, and the settings are how they are met.
 
 **It adds a requirement the skill did not carry: ordering.** "Published in
 order" is a constraint on the design, not only on the check — Flink gives

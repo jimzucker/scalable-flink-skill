@@ -162,7 +162,12 @@ bad window voids one case — so anything checkable now is checked now.
 
 **Then the tiny proof, before any fill.** A few thousand records, end to end:
 
-- run **two** cases, one unit and two, and assert cap consumption in both;
+- run **every case the suite will run**, and assert cap consumption in each.
+  With the default two cases that is the two cases; a third case costs one
+  short run here and saves the suite. Every step the suite will report gets
+  bounded now, including the middle one — clean-room run 31 measured only its
+  smallest and largest cases here, so a 1→2 step that was arithmetically
+  impossible went unseen until the report, 45 minutes later;
 - **bound the ratio to 0.75×–1.25× of the ideal** — 1.5×–2.5× when the two
   cases are one unit and two, 3×–5× when they are one and four. Beating the
   ideal is not an error in itself, and nothing fails a run for it outside the tiny

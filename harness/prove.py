@@ -803,6 +803,13 @@ def cmd_tinyproof():
     L._CFG.topic_in = topic  # the case measures the tiny topic
     out = {"build": build_hash(), "records": c.tiny, "cases": [], "at": time.strftime("%Y-%m-%d %H:%M:%S")}
     lo, hi = min(c.cases), max(c.cases)
+    # Every case the suite will run, so every step the suite will report is
+    # bounded here rather than after 45 minutes of suite. Clean-room run 31 ran
+    # cases 1, 2 and 4; the tiny proof measured only 1 and 4, so the 1->2 step
+    # that came back at an arithmetically impossible 2.76x was not seen until
+    # the report. With the default two cases this costs nothing -- lo and hi are
+    # the only cases there.
+    tiny_cases = sorted(set(c.cases))
     T_save = dict(T)
     # the pipeline's own checkpoint interval: at 2 s checkpoints the worker read
     # 83-94% of its cap where 10 s read 100% (harness live test, 2 cores, same
@@ -812,7 +819,7 @@ def cmd_tinyproof():
     try:
         recs = {}
         shape_ref = None
-        for cores in (lo, hi):
+        for cores in tiny_cases:
             log(f"---- tiny case {cores} cores ----")
             try:
                 def once(cores=cores):
@@ -892,34 +899,58 @@ def cmd_tinyproof():
             else:
                 log(f"  kafka memory: {(worst.get('brokerLimitBytes') or 0) / 1048576:.0f}m, "
                     f"ran out {hits} times")
-            ratio = recs[hi]["recordsPerSec"] / recs[lo]["recordsPerSec"]
-            ideal = hi / lo
-            out["ratio"] = round(ratio, 3)
-            bound = (T["tinyRatioLo"] * ideal / 2, T["tinyRatioHi"] * ideal / 2)
-            # Say which case is wrong, not that the ratio looks odd. A big ratio
-            # is almost always the small case running slow, so print both rates
-            # and what the small one should have been.
-            share = recs[lo]["recordsPerSec"] / recs[hi]["recordsPerSec"]
-            out["baselineShare"] = round(share, 4)
-            out["baselineShareExpected"] = round(1 / ideal, 4)
-            print(f"\ntiny proof {lo} -> {hi} ratio: {ratio:.3f}x (bounds {bound[0]:.2f}-{bound[1]:.2f})")
-            print(f"  {lo} core(s)  {recs[lo]['recordsPerSec']:>12,.0f} rec/s")
-            print(f"  {hi} core(s)  {recs[hi]['recordsPerSec']:>12,.0f} rec/s")
-            print(f"  {lo} of {hi} cores did {share:.0%} of the work. It should be about {1 / ideal:.0%}.")
-            if not (bound[0] <= ratio <= bound[1]):
+            # Every step the suite will report, bounded here. The pairs are the
+            # adjacent ones the report leads with, plus the whole span, so a
+            # config with three cases has its middle step checked too -- the
+            # step run 31 could not see until the report.
+            pairs = list(zip(tiny_cases, tiny_cases[1:]))
+            if (lo, hi) not in pairs:
+                pairs.append((lo, hi))
+            out["steps"] = []
+            print()
+            for a, b in pairs:
+                if a not in recs or b not in recs:
+                    continue
+                ratio = recs[b]["recordsPerSec"] / recs[a]["recordsPerSec"]
+                ideal = b / a
+                bound = (T["tinyRatioLo"] * ideal / 2, T["tinyRatioHi"] * ideal / 2)
+                share = recs[a]["recordsPerSec"] / recs[b]["recordsPerSec"]
+                step = {"step": f"{a}->{b}", "ratio": round(ratio, 3), "idealRatio": ideal,
+                        "boundLo": round(bound[0], 3), "boundHi": round(bound[1], 3),
+                        "baselineShare": round(share, 4),
+                        "baselineShareExpected": round(1 / ideal, 4),
+                        "ok": bound[0] <= ratio <= bound[1]}
+                out["steps"].append(step)
+                print(f"tiny proof {a} -> {b} ratio: {ratio:.3f}x (bounds {bound[0]:.2f}-{bound[1]:.2f})")
+                print(f"  {a} core(s)  {recs[a]['recordsPerSec']:>12,.0f} rec/s")
+                print(f"  {b} core(s)  {recs[b]['recordsPerSec']:>12,.0f} rec/s")
+                print(f"  {a} of {b} cores did {share:.0%} of the work. It should be about "
+                      f"{1 / ideal:.0%}.")
+                if step["ok"]:
+                    continue
+                # Say which case is wrong, not that the ratio looks odd. A big
+                # ratio is almost always the small case running slow.
                 out["result"] = "FAIL"
+                rc = 1
                 if ratio > bound[1]:
-                    print(f"STOPPING: the {lo}-core case is too slow. The {hi}-core case is fine.")
-                    print(f"  Look at the {lo}-core case only. Two things make it slow:")
+                    print(f"STOPPING: the {a}-core case is too slow. The {b}-core case is fine.")
+                    print(f"  Look at the {a}-core case only. Two things make it slow:")
                     print(f"  its job graph is a different shape, or its threads are sharing one core.")
-                    print(f"  Check the graph shape and the CPU cap on that case before using either number.")
+                    print(f"  Check the graph shape and the CPU cap on that case.")
                 else:
-                    print(f"STOPPING: {hi} cores did only {ratio:.2f}x the work of {lo}. "
+                    print(f"STOPPING: {b} cores did only {ratio:.2f}x the work of {a}. "
                           f"It should be about {ideal:.0f}x.")
                     print(f"  The rig is not set up the way you think. Check three things:")
                     print(f"  the CPU cap, the partition count, and the backlog size.")
-                rc = 1
-            else:
+                print(f"  Fix this before running the suite. The suite reports this step, so a")
+                print(f"  suite run now would spend 45 minutes arriving at the same number.")
+            # the span, kept for anything that reads one ratio
+            span = next((x for x in out["steps"] if x["step"] == f"{lo}->{hi}"), None)
+            if span:
+                out["ratio"] = span["ratio"]
+                out["baselineShare"] = span["baselineShare"]
+                out["baselineShareExpected"] = span["baselineShareExpected"]
+            if rc == 0:
                 out["result"] = "PASS"
     finally:
         T.clear(); T.update(T_save)

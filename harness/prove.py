@@ -362,7 +362,7 @@ def cmd_selftest(live=True, topic=None):
         if c2["reportable"] or step["reportable"] or t["cases"][4]["reportable"] is not True:
             raise Exception(f"spread guard did not void the case and only the case: {t}")
         raise Refusal("case", c2["unreportableReason"])
-    expect("a case's passes spread past the ceiling", spread, "spread")
+    expect("a case's readings are too far apart", spread, "readings are 26% apart")
 
     def one_pass():
         t = build_table([{"cores": 2, "pass": "p1", "recordsPerSec": 100.0},
@@ -370,7 +370,7 @@ def cmd_selftest(live=True, topic=None):
         if t["cases"][2]["reportable"]:
             raise Exception("single pass was reportable")
         raise Refusal("case", t["cases"][2]["unreportableReason"])
-    expect("a case measured only once", one_pass, "pass")
+    expect("a case measured only once", one_pass, "only 1 usable reading")
 
     def split_commit_boundary():
         """REGRESSION, from the rig's own ticks (2026-09-05, 4c, 10 s checkpoints):
@@ -456,7 +456,7 @@ def cmd_selftest(live=True, topic=None):
         if t["cases"][2]["reportable"]:
             raise Exception("a 25% first-to-last drift left the baseline reportable")
         raise Refusal("case", f"sentinel drift {sd['drift']:.1%}: " + t["cases"][2]["unreportableReason"])
-    expect("sentinel: rig drifted across the suite", sentinel_drift, "spread")
+    expect("sentinel: rig drifted across the suite", sentinel_drift, "sentinel drift")
 
     def sentinel_ok():
         runs = [{"cores": 2, "pass": "p1-asc", "recordsPerSec": 400.0},

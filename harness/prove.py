@@ -1285,7 +1285,16 @@ def cmd_report():
                     parts = []
                     for k, v in steps.items():
                         r = rng.get(k) or {}
-                        parts.append(f"{k} {v:.0%}" + (f" [{r['low']:.0%}-{r['high']:.0%}]" if r else ""))
+                        # the probe stores a fraction of linear; say it as the
+                        # multiple of that step, which is what everything else
+                        # about scaling is said in
+                        try:
+                            a, b = (float(x) for x in k.split("->"))
+                            ideal = b / a
+                        except Exception:
+                            ideal = 2.0
+                        parts.append(f"{k} {v * ideal:.2f}x"
+                                     + (f" [{r['low'] * ideal:.2f}-{r['high'] * ideal:.2f}x]" if r else ""))
                     print(f"  this host, {label:<13} " + "  ".join(parts))
             if h:
                 widest = max((r.get("spread", 0) for m in (h.get("ofLinearRange") or {}).values()

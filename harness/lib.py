@@ -1945,7 +1945,8 @@ def render_table(out):
     for r in t["stepRatios"]:
         if r["reportable"]:
             L.append(f"STEP {r['step']} cores: {r['ratio']:.3f}x  (ideal {r['idealRatio']:.0f}x, "
-                     f"efficiency {r['efficiency']:.1%}, range across passes {r['ratioLow']:.3f}x-{r['ratioHigh']:.3f}x)")
+                     f"needed {r['idealRatio'] * T['scalingFloor']:.2f}x, range across passes "
+                     f"{r['ratioLow']:.3f}x-{r['ratioHigh']:.3f}x)")
         else:
             L.append(f"STEP {r['step']} cores: NOT REPORTED — {r['reason']}")
     L.append("order effect (descending / ascending): " +
@@ -1997,9 +1998,10 @@ def render_markdown(out):
             # one pass per case: min and max are the same measurement, so a
             # "range across passes" here would be an invented interval.
             L.append(f"**{r['step'].replace('->', '→')} cores: {r['ratio']:.2f}× "
-                     f"({r['efficiency']:.0%} of linear) — one pass per case, no spread measured.**")
+                     f"(needed {r['idealRatio'] * T['scalingFloor']:.2f}×) — one pass per case, no spread measured.**")
         elif r["reportable"]:
-            L.append(f"**{r['step'].replace('->', '→')} cores: {r['ratio']:.2f}× ({r['efficiency']:.0%} of linear), "
+            L.append(f"**{r['step'].replace('->', '→')} cores: {r['ratio']:.2f}× "
+                     f"(needed {r['idealRatio'] * T['scalingFloor']:.2f}×), "
                      f"range {r['ratioLow']:.2f}–{r['ratioHigh']:.2f}× across passes.**")
         else:
             L.append(f"**{r['step'].replace('->', '→')} cores: not reported — {r['reason']}.**")

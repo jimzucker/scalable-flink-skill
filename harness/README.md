@@ -124,7 +124,7 @@ broker plus the job manager do not leave the VM a spare gigabyte. Runs 20 and
 
 **The claim is gated separately from the measurement.** A table can be beyond
 reproach and still say the pipeline does not scale. `report` marks each step
-`meetsClaim` against `scalingFloor` (95% of linear) and exits non-zero when a
+`meetsClaim` against `scalingFloor` (1.90x on a doubling) and exits non-zero when a
 step misses, so `all` ends FAIL rather than PASS. The floor comes from this
 repository's own demo, which reads 1.99x from 2 to 4 cores on the same laptop,
 less the +-3% a two-pass ratio carries. Replayed against the record before it
@@ -150,7 +150,7 @@ pairs `--quick` buys carry about ±3.9% at 95% confidence, and `ratioSdFallback`
 holds that figure for a step with a single pair.
 
 Replayed against the record: of twelve recorded runs, one (run 12) has a 2→4
-whose whole interval clears 95% of linear. That is the honest state of these
+whose whole interval clears 1.90x on a doubling. That is the honest state of these
 pipelines, not a reason to move the floor.
 
 **Each step ratio also carries its adjacent pairs.** `ratioAdjacent` is the

@@ -113,7 +113,7 @@ been asked:
 
 | | |
 |---|---|
-| the objective | near-linear scaling across 1, 2 and 4 cores, judged against ≥95% of linear per step — 1.90× on a doubling. Two steps are reported, 1→2 and 2→4 |
+| the objective | near-linear scaling across 1, 2 and 4 cores. Each step must return **1.90× or better** on a doubling. Two steps are reported, 1→2 and 2→4 |
 | where it runs | a laptop, in Docker |
 | the stack | the images in `pipeline.json` — Flink, and the Kafka chosen in question 6 |
 | what is measured | the drain rate of a fixed backlog at each core count, read from committed broker offsets, with the resource columns beside it |
@@ -351,7 +351,7 @@ for it.
 | the component under test is not the constraint | ≥95% of cap at every case, baseline included; external-boundary back-pressure not material; the broker never hits its own memory limit inside a window (a starved page cache depresses the rate while the worker still reads 96% of cap) . A case that misses is a **ceiling**: measured, reported with its rate as where scaling stops, and excluded from the ratios — never deleted |
 | the input divides evenly across subtasks | partition count divisible by every parallelism under test (8 partitions serves 1, 2, 4; 6 would leave the 4-core case reading 2/2/1/1 and never reaching its cap) |
 | memory is not the constraint | worker memory uncapped by default (the demo caps none); a case whose GC exceeds 5.5% of its capacity is a ceiling, not a result. Cap deliberately with `tmMemoryPerCore` or `perCase` when the study is about memory |
-| the claim itself | each step returns ≥95% of linear, or the chain fails with the per-core, idle, GC and cap figures for both cases — a valid table that does not scale is a result about the pipeline, not a table to publish |
+| the claim itself | each step returns **1.90× or better** on a doubling, or the chain fails with the per-core, idle, GC and cap figures for both cases — a valid table that does not scale is a result about the pipeline, not a table to publish |
 | a failed case still owns the cluster | job torn down on **every** exit path |
 | no job is actually running | engine reports RUNNING with the expected parallelism |
 | the cluster is still busy from the last case | assert idle by asking the engine, not by killing what you think is there |
@@ -493,7 +493,7 @@ one line.
 ## 9. Reporting
 
 - **Lead with the step ratio** the reader would buy — two units to four — with
-  its efficiency and spread. Baseline ratio second, stating what it is against.
+  what it needed and its spread. Baseline ratio second, stating what it is against.
 - **Lead with the outcome, not the road to it**, and stop after the evidence.
 - **Header fields:** axis — always *one machine, more cores*, since that is
   what §1a declares and what 1, 2 and 4 cores measure — API level,

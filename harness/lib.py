@@ -1450,7 +1450,10 @@ def bottleneck(rec):
     bp = rec.get("sourceBackpressured") or 0
     if bp >= 0.30:
         return (f"waiting to write ({cap:.0%} of cores used, held up {bp:.0%} of the time)")
-    return f"not the worker's cores ({cap:.0%} used) — unexplained"
+    # Nothing measured accounts for it. "Investigating" is the honest label and
+    # it is also an instruction: a case held back by something with no name is
+    # the thing to go and find out about, not a blank in a column.
+    return f"investigating — not the worker's cores ({cap:.0%} used), and nothing measured says why"
 
 
 def scorecard(out):
@@ -1462,7 +1465,7 @@ def scorecard(out):
     for cs in t.get("cases", {}).values():
         last = next((r for r in reversed(out.get("runs") or [])
                      if r.get("cores") == cs["cores"] and r.get("status") in ("OK", "CEILING")), None)
-        why = bottleneck(last) if last else "no usable reading"
+        why = bottleneck(last) if last else "investigating — no usable reading"
         mark = "" if cs.get("reportable") else "  (not usable: " + str(cs.get("unreportableReason")) + ")"
         L.append(f"  {cs['cores']:>6}{cs['meanRecordsPerSec']:>14,.0f}/s   {why}{mark}")
     L.append("")
@@ -2106,7 +2109,7 @@ def render_markdown(out):
         last = next((r for r in reversed(out.get("runs") or [])
                      if r.get("cores") == cs["cores"] and r.get("status") in ("OK", "CEILING")), None)
         L.append(f"| {cs['cores']} | {cs['meanRecordsPerSec']:,.0f}/s | "
-                 f"{bottleneck(last) if last else 'no usable reading'} |")
+                 f"{bottleneck(last) if last else 'investigating — no usable reading'} |")
     L += ["", "| cores | pass | records/s | tm cores | % of cap | throttled | broker cores | src idle | src BP | headroom | vantage |",
           "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for r in out["runs"]:

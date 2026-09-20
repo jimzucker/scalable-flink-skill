@@ -106,6 +106,13 @@ def check_plan_discloses(fail):
         "the mid-run kill": "killing the pipeline mid-run",
         "where it runs": "in Docker",
     }
+    # section 1a had no unattended path and deadlocked clean-room run 31; section
+    # 6 had the same hole and stopped run 32 with a fix in hand. Both are checked
+    # so the third one does not happen quietly.
+    for where, needle in (("section 1a", "When there is no human to say yes"),
+                          ("section 6", "no human to say yes, fix one thing")):
+        if needle not in skill:
+            fail(f"{where} has no path for an unattended run")
     missing = [name for name, needle in needed.items() if needle not in plan]
     for name in missing:
         fail(f"the plan in section 1a does not disclose {name}")

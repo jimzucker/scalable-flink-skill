@@ -9,7 +9,7 @@
   },
   "partitions": 8,
   "_outputsPerInput": "Sink records per input record, summed across every output topic. Derive it, do not copy this: the two-vantage guard compares broker offsets against sink rows and a wrong value makes them disagree. One position per trade plus one per allocation at four allocations is 1 + 4 = 5, not 8.",
-  "outputsPerInput": 8,
+  "outputsPerInput": 5,
   "checkpointMs": 10000,
   "job": {
     "jar": "job/target/positions-1.0.jar",

@@ -1,6 +1,12 @@
 {
   "project": "st11",
-  "topics": {"in": "block-trades", "out": ["positions-by-symbol", "positions-by-account"]},
+  "topics": {
+    "in": "block-trades",
+    "out": [
+      "positions-by-symbol",
+      "positions-by-account"
+    ]
+  },
   "partitions": 8,
   "_outputsPerInput": "Sink records per input record, summed across every output topic. Derive it, do not copy this: the two-vantage guard compares broker offsets against sink rows and a wrong value makes them disagree. One position per trade plus one per allocation at four allocations is 1 + 4 = 5, not 8.",
   "outputsPerInput": 8,
@@ -19,15 +25,41 @@
   "verifier": {
     "cmd": "{java} -cp {jar} scaletest.VerifyCompleteness --bootstrap={bootstrapExt} --topicSym={out0} --topicAcct={out1} --manifest={manifest}"
   },
-  "cases": [2, 4],
+  "cases": [
+    2,
+    4
+  ],
   "baseline": 2,
   "passes": 3,
-  "backlog": {"count": 160000000, "seed": 20260903, "smallCount": 20000000, "tinyCount": 60000000, "killAtFraction": 0.35, "_killAtFraction": "Approximate by construction: offsets commit once per checkpoint interval, so the kill lands at the first commit past this fraction. Clean-room run 30 asked for 0.35 and it landed at 62.7%, while the log still said 35%."},
-  "caps": {"kafka": 2.5, "jobmanager": 0.5, "kafkaMemory": "4g", "kafkaHeap": "3G"},
-  "images": {"flink": "flink:1.20.1-scala_2.12-java17", "kafka": "apache/kafka:3.9.0"},
-  "ports": {"kafka": 19092, "rest": 18081},
+  "backlog": {
+    "count": 160000000,
+    "seed": 20260903,
+    "smallCount": 20000000,
+    "tinyCount": 60000000,
+    "killAtFraction": 0.35,
+    "_killAtFraction": "Approximate by construction: offsets commit once per checkpoint interval, so the kill lands at the first commit past this fraction. Clean-room run 30 asked for 0.35 and it landed at 62.7%, while the log still said 35%."
+  },
+  "caps": {
+    "kafka": 2.5,
+    "jobmanager": 0.5,
+    "kafkaMemory": "4g",
+    "kafkaHeap": "3G"
+  },
+  "images": {
+    "flink": "flink:1.20.1-scala_2.12-java17",
+    "kafka": "apache/kafka:3.9.0",
+    "kafkaLibs": "/opt/kafka/libs"
+  },
+  "ports": {
+    "kafka": 19092,
+    "rest": 18081
+  },
   "jdk": "/opt/homebrew/opt/openjdk@17",
   "axis": "one worker growing: one task manager container capped at N cores, parallelism N, N slots",
   "apiLevel": "Flink DataStream API, hand-written operators (no SQL, no Table API)",
-  "guarantee": {"state": "exactly-once checkpointing", "sink": "at-least-once, idempotent by emitting the absolute position per key"}
+  "guarantee": {
+    "state": "exactly-once checkpointing",
+    "sink": "at-least-once, idempotent by emitting the absolute position per key"
+  },
+  "_images": "Apache is the default. For Confluent set kafka to confluentinc/cp-kafka:7.7.0 and kafkaLibs to /usr/share/java/kafka -- the harness mines the broker image for its kafka-clients jar and runs the offset sampler inside it, so the library path moves with the vendor."
 }

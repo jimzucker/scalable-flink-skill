@@ -29,50 +29,100 @@ report and stop — do not fork it.
 
 ## 1. Interview before building
 
-**Ask one question at a time. Wait for the answer. Do not start building until
-the claim and the fan-out are known.** Offer a default with each question so the
-user can say "yes".
+**Six questions, one at a time. Wait for each answer.** Offer the default with
+each so the user can say "yes". Do not start building until the spec and the
+fan-out are known.
+
+**Ask only what changes what gets built.** Everything else the skill decides
+and states, it does not request: it always runs on a laptop in Docker, always
+builds the dashboard, always proves completeness, always checks correctness,
+and always measures 1, 2 and 4 cores for near-linear scaling. Asking permission
+for those invites a "no" that will not be honoured, and spends a question. They
+are declared in the plan (§1a) instead, where the user can object to all of
+them at once.
 
 **When there is no human to ask** — a clean-room run, an unattended agent — do
-not stall and do not skip the interview. Answer all nine yourself, write each
-answer down as a stated assumption in `ASSUMPTIONS.md` beside the claim it
-feeds, and build against that. The claim still has to be written verbatim; it
-is simply yours rather than theirs. Every later decision is judged against it
-the same way, and a reader can see what was assumed rather than agreed. Stop as soon as you can state the claim — usually four to
-six questions. Anything still unknown becomes a stated assumption in the plan.
+not stall and do not skip the interview. Answer all six yourself, write each
+answer down as a stated assumption in `ASSUMPTIONS.md`, and build against that.
+A reader can then see what was assumed rather than agreed.
 
-1. **What is the input event, and what comes out?** One sentence, in domain
-   language. This is the spec.
-2. **Does one input become several outputs?** The fan-out ratio decides where
-   the load lands: at 5× the write side is five times the read side and is
-   usually what saturates first — and what fills the disk.
-3. **What are the keys, and how many distinct ones?** Small fixed key counts
-   make outputs arithmetic, so you can assert exact numbers instead of
-   tolerances.
-4. **What has to be exactly right?** If an output is a running sum, a replayed
-   record is a wrong number, not a duplicate. Then decide **two settings, not
-   one**: emitting the *absolute* value per key makes the **sink** idempotent
-   (no transactions, no commit-interval latency floor); it does nothing for the
-   keyed **state** the value is computed from, which needs exactly-once
-   *checkpointing* or replayed records are folded into the snapshot twice. The
-   usual answer is *exactly-once checkpointing, at-least-once sink*. Name both
-   in the report, and expect to test it by killing a worker (§4).
-5. **Who watches the demo, and what must they believe at the end?** Capacity for
-   managers and correctness for engineers are different builds.
-6. **Where does it run?** Default to a laptop; make the user argue you out of it.
-7. **What claim do you want to make?** Write it verbatim. Every later decision
-   is judged against that sentence.
-8. **Which axis is the claim about?** *One worker growing* (cap one container's
-   CPU and raise its parallelism — the laptop proxy) or *workers multiplying* (a
-   second JVM with its own heap, GC and network — what a vendor sells as a
-   unit). They are not the same measurement: a growing worker amortises its
-   fixed cost, a multiplied one pays it again. Record the axis as a field in
-   the results header, and on every case **parallelism = CPU cap = allocated
-   slots**, read back from the engine.
-9. **Which API level?** A declarative/SQL layer plans the graph for you and the
-   plan can change between versions; hand-written operators are a graph you
-   own. Neither is more valid, but the claim differs. Default to what the
-   audience runs in production, and say which next to the numbers.
+1. **What goes into the pipeline, and what comes out?** A few sentences, in the
+   user's own words. This becomes the spec.
+
+   *Default: an order arrives with a unique id and symbol, order quantity and a
+   list of allocations; each allocation is keyed by account / sub-account and
+   carries a quantity. The pipeline maintains positions by
+   account+subaccount+symbol and by symbol. That input is the one scaled up to
+   drive the pipeline to capacity. A second input carries prices, keyed by
+   symbol and timestamp; the pipeline joins those to the positions and emits a
+   position and market value every 10 seconds.*
+
+2. **Does one input produce more than one output?**
+
+   *Default: one trade input produces 1 position per symbol and one position
+   per allocation. If the order has 4 allocations it emits 5 records. For the
+   market value we want to throttle it to a configurable interval defaulting to
+   10 seconds.*
+
+   The throttled emit is deliberately not counted in the 5: fan-out counts
+   outputs **per input**, and a throttled emit is per interval. Counting a
+   timer-driven output as fan-out is what makes the two-vantage guard disagree.
+
+3. **What are the keys, and how many distinct ones?**
+
+   *Default: two key spaces. Symbol, and account / sub-account / symbol.
+   4 symbols, 2 accounts and each has 2 sub-accounts.*
+
+   *Make sure the cardinality is realistic, as 4K symbols vs 4 will materially
+   impact the application design.*
+
+4. **What has to be exactly right?**
+
+   *Default: positions and market values must be published in order. At the end
+   the positions, at both symbol and account / sub-account / symbol, must match
+   the input, and market values must be final position × latest price.
+   Duplicates have to be handled and not double counted, in all cases.*
+
+   Ordering holds **per key** within a keyed stream — not across keys, and not
+   across a rebalance. Say so if the user's answer assumes otherwise. How the
+   duplicates are handled is a build decision, not a question: §4.
+
+5. **Which Flink API should we use?** DataStream, where the developer has more
+   control over the execution graph, or SQL, where the optimizer makes more of
+   the decisions. Neither is more valid, but the claim differs, and it is said
+   next to the numbers.
+
+   *Default: DataStream.*
+
+6. **Which Kafka do you want to use?** Apache or Confluent.
+
+   *Default: Apache.*
+
+   Both are driven by `images.kafka` and `images.kafkaLibs` in `pipeline.json`
+   — the harness mines the broker image for its client jar, so the library path
+   moves with the vendor.
+
+## 1a. Then the plan, and stop
+
+**Before building anything, describe the test, show the plan, and ask to run
+it. Wait for the answer.** One approval for the whole design beats six
+permissions for things that were never optional.
+
+The description states every unconditional, so nothing is hidden by not having
+been asked:
+
+| | |
+|---|---|
+| the objective | near-linear scaling across 1, 2 and 4 cores, judged against ≥95% of linear per step |
+| where it runs | a laptop, in Docker |
+| the stack | the images in `pipeline.json` — Flink, and the Kafka chosen in question 6 |
+| what is measured | the drain rate of a fixed backlog at each core count, read from committed broker offsets, with the resource columns beside it |
+| what is proved first | completeness with no tolerances, re-checked after killing a worker; no throughput table is published for a build that has not passed |
+| what is built | the pipeline, a deterministic generator, a verifier, and the dashboard |
+
+Then the six answers, and every assumption made where a question was not asked.
+If the user objects, change it and show the plan again. **Do not start until
+they say yes.**
 
 ## 2. Build in reviewable steps
 
@@ -132,6 +182,17 @@ compared to that. Assert, with no tolerances:
 | every aggregation sums to the manifest exactly | a lost or duplicated record |
 | two paths over the same input agree exactly | same, located |
 | after killing a worker mid-drain, all of the above still hold | the guarantee you configured is not the one you have |
+
+**Two settings, not one, and both are needed.** The user is asked what must be
+exactly right (§1 q4); which settings deliver it is a build decision made here:
+
+- **Sink** — emit the *absolute* value per key, not a delta. A repeat is then
+  harmless, with no transactions and no commit-interval latency floor.
+- **State** — exactly-once *checkpointing*. Without it a replayed record is
+  folded into the snapshot twice, and the sink setting does nothing about it.
+
+The usual answer is *exactly-once checkpointing, at-least-once sink*. Name both
+in the report (§9), and expect the kill test above to be what proves them.
 
 Record the build hash beside every number, and **gate throughput on this**: no
 table is published for a build that has not passed. Put the same script in CI
@@ -383,8 +444,9 @@ one line.
 - **Lead with the step ratio** the reader would buy — two units to four — with
   its efficiency and spread. Baseline ratio second, stating what it is against.
 - **Lead with the outcome, not the road to it**, and stop after the evidence.
-- **Header fields:** axis (§1 q8), API level, guarantee as two settings,
-  checkpoint interval, build hash, passes per case.
+- **Header fields:** axis — always *one machine, more cores*, since that is
+  what §1a declares and what 1, 2 and 4 cores measure — API level,
+  guarantee as two settings, checkpoint interval, build hash, passes per case.
 - **State the scope once**, where the technical reader will meet it: one
   pipeline supports "this pipeline scaled linearly", not "the engine scales".
 - **Say where it stops.** Naming the ceiling makes the rest credible.

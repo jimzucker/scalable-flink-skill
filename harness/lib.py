@@ -28,6 +28,7 @@ A refusal about the RIG stops the suite. A refusal about one case's DATA marks
 that case and moves on.
 """
 
+import base64
 import calendar
 import hashlib
 import json
@@ -294,6 +295,15 @@ class Cfg:
         self.kafka_heap = caps.get("kafkaHeap", "3G")
         self.flink_img = c["images"]["flink"]
         self.kafka_img = c["images"]["kafka"]
+        # Where the broker image keeps its jars. The harness mines the image for a
+        # kafka-clients jar to compile the offset sampler against, and runs the
+        # sampler inside that image, so the path moves with the vendor:
+        # apache/kafka keeps them in /opt/kafka/libs, confluentinc/cp-kafka in
+        # /usr/share/java/kafka. Wrong path refuses rather than measuring badly.
+        self.kafka_libs = c["images"].get("kafkaLibs", "/opt/kafka/libs").rstrip("/")
+        # deterministic 22-char base64url id, stable for this project
+        self.cluster_id = base64.urlsafe_b64encode(
+            hashlib.sha256(self.project.encode()).digest()[:16]).decode().rstrip("=")
         self.jdk = c["jdk"]
         self.java = os.path.join(self.jdk, "bin", "java")
         self.axis = c["axis"]
@@ -521,6 +531,9 @@ services:
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@{c.kafka}:9093
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      # apache/kafka generates one; confluentinc/cp-kafka requires it. Fixed per
+      # project so a restart rejoins its own log rather than refusing a new id.
+      CLUSTER_ID: {c.cluster_id}
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
@@ -811,11 +824,12 @@ def build_sampler():
     os.makedirs(out, exist_ok=True)
     cid = sh(f"docker create {c.kafka_img}").stdout.strip()
     try:
-        libs = sh(f"docker run --rm --entrypoint sh {c.kafka_img} -c 'ls /opt/kafka/libs'").stdout.split()
+        libs = sh(f"docker run --rm --entrypoint sh {c.kafka_img} -c 'ls {c.kafka_libs}'").stdout.split()
         cl = [l for l in libs if l.startswith("kafka-clients-") and l.endswith(".jar")]
         if not cl:
-            raise Refusal("rig", "no kafka-clients jar in the broker image")
-        sh(f"docker cp {cid}:/opt/kafka/libs/{cl[0]} {out}/{cl[0]}")
+            raise Refusal("rig", f"no kafka-clients jar under {c.kafka_libs} in {c.kafka_img} — "
+                                 f"set images.kafkaLibs to where this image keeps them")
+        sh(f"docker cp {cid}:{c.kafka_libs}/{cl[0]} {out}/{cl[0]}")
     finally:
         sh(f"docker rm -v {cid}", check=False)
     sh(f"{c.jdk}/bin/javac --release 17 -cp {out}/{cl[0]} -d {out} {HERE}/sampler/OffsetSampler.java")
@@ -829,7 +843,7 @@ def start_sampler(group):
     sdir = build_sampler()
     sh(f"docker rm -f -v {c.sampler}", check=False)
     sh(f"docker run -d --name {c.sampler} --network {c.net} -v {sdir}:/sampler:ro "
-       f"--entrypoint java {c.kafka_img} -cp '/opt/kafka/libs/*:/sampler' OffsetSampler "
+       f"--entrypoint java {c.kafka_img} -cp '{c.kafka_libs}/*:/sampler' OffsetSampler "
        f"--bootstrap={c.boot_int} --group={group} --inTopic={c.topic_in} "
        f"--outTopics={','.join(c.topics_out)} --intervalMs=500")
     # assert anything launched unattended is alive before waiting on it

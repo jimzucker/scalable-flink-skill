@@ -437,6 +437,28 @@ it runs before every command. Sort every new rule into one of three piles
 — *checkable while running* (a guard above), *checkable before running* (a
 preflight row in §3), *judgment* (prose, and keep that pile small).
 
+**The report opens with a scorecard**, because a reader who gets one thing
+should get this one: the speed at each size, what was holding each case back,
+and whether doubling the resource doubled the work.
+
+```
+SCORECARD
+
+   cores           speed   what was holding it back
+       2       374,507/s   the worker's cores (100% used) — what we want
+       4       673,414/s   the worker's cores (97% used) — what we want
+
+  2->4 cores: doubling gave 1.80x, it needed 1.90x  ->  missed
+```
+
+The bottleneck is named from figures already recorded per case and already
+used by the guards — cap consumption, back-pressure, idle, GC, the broker's
+limit hits and its cores — in the order the guards apply them, so it never
+contradicts a ceiling the run reported. *The worker's cores* is the answer
+the table depends on; anything else means the number measures something
+other than what it claims to. **A step ratio without this column beside it is
+a number with no idea what produced it.**
+
 ## 7. The dashboard explains; the harness measures
 
 **Add it through `extraServices` in `pipeline.json`** — a map of service name to

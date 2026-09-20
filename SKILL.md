@@ -444,9 +444,9 @@ and whether doubling the resource doubled the work.
 ```
 SCORECARD
 
-  cores        speed     pipeline CPU     pipeline memory     Kafka CPU         Kafka memory   blocking higher throughput
-      2     374,507/s         2 / 100%     uncapped / 2.0%     2.5 / 12%                6g / 0   Pipeline CPU
-      4     673,414/s          4 / 97%     uncapped / 1.2%     2.5 / 25%                6g / 0   Pipeline CPU
+  cores        speed     pipeline CPU    pipeline memory    Kafka CPU       Kafka memory   blocked by      what to do
+      2     374,507/s         2 / 100%    uncapped / 2.0%    2.5 / 12%             6g / 0   Pipeline CPU    nothing — add cores for more
+      4     673,414/s          4 / 97%    uncapped / 1.2%    2.5 / 25%             6g / 0   Pipeline CPU    nothing — add cores for more
 
   Each pair is what it was allowed and how much of that went:
     pipeline CPU      cores it could use / how much of them it used
@@ -466,7 +466,9 @@ the sentence explaining it follows the table. Nothing here is new — the
 figures were already recorded per case and already used by the guards, in
 the order the guards apply them, so the answer never contradicts a ceiling
 the run reported. Four of the answers name a column, so a reader can look
-the verdict up rather than take it on trust. *Pipeline CPU* is the answer
+the verdict up rather than take it on trust, and each carries what to do
+about it — for Kafka's memory, the size to try, not just "more". *Pipeline CPU*
+is the answer
 the table depends on; anything else means the number measures something
 other than what it claims to. **A step ratio without this column beside it is
 a number with no idea what produced it.**

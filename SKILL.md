@@ -445,14 +445,14 @@ and whether doubling the resource doubled the work.
 SCORECARD
 
   2 cores  374,507/s
-    held back by: Ran out of CPU. The pipeline used 100% of the cores it was
-      given, so CPU is what stopped it going faster. That is what we want,
-      because CPU is what we are adding.
+    held back by: Ran out of CPU. The pipeline ran at 100% of its 2 cores, so
+      CPU is what stopped it going faster. That is what we want, because CPU
+      is what we are adding.
 
   4 cores  673,414/s
-    held back by: Ran out of CPU. The pipeline used 97% of the cores it was
-      given, so CPU is what stopped it going faster. That is what we want,
-      because CPU is what we are adding.
+    held back by: Ran out of CPU. The pipeline ran at 97% of its 4 cores, so
+      CPU is what stopped it going faster. That is what we want, because CPU
+      is what we are adding.
 
   2->4 cores: doubling gave 1.80x, it needed 1.90x  ->  missed
 ```

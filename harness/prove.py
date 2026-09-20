@@ -311,6 +311,37 @@ def cmd_selftest(live=True, topic=None):
            labelled(dict(tmCapFrac=0.9495, sourceBackpressured=0.6738), "Kafka writes"), "", should_fire=False)
     expect("bottleneck label: Input feed (must not fire)",
            labelled(dict(tmCapFrac=0.80, sourceIdle=0.40), "Input feed"), "", should_fire=False)
+    def plural(n, want):
+        def go():
+            got = L.n_cores(n)
+            assert got == want, f"n_cores({n}) said {got!r}, expected {want!r}"
+        return go
+
+    expect("one core is singular (must not fire)", plural(1, "1 core"), "", should_fire=False)
+    expect("two cores is plural (must not fire)", plural(2, "2 cores"), "", should_fire=False)
+
+    def verdict_not_met_above_ideal():
+        """A step above its ideal clears a floor, but it is not a pass to report
+        as one: run 31's 1->2 read 2.76x and sat under a note saying the smaller
+        case reads low."""
+        def go():
+            runs = [{"cores": n, "pass": f"p{i}", "status": "OK",
+                     "recordsPerSec": 100000.0 * (8 if n == 2 else n),
+                     "tmCapFrac": 0.99, "gcFracOfCapacity": 0.02, "kafkaCores": 0.3,
+                     "brokerLimitBytes": 4 * 1024**3, "brokerLimitHits": 0,
+                     "sourceBackpressured": 0.05, "sourceIdle": 0.01}
+                    for n in (1, 2) for i in (1, 2)]
+            out = {"runs": runs, "table": L.build_table(runs)}
+            line = [x for x in L.scorecard(out).splitlines() if "1->2" in x]
+            assert line, "no 1->2 verdict line"
+            assert "met" not in line[0].split("->")[-1], \
+                f"a step above its ideal is reported as a pass: {line[0].strip()!r}"
+            assert "reads low" in line[0], f"and does not say why: {line[0].strip()!r}"
+        return go
+
+    expect("a step above 2x is not reported as met (must not fire)",
+           verdict_not_met_above_ideal(), "", should_fire=False)
+
     def scorecard_width(limit=130):
         """The scorecard stays readable. It reached 175 characters once, a word
         at a time, because nobody measured it after each addition."""

@@ -456,7 +456,33 @@ SCORECARD
 
   2 cores is the baseline: there is nothing below it to compare against, so the way
       up is a faster pipeline, not more cores.
-  4 cores: doubling gave 1.80x, short of the 1.90x needed.
+  4 cores: doubling gave 1.80x, short of the 1.90x target.
+
+  2->4 cores: doubling gave 1.80x, target 1.90x  ->  missed
+```
+
+**The shape is a rule, not a preference**, because it drifted back twice in one
+afternoon and each drift was reasonable on its own:
+
+- **Two or three words per cell, and every sentence under the table.** Writing
+  the advice into the row took it to 175 characters, one addition at a time.
+  `prove.py selftest-pure` renders the longest branch there is and fails over
+  130 — break it on purpose when adding a column, because a guard whose own
+  failure case is unchecked is weaker than it looks. Writing that one found
+  two columns colliding at seven-figure values.
+- **A cell reads without the key.** `6.25g / 0` needed the legend; `6.25g,
+  never full` does not.
+- **The verdict names a column**, so a reader can check it against the numbers
+  on the same row rather than take it on trust.
+- **The advice reads the step, not just the case.** CPU being the limit is only
+  good news if that step actually doubled.
+- **A step above its ideal is never reported as met.** It clears the floor
+  arithmetically and it is not a result: something below it read low. Say that,
+  beside the number.
+- **Say "target", not "needed"**, and get the plurals right — *1 core*, not
+  *1 cores*. Both are self-tested.
+
+```
 
   2->4 cores: doubling gave 1.80x, it needed 1.90x  ->  missed
 ```

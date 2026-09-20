@@ -311,6 +311,23 @@ def cmd_selftest(live=True, topic=None):
            labelled(dict(tmCapFrac=0.9495, sourceBackpressured=0.6738), "Kafka writes"), "", should_fire=False)
     expect("bottleneck label: Input feed (must not fire)",
            labelled(dict(tmCapFrac=0.80, sourceIdle=0.40), "Input feed"), "", should_fire=False)
+    def acts(kw, want):
+        r = dict(good); r.update(kw)
+
+        def go():
+            got = L.corrective_action(r)
+            assert want in got, f"action said {got!r}, expected {want!r}"
+        return go
+
+    expect("action: nothing to do when CPU is the block (must not fire)",
+           acts(dict(tmCapFrac=0.99), "add cores"), "", should_fire=False)
+    expect("action: names the Kafka memory to try (must not fire)",
+           acts(dict(tmCapFrac=0.96, brokerLimitHits=12780, brokerLimitBytes=4096 * 1048576),
+                "6400m"), "", should_fire=False)
+    expect("action: more memory for the pipeline (must not fire)",
+           acts(dict(tmCapFrac=0.99, gcFracOfCapacity=0.064), "more memory"), "", should_fire=False)
+    expect("action: compress the writes (must not fire)",
+           acts(dict(tmCapFrac=0.9495, sourceBackpressured=0.6738), "compress"), "", should_fire=False)
     expect("bottleneck: CPU is the block (must not fire)",
            names(dict(tmCapFrac=0.99), "blocking higher throughput"), "", should_fire=False)
     expect("bottleneck: Kafka out of memory (must not fire)",

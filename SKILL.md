@@ -124,6 +124,13 @@ Then the six answers, and every assumption made where a question was not asked.
 If the user objects, change it and show the plan again. **Do not start until
 they say yes.**
 
+**When there is no human to say yes** — a clean-room run, an unattended agent —
+write the plan to `PLAN.md` anyway and build against it. It is the record of
+what was decided and it is worth as much when nobody approved it: a reader can
+see what the run committed to before it had any numbers. Say in the file that
+no one approved it. §1's rule is the same one — answer the questions yourself
+and write them down — and this step should not be the one that stalls.
+
 ## 2. Build in reviewable steps
 
 One branch per step, squash-merged. Each step ends with the system **running and
@@ -313,8 +320,12 @@ so the suite's first and last measurements are the same case and a rig that
 drifted across it is visible as baseline spread (one rig read its four-core
 case 12% higher ten minutes after the suite than in it). Budget one extra case.
 
-**Start the fill the moment the tiny proof passes** and build the dashboard
-while it runs. Nothing but the cases depends on it.
+**Start the fill the moment the tiny proof passes** and build the dashboard's
+panels while it runs. Nothing but the cases depends on them. The dashboard's
+*service* is not so free: `extraServices` is read when the stack comes up, so
+it has to be in `pipeline.json` before the first `up` — decide at §1a that
+there will be a dashboard, and write the service in then, even if the panels
+come later.
 
 ## 6. The checks that fail a run
 

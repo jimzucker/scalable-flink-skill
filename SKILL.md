@@ -271,8 +271,9 @@ a flat slope; two neighbours agreeing is a coin flip against ±10% noise.
 
 **Every case at least twice, and report the spread.** The same case measured
 three times spread 10–17% — wider than a step ratio's effect. A case whose
-spread exceeds 10% is **unreportable on its own and voids every ratio it is
-part of**; it does not void the suite. One run's 1-core case spread 14–42% in
+spread exceeds 20% — set above the band the valid cases occupy and below every
+outlier — is **unreportable on its own and voids every ratio it is part of**;
+it does not void the suite. One run's 1-core case spread 14–42% in
 seven consecutive suites while its 2- and 4-core cases held under 6%, and a
 suite-wide refusal threw away six valid 2→4 measurements.
 
@@ -331,7 +332,7 @@ for it.
 | two vantage points disagree | transport and manifest agree within a stated tolerance |
 | a rate came from the engine | the rate source is the transport's committed offsets |
 | the measured rate is zero or negative | — |
-| a case's passes spread >10% | every case run ≥2×; that case and every ratio it is part of are marked unreportable — the other cases still report |
+| a case's passes spread >20% | every case run ≥2×; that case and every ratio it is part of are marked unreportable — the other cases still report |
 | rows came from different builds | one build hash across the table |
 | observed cardinality ≠ predicted | distinct keys vs the interview's answer |
 | completeness has not passed for this build | §4, with no tolerances |

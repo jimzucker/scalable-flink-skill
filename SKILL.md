@@ -474,6 +474,8 @@ test changes the number being measured. Whatever you add is recorded in the
 results header, so a reader knows what else was on the machine. That is the only
 sanctioned way — the harness is still not to be forked.
 
+**Five of the seven panels need engine metrics, and those need a reporter**: set one through `flinkProperties` in `pipeline.json`, which reaches the job manager and every task manager. Clean-room run 32 had no such hook, could not fork the harness, and spent about fifty minutes rebuilding the numbers from outside the engine — Kafka offsets, a tail of each sink, the REST API and the docker socket. The settings the measurement depends on are refused rather than silently overridden.
+
 Build it, provision it from a file that ships with the stack, and never take a
 reported number off it — engine meters are ~60 s moving averages and its
 metric service starves at exactly the load you care about. Render images

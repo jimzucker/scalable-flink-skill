@@ -291,6 +291,31 @@ class Cfg:
         self.tm_mem_limit_per_core = caps.get("tmMemoryLimitPerCore")
         self.tm_mem = caps.get("tmMemory", "4096m")
         self.tm_mem_limit = caps.get("tmMemoryLimit", "6g")
+        # Extra Flink settings, for the job manager and the worker alike. The
+        # only reason this exists: section 7 asks for panels the harness cannot
+        # feed, because the properties were hard-coded and forking is forbidden.
+        # Clean-room run 32 spent about 50 minutes writing a metrics exporter
+        # from outside the engine to get round it, and noted every run would
+        # rewrite the same thing.
+        self.flink_props = c.get("flinkProperties") or {}
+        if isinstance(self.flink_props, str):
+            self.flink_props = dict(
+                (k.strip(), v.strip())
+                for k, _, v in (ln.partition(":") for ln in self.flink_props.splitlines() if ln.strip()))
+        # What the harness sets for the measurement is not open for discussion:
+        # slots, parallelism, worker memory and the checkpoint store decide what
+        # is being measured, and the slf4j reporter is where busy, idle and
+        # back-pressure are read from.
+        reserved = ("taskmanager.numberOfTaskSlots", "parallelism.default",
+                    "taskmanager.memory.process.size", "state.checkpoint-storage",
+                    "state.checkpoints.dir", "jobmanager.rpc.address")
+        for k in self.flink_props:
+            if k in reserved or k.startswith("metrics.reporter.slf4j."):
+                raise Refusal("rig", f"flinkProperties sets {k}, which the harness sets for the "
+                                     f"measurement. Slots, parallelism, worker memory and the checkpoint "
+                                     f"store decide what is being measured, and the slf4j reporter is "
+                                     f"where busy, idle and back-pressure are read from. Add settings, "
+                                     f"do not replace these.")
         self.kafka_mem = caps.get("kafkaMemory", "4g")
         self.kafka_heap = caps.get("kafkaHeap", "3G")
         self.flink_img = c["images"]["flink"]
@@ -601,6 +626,7 @@ services:
         state.backend.type: hashmap
         parallelism.default: {c.baseline}
         heartbeat.timeout: 120000
+""" + "".join(f"        {k}: {v}\n" for k, v in c.flink_props.items()) + """
     volumes:
       - ckpt:/ckpt
       - {c.jar_dir}:/jobs:ro
@@ -1087,7 +1113,8 @@ def start_tm(cores, slots=None, reporter_s=None):
              # 1.20 and per-vertex metrics come back empty under load.
              f"metrics.reporter.slf4j.factory.class: org.apache.flink.metrics.slf4j.Slf4jReporterFactory\n"
              f"metrics.reporter.slf4j.interval: {reporter_s} SECONDS\n"
-             f"metrics.reporter.slf4j.scope.variables.excludes: job_id;task_id;task_attempt_id;tm_id\n")
+             f"metrics.reporter.slf4j.scope.variables.excludes: job_id;task_id;task_attempt_id;tm_id\n"
+             + "".join(f"{k}: {v}\n" for k, v in c.flink_props.items()))
     sh(f"docker run -d --name {c.tm} --hostname {c.tm} --network {c.net} --user 0:0 "
        f"--cpus {cores} " + (f"--memory {tm_mem_limit} " if tm_mem_limit else "") +
        f"-v {c.ckpt_vol}:/ckpt -v {c.jar_dir}:/jobs:ro "

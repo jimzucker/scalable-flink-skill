@@ -1423,6 +1423,32 @@ def size_broker_memory(limit_bytes, hits):
     return int(limit_bytes * 1.6 / 268435456) * 256
 
 
+def progress(line, pct=None, eta_s=None):
+    """One line a person can read, in results/PROGRESS.txt.
+
+    A chain takes two to three hours and used to say nothing until it was
+    over. harness.log has everything but is written for whoever is debugging
+    it; this file holds one sentence, overwritten, so `cat results/PROGRESS.txt`
+    answers "where is it up to" without reading anything.
+    """
+    c = cfg()
+    bar = ""
+    if pct is not None:
+        filled = int(round(pct * 20))
+        bar = f"[{'#' * filled}{'.' * (20 - filled)}] {pct:>4.0%}  "
+    eta = ""
+    if eta_s and eta_s > 0:
+        m = int(eta_s // 60)
+        eta = f"  about {m // 60}h {m % 60:02d}m left" if m >= 60 else f"  about {m}m left"
+    text = f"{time.strftime('%H:%M:%S')}  {bar}{line}{eta}"
+    try:
+        with open(os.path.join(c.results, "PROGRESS.txt"), "w") as f:
+            f.write(text + "\n")
+    except Exception:
+        pass
+    return text
+
+
 def run_case_retrying(run, on_retry=None, attempts=2):
     """Run one case, retrying once if it fails on this case's own data.
 

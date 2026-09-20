@@ -1123,9 +1123,16 @@ def cmd_suite():
 
     shape_ref, stop = None, None
     run_id = time.strftime("%m%d%H%M")
+    total_cases = sum(len(order) for _, order in plan)
+    done_cases, t_suite = 0, time.time()
     for pass_id, order in plan:
         for cores in order:
             log(f"---- case {cores} cores, pass {pass_id} ----")
+            per = (time.time() - t_suite) / done_cases if done_cases else None
+            log(L.progress(f"suite: case {done_cases + 1} of {total_cases} "
+                           f"({cores} cores, pass {pass_id})",
+                           pct=done_cases / total_cases,
+                           eta_s=per * (total_cases - done_cases) if per else None))
             try:
                 def once(cores=cores, pass_id=pass_id):
                     return L.run_case(cores, pass_id, run_id, shape_ref, cores == c.baseline, man)
@@ -1151,6 +1158,7 @@ def cmd_suite():
                 log(f"  {label}: {e.refusal.msg}")
                 if e.refusal.scope == "rig":
                     stop = ("rig refusal", e.refusal.msg)
+            done_cases += 1
             save()
             if stop:
                 break
@@ -1353,9 +1361,16 @@ def cmd_all(steps=None, results=None):
     t_all = time.time()
     mark("phase=all start")
     verdict = "PASS"
-    for name, fn in steps:
+    say = {"up": "starting the stack", "preflight": "preflight checks",
+           "completeness": "proving nothing is lost, including after killing a worker",
+           "tinyproof": "the tiny proof: two cases end to end, and every guard broken on purpose",
+           "fill": "filling the backlog — the long quiet one",
+           "suite": "measuring the cases", "report": "writing the report"}
+    for i, (name, fn) in enumerate(steps):
         t0 = time.time()
         mark(f"phase={name} start")
+        if results == c.results:
+            L.progress(f"step {i + 1} of {len(steps)}: {say.get(name, name)}", pct=i / len(steps))
         try:
             rc = fn()
         except Refusal as e:

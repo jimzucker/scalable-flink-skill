@@ -111,15 +111,19 @@ sentence, and the detail is the point.
 > **Does one input produce more than one output?**
 >
 > *Default: one trade input produces 1 position per symbol and one position per
-> allocation. If the order has 4 allocations it emits 5 records.*
+> allocation. If the order has 4 allocations it emits 5 records. For the market
+> value we want to throttle it to a configurable interval defaulting to 10
+> seconds.*
 >
 > *At 5 outputs per input the write side is 5x the read side. The write side
 > runs out of speed first, and fills the disk.*
 
 The term is gone and the consequence leads. The default is the author's
-wording. The 10-second market value emit is deliberately not counted here: it
-is on a timer, not one per input, and counting timer-driven output as fan-out
-is what makes the two-vantage guard disagree.
+wording, and it settles the market value in the right place: a throttle you
+choose, not an accident of the design. It stays out of the 5 because the
+fan-out number counts outputs *per input*, and a throttled emit is per
+interval. Counting a timer-driven output as fan-out is what makes the
+two-vantage guard disagree.
 
 ### 8 — the question that decides what gets measured
 

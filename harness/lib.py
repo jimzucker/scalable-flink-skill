@@ -392,10 +392,12 @@ def sh(cmd, check=True, timeout=600):
         # timeout, and the traceback said only that a subprocess had expired.
         hint = ""
         if cmd.strip().startswith("docker"):
+            # Name the usual cause and stop there. What to do about a machine's
+            # docker credentials is that machine's owner's call, not the
+            # harness's, and a benchmark has no business telling anyone to take
+            # their credential store out of the path.
             hint = ("\nA docker command that hangs rather than failing is usually the credential "
-                    "helper. Check `credsStore` in ~/.docker/config.json: run "
-                    "`echo '{}' > $TMPDIR/dockercfg/config.json` and set DOCKER_CONFIG to that "
-                    "directory to take the helper out of the path, then try again.")
+                    "helper configured in docker's config.json.")
         raise Refusal("rig", f"this command was still running after {timeout}s and was given up on:"
                              f"\n  {cmd}\nIt did not fail, it never answered.{hint}")
     if r.returncode != 0 and check:

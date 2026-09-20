@@ -73,17 +73,32 @@ Four changed, five untouched. The rule applied: **the question is plain even
 when the answer is not**, and a default shows the shape of a usable answer
 rather than presuming the reader shares ours.
 
-### 1 — the default stops presuming our problem
+### 1 — the default is described, not referred to
 
-> **What goes into the pipeline, and what comes out?** One sentence, in your
-> own words.
+> **What goes into the pipeline, and what comes out?** A few sentences, in your
+> own words. This becomes the spec.
 >
-> *(For example: "orders arrive, and I want a running total per customer", or
-> "sensor readings arrive, and I want a rolling average per device". One
-> sentence is enough — this becomes the spec.)*
+> *(For example: "An order arrives with a unique id and a list of allocations;
+> each allocation is keyed by account / sub-account / symbol and carries a
+> quantity. The pipeline maintains positions by account+symbol and by symbol.
+> That input is the one scaled up to drive the pipeline to capacity. A second
+> input carries prices, keyed by symbol and timestamp; the pipeline joins those
+> to the positions and emits a position and market value every 10 seconds.")*
 
-The examples teach the format without naming a problem the reader has never
-seen. Two of them, deliberately, so neither reads as the expected answer.
+**The first diagnosis was wrong.** The fault was not that the default used this
+project's problem — it was that it *referred* to it ("the same block-trade
+problem") instead of *describing* it, so it named nothing to anyone who had not
+read the validation record. Written out, the same example stands alone and does
+more work than a neutral one-liner: it shows two inputs, nested structure,
+composite keys, two aggregations, a join, an emit cadence, and which input
+drives the load. A reader with a different problem now knows the level of detail
+expected of them.
+
+The author supplied this wording on 2026-09-20; it is used as given.
+
+Consequence: **"One sentence" becomes "a few sentences."** The old instruction
+argued against the example — an answer with this much in it cannot be one
+sentence, and the detail is the point.
 
 ### 2 — "fan-out ratio" is not a phrase anyone arrives with
 
@@ -139,6 +154,12 @@ default.
 
 3, 5, 6, 7 and 9. They already read plainly, and 7 in particular should stay
 blunt: *"What claim do you want to make? I write it down verbatim."*
+
+Their **defaults** follow from question 1 rather than being canned. If the
+reader takes the worked example, the example continues into them — keys are
+account+symbol and symbol, the claim is about orders per second. If the reader
+describes their own problem, the defaults are derived from that instead. Only
+question 5 has no default at all: nobody but the reader knows their audience.
 
 ## What this costs
 

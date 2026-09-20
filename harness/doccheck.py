@@ -69,7 +69,10 @@ def check_cases_match(fail):
     cases = json.loads(read(HERE, "pipeline.example.json")).get("cases") or []
     if not cases:
         return "no cases in the example to check"
-    phrase = " and ".join(str(c) for c in cases) + " cores"
+    names = [str(c) for c in cases]
+    phrase = (names[0] if len(names) == 1
+              else " and ".join(names) if len(names) == 2
+              else ", ".join(names[:-1]) + " and " + names[-1]) + " cores"
     skill = read(ROOT, "SKILL.md")
     if f"always measures {phrase}" not in skill:
         fail(f"SKILL.md does not say it always measures {phrase}, which is what the example runs")

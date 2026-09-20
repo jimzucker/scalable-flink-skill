@@ -300,6 +300,9 @@ def cmd_selftest(live=True, topic=None):
     expect("bottleneck: waiting to write (must not fire)",
            names(dict(tmCapFrac=0.9495, sourceBackpressured=0.6738), "waiting to write"),
            "", should_fire=False)
+    expect("bottleneck: unknown says investigating (must not fire)",
+           names(dict(tmCapFrac=0.80, sourceBackpressured=0.05, sourceIdle=0.02), "investigating"),
+           "", should_fire=False)
     expect("bottleneck: waiting for input (must not fire)",
            names(dict(tmCapFrac=0.80, sourceIdle=0.40), "waiting for input"),
            "", should_fire=False)

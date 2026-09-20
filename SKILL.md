@@ -158,10 +158,14 @@ bad window voids one case — so anything checkable now is checked now.
 - **bound the ratio to 0.75×–1.25× of the ideal** — 1.5×–2.5× when the two
   cases are one unit and two, 3×–5× when they are one and four. Beating the
   ideal is not an error in itself, and nothing refuses for it outside the tiny
-  proof: the suite has a floor, not a ceiling. A *large* overshoot here is a
-  depressed baseline rather than a fast pipeline — a baseline time-sharing six
-  unchained tasks on one core passed the cap guard at 99.9% and reported 3.73×
-  — which is the baseline-shape problem §5 says to read off the job graph;
+  proof: the suite has a floor, not a ceiling. Read a *large* overshoot from
+  the other end — one core of two should return about **half** the two-core
+  rate, so a ratio of 3× is a baseline at a third of its share, and it is the
+  slow case that wants investigating, not the fast one. Run 8's baseline
+  time-shared six unchained tasks on one core, passed the cap guard at 99.9%,
+  and made the step read 3.73×. That is the baseline-shape problem §5 says to
+  read off the job graph, and the harness prints the share beside the ratio so
+  the short case names itself;
 - **kill a worker mid-drain and re-assert the totals** — a guarantee is a
   claim about failure and is untested until something has failed; finding out
   after the suite discards the suite;

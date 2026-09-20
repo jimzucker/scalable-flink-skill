@@ -810,11 +810,29 @@ def cmd_tinyproof():
             ideal = hi / lo
             out["ratio"] = round(ratio, 3)
             bound = (T["tinyRatioLo"] * ideal / 2, T["tinyRatioHi"] * ideal / 2)
+            # The low case's rate as a share of the high case's, against the share
+            # its resource buys. Naming the ratio "superlinear" points suspicion
+            # at the fast case; the fault is almost always the slow one, so the
+            # verdict says which case is short and by how much.
+            share = recs[lo]["recordsPerSec"] / recs[hi]["recordsPerSec"]
+            out["baselineShare"] = round(share, 4)
+            out["baselineShareExpected"] = round(1 / ideal, 4)
             print(f"\ntiny proof {lo} -> {hi} ratio: {ratio:.3f}x (bounds {bound[0]:.2f}-{bound[1]:.2f})")
+            print(f"  {lo}-core case is {share:.1%} of the {hi}-core case; "
+                  f"{lo} of {hi} cores should return about {1 / ideal:.0%}")
             if not (bound[0] <= ratio <= bound[1]):
                 out["result"] = "FAIL"
-                print("STOPPING: ratio outside bounds. Superlinear is a defect report, sublinear at this "
-                      "size means the rig is not what you think it is.")
+                if ratio > bound[1]:
+                    print(f"STOPPING: the {lo}-core case is the suspect, not the {hi}-core one. It read "
+                          f"{recs[lo]['recordsPerSec']:,.0f} rec/s, {share:.1%} of the {hi}-core case's "
+                          f"{recs[hi]['recordsPerSec']:,.0f}, where {lo} of {hi} cores should return about "
+                          f"{1 / ideal:.0%}. A baseline that far short is a different job graph (chaining "
+                          f"at parallelism 1) or a case time-sharing its threads — read the graph shape "
+                          f"and the cap back before trusting either number.")
+                else:
+                    print(f"STOPPING: the {hi}-core case returned {ratio:.3f}x of the {lo}-core case "
+                          f"against an ideal {ideal:.0f}x. Sublinear at this size means the rig is not "
+                          f"what you think it is — the cap, the partitions or the backlog.")
                 rc = 1
             else:
                 out["result"] = "PASS"

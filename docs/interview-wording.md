@@ -229,10 +229,39 @@ Small fixed counts are still what make the verifier exact, which is why the
 worked example uses small ones. That is a property of the example, not advice
 to shrink a real problem.
 
+### 5 — cut
+
+**Nothing consumes its answer.** Only question 8 is referenced by a later
+section (§9's header fields); question 5's answer is asked and then used by
+nothing.
+
+Its justification does not hold either. It claims *capacity for managers and
+correctness for engineers are different builds*, but this skill builds both
+every time and does not let you choose: §4 makes completeness a gate, so no
+throughput table is published for a build that has not passed it, and §5, §6
+and §9 cap, measure, guard and report the same way whoever is watching. The two
+"different builds" are one build.
+
+And question 7 already asks it better. *What claim do you want to make*, written
+verbatim and judged against every later decision, is what must be believed — from
+the person who has to believe it.
+
+**The rule this establishes, which the other questions are held to: do not ask
+about anything the skill does unconditionally.** The skill always builds the
+dashboard, always proves completeness, always checks correctness. Asking
+permission for those invites a "no" the skill will not honour, and wastes a
+question. Applied to the remaining eight, each one changes what gets built:
+the spec, the fan-out, the cardinality, the invariants, the machine, the claim,
+the axis, the API level. None of them is a courtesy.
+
+Nine become eight. Renumbering: old 6-9 become 5-8, and **§9's "axis (§1 q8)"
+becomes q7** — a reference that must be updated in the same edit or it points
+at the API-level question.
+
 ### Left alone
 
-5, 6, 7 and 9. They already read plainly, and 7 in particular should stay
-blunt: *"What claim do you want to make? I write it down verbatim."*
+6, 7 and 9 (5, 6 and 8 after renumbering). They already read plainly, and the
+claim question in particular should stay blunt: *"What claim do you want to make? I write it down verbatim."*
 
 Their **defaults** follow from question 1 rather than being canned. If the
 reader takes the worked example, the example continues into them — keys are

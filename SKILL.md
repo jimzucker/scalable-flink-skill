@@ -143,6 +143,15 @@ measured**, not compiling. Pause for review between steps; run without prompting
 inside one. Keep a journal: what drove the step, what was decided, how it was
 verified.
 
+**Say where the run is up to, without being asked.** The chain takes two to
+three hours and most of it is silent. The harness keeps one sentence in
+`results/PROGRESS.txt`, overwritten as it goes — which step of seven, which
+case of ten, and roughly how long is left. While waiting on `results/DONE`,
+read it and pass it on at each step boundary and each case, with the number
+just measured. A person who has approved two hours of their laptop is owed
+more than silence, and a case that comes back wrong is worth knowing about
+before the other nine have run.
+
 ## 3. Preflight: assertions that print PASS or FAIL before anything is built
 
 Each is one command. The cost of a violation scales with how late it is found —

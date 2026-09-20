@@ -56,6 +56,28 @@ def check_tiny_ratio_band(fail):
     return f"tiny-proof band {band} of ideal"
 
 
+def check_cases_match(fail):
+    """The core counts the skill promises are the ones the example runs.
+
+    Section 5 says not to run the one-unit case when the claim is a step from
+    two units up -- it is the structurally weakest case and the noisiest. The
+    example config agrees: cases [2, 4]. Section 1a used to promise "1, 2 and
+    4 cores" anyway, so clean-room run 31 ran the one-core case and got a
+    1->2 step of 2.76x, above the 2.00x that is arithmetically possible,
+    because one core carries all the fixed cost with nothing to share it.
+    """
+    cases = json.loads(read(HERE, "pipeline.example.json")).get("cases") or []
+    if not cases:
+        return "no cases in the example to check"
+    phrase = " and ".join(str(c) for c in cases) + " cores"
+    skill = read(ROOT, "SKILL.md")
+    if f"always measures {phrase}" not in skill:
+        fail(f"SKILL.md does not say it always measures {phrase}, which is what the example runs")
+    if f"near-linear scaling across {phrase}" not in skill:
+        fail(f"SKILL.md's objective does not name {phrase}")
+    return f"skill and example agree on {phrase}"
+
+
 def check_example_broker_memory(fail):
     """The shipped example gives Kafka at least as much page cache as the
     configurations on record that actually produced a table.
@@ -75,18 +97,10 @@ def check_example_broker_memory(fail):
         v = str(v).strip()
         return float(v[:-1]) * 1024 if v[-1] in "gG" else float(v[:-1])
 
-    rec = json.loads(read(HERE, "record", "configs.json"))
-    good = []
-    for c in rec.get("configs", []):
-        if c.get("expect") != "accept":
-            continue
-        caps = c.get("caps") or {}
-        total, heap = mb(caps.get("kafkaMemory")), mb(caps.get("kafkaHeap"))
-        if total and heap:
-            good.append(total - heap)
-    if not good:
+    import lib
+    floor = lib.broker_cache_floor_mib()
+    if not floor:
         return "no recorded broker sizes to check against"
-    floor = min(good)
 
     caps = json.loads(read(HERE, "pipeline.example.json")).get("caps") or {}
     total, heap = mb(caps.get("kafkaMemory")), mb(caps.get("kafkaHeap"))
@@ -132,7 +146,7 @@ def check_example_comments(fail):
 def main():
     problems = []
     lines = []
-    for check in (check_spread_ceiling, check_tiny_ratio_band,
+    for check in (check_spread_ceiling, check_tiny_ratio_band, check_cases_match,
                   check_example_broker_memory, check_example_comments):
         lines.append(check(problems.append))
     for p in problems:

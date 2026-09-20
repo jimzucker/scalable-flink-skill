@@ -1,0 +1,34 @@
+{
+  "what": "Broker memory sizings whose outcome we already know. size_broker_memory decides whether a suite is allowed to run, so a change to it that disagrees with one of these is wrong.",
+  "why": "Clean-room run 31 lost a 44-minute suite to a broker that had already run out of memory 1,104 times during the tiny proof, 21 minutes earlier. The tiny proof passed anyway. The size each of these asks for is the size that was afterwards measured to work.",
+  "sizings": [
+    {
+      "run": "run-21",
+      "limitMb": 3840,
+      "hits": 995,
+      "expectMb": 6144,
+      "why": "3,840 MiB gave 995 hits and 6,144 gave none; 6144m is the size run 21 then ran on and its table was accepted"
+    },
+    {
+      "run": "run-31-tinyproof",
+      "limitMb": 4096,
+      "hits": 1104,
+      "expectMb": 6400,
+      "why": "1,104 hits in a 30 s tiny-proof window; the suite that followed lost three cases to the same broker, and 6400m took the limit hits to zero across a whole suite"
+    },
+    {
+      "run": "run-31-suite-6400m",
+      "limitMb": 6400,
+      "hits": 0,
+      "expectMb": null,
+      "why": "ten cases, zero limit hits, a table that reported; nothing to raise"
+    },
+    {
+      "run": "run-23-worker-pinned",
+      "limitMb": 6144,
+      "hits": 0,
+      "expectMb": null,
+      "why": "the broker never hit its limit; the case ceiling's cap exemption is a separate rule and is not this one's business"
+    }
+  ]
+}

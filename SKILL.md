@@ -444,21 +444,21 @@ and whether doubling the resource doubled the work.
 ```
 SCORECARD
 
-  2 cores  374,507/s
-    held back by: CPU at 100% of its 2 cores, blocking higher throughput.
-      That is what we want, because CPU is what we are adding.
-
-  4 cores  673,414/s
-    held back by: CPU at 97% of its 4 cores, blocking higher throughput.
-      That is what we want, because CPU is what we are adding.
+  cores        speed  pipeline CPU  pipeline mem  Kafka CPU   Kafka mem   blocking higher throughput
+      2     374,507/s         100%       2.0% GC        12%      0 hits   CPU
+      4     673,414/s          97%       1.2% GC        25%      0 hits   CPU
 
   2->4 cores: doubling gave 1.80x, it needed 1.90x  ->  missed
 ```
 
-The bottleneck is named from figures already recorded per case and already
-used by the guards — cap consumption, back-pressure, idle, GC, the broker's
-limit hits and its cores — in the order the guards apply them, so it never
-contradicts a ceiling the run reported. *CPU blocking higher throughput* is the answer
+The four measurements sit beside the answer rather than behind it, so a
+reader can see why it says what it says: the pipeline's share of its cores,
+the share of its time spent on memory, Kafka's share of its own cores, and
+the number of times Kafka hit its memory limit. Where the answer is not CPU,
+the sentence explaining it follows the table. Nothing here is new — the
+figures were already recorded per case and already used by the guards, in
+the order the guards apply them, so the answer never contradicts a ceiling
+the run reported. *CPU* is the answer
 the table depends on; anything else means the number measures something
 other than what it claims to. **A step ratio without this column beside it is
 a number with no idea what produced it.**

@@ -81,6 +81,37 @@ def check_cases_match(fail):
     return f"skill and example agree on {phrase}"
 
 
+def check_plan_discloses(fail):
+    """The plan shown for approval names everything decided without asking.
+
+    Section 1a exists so nothing is hidden by not having been asked. It was
+    hiding several things anyway: how many passes, how long it takes, how much
+    disk it writes, which ports it takes, and what guarantee it configures --
+    all decided by the skill, none of them shown. A user who stops a run
+    halfway because they expected twenty minutes was not told.
+    """
+    skill = read(ROOT, "SKILL.md")
+    try:
+        plan = skill[skill.index("## 1a."):skill.index("## 2.")]
+    except ValueError:
+        fail("SKILL.md has no section 1a to check")
+        return "no plan section"
+    needed = {
+        "the cores measured": "cores",
+        "the passes per case": "passes per case",
+        "the guarantee": "exactly-once checkpointing",
+        "the time it takes": "in hours",
+        "the disk it writes": "backlogs",
+        "the ports it takes": "ports in",
+        "the worker kill": "killing a worker",
+        "where it runs": "in Docker",
+    }
+    missing = [name for name, needle in needed.items() if needle not in plan]
+    for name in missing:
+        fail(f"the plan in section 1a does not disclose {name}")
+    return f"the plan discloses all {len(needed)} unconditionals"
+
+
 def check_example_backlogs(fail):
     """The example's backlogs are big enough for the rates on record.
 
@@ -189,8 +220,8 @@ def main():
     problems = []
     lines = []
     for check in (check_spread_ceiling, check_tiny_ratio_band, check_cases_match,
-                  check_example_backlogs, check_example_broker_memory,
-                  check_example_comments):
+                  check_plan_discloses, check_example_backlogs,
+                  check_example_broker_memory, check_example_comments):
         lines.append(check(problems.append))
     for p in problems:
         print(f"doccheck: {p}")

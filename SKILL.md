@@ -119,6 +119,11 @@ been asked:
 | what is measured | the drain rate of a fixed backlog at each core count, read from committed broker offsets, with the resource columns beside it |
 | what is proved first | completeness with no tolerances, re-checked after killing a worker; no throughput table is published for a build that has not passed |
 | what is built | the pipeline, a deterministic generator, a verifier, and the dashboard |
+| the shape of the suite | the passes per case from `pipeline.json`, ascending then descending, then the baseline once more as a drift check. State the number — it is most of the wall clock |
+| the guarantee | exactly-once checkpointing at the configured interval; an at-least-once sink made idempotent by emitting the absolute value per key. State both, and the interval |
+| how long it takes | state an estimate in hours. Clean-room runs have taken two to three, and a user who expected twenty minutes will stop it halfway |
+| what it writes | the three backlogs from `pipeline.json` — suite, tiny proof and completeness — as record counts, and that they are tens of gigabytes of Kafka log. Host free disk is checked before every case, but a user who did not know should not find out from a guard |
+| what it occupies | the ports in `pipeline.json`, the partition count, and containers named for the project. Anything already on those ports will not start |
 
 Then the six answers, and every assumption made where a question was not asked.
 If the user objects, change it and show the plan again. **Do not start until

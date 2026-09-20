@@ -444,9 +444,13 @@ and whether doubling the resource doubled the work.
 ```
 SCORECARD
 
-   cores           speed   what was holding it back
-       2       374,507/s   the worker's cores (100% used) — what we want
-       4       673,414/s   the worker's cores (97% used) — what we want
+  2 cores  374,507/s
+    held back by: The worker's cores. It used 100% of the cores it was given.
+      That is what we want, because the worker is what we are measuring.
+
+  4 cores  673,414/s
+    held back by: The worker's cores. It used 97% of the cores it was given.
+      That is what we want, because the worker is what we are measuring.
 
   2->4 cores: doubling gave 1.80x, it needed 1.90x  ->  missed
 ```

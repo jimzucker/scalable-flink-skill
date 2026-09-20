@@ -1436,24 +1436,30 @@ def bottleneck(rec):
     """
     cap = rec.get("tmCapFrac") or 0
     if (rec.get("brokerLimitHits") or 0) > T["brokerLimitHits"] and cap < T["brokerHitsCapExempt"]:
-        return f"Kafka ran out of memory ({rec['brokerLimitHits']:,} times)"
+        return (f"Kafka ran out of memory. It hit its limit {rec['brokerLimitHits']:,} times and had to "
+                f"read the backlog off disk. The worker was waiting on Kafka, not working.")
     if (rec.get("gcFracOfCapacity") or 0) > T["gcCeil"]:
-        return f"the worker ran out of memory (garbage collection {rec['gcFracOfCapacity']:.0%})"
+        return (f"The worker ran out of memory. It spent {rec['gcFracOfCapacity']:.0%} of the time "
+                f"cleaning up memory instead of working. Give it more memory, not more cores.")
     if (rec.get("sourceIdle") or 0) > T["sourceIdleCeil"]:
-        return f"waiting for input ({rec['sourceIdle']:.0%} of the time idle)"
+        return (f"Nothing to read. The source sat idle {rec['sourceIdle']:.0%} of the time waiting for "
+                f"input. Whatever feeds the pipeline is the slow part.")
     c = cfg()
     kcap = getattr(c, "kafka_cap", 0) or 0
     if kcap and (rec.get("kafkaCores") or 0) / kcap >= 0.90:
-        return f"Kafka's own cores ({rec['kafkaCores']:.2f} of {kcap:g})"
+        return (f"Kafka's own cores. Kafka used {rec['kafkaCores']:.2f} of the {kcap:g} cores it is "
+                f"allowed. The worker was waiting on it.")
     if cap >= T["capFloorOther"]:
-        return f"the worker's cores ({cap:.0%} used) — what we want"
+        return (f"The worker's cores. It used {cap:.0%} of the cores it was given. That is what we want, "
+                f"because the worker is what we are measuring.")
     bp = rec.get("sourceBackpressured") or 0
     if bp >= 0.30:
-        return (f"waiting to write ({cap:.0%} of cores used, held up {bp:.0%} of the time)")
+        return (f"Waiting to write. The worker used only {cap:.0%} of its cores and spent {bp:.0%} of "
+                f"the time held up. Kafka could not accept records fast enough.")
     # Nothing measured accounts for it. "Investigating" is the honest label and
-    # it is also an instruction: a case held back by something with no name is
-    # the thing to go and find out about, not a blank in a column.
-    return f"investigating — not the worker's cores ({cap:.0%} used), and nothing measured says why"
+    # it is also an instruction: go and find out.
+    return (f"Investigating. The worker used only {cap:.0%} of its cores and nothing we measured "
+            f"says why.")
 
 
 def scorecard(out):
@@ -1461,13 +1467,22 @@ def scorecard(out):
     t = out.get("table") or {}
     c = cfg()
     L = ["SCORECARD", ""]
-    L.append(f"  {'cores':>6}{'speed':>16}   what was holding it back")
     for cs in t.get("cases", {}).values():
         last = next((r for r in reversed(out.get("runs") or [])
                      if r.get("cores") == cs["cores"] and r.get("status") in ("OK", "CEILING")), None)
         why = bottleneck(last) if last else "investigating — no usable reading"
-        mark = "" if cs.get("reportable") else "  (not usable: " + str(cs.get("unreportableReason")) + ")"
-        L.append(f"  {cs['cores']:>6}{cs['meanRecordsPerSec']:>14,.0f}/s   {why}{mark}")
+        mark = "" if cs.get("reportable") else "   (not usable: " + str(cs.get("unreportableReason")) + ")"
+        L.append(f"  {cs['cores']} cores  {cs['meanRecordsPerSec']:,.0f}/s{mark}")
+        # the sentence wraps rather than running off the side of a terminal
+        line = "    held back by: "
+        for word in why.split():
+            if len(line) + len(word) + 1 > 96:
+                L.append(line)
+                line = "      " + word
+            else:
+                line += (" " if line.strip() else "") + word
+        L.append(line)
+        L.append("")
     L.append("")
     for r in t.get("stepRatios") or []:
         need = r["idealRatio"] * T["scalingFloor"]

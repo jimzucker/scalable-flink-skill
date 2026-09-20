@@ -18,6 +18,8 @@ scalable-flink-skill harness — the one entry point.
                 warming up between them), then a repeat of the first to check the machine
                 did not slow down while it ran
   ceiling       hold the largest case and squeeze Kafka in steps, to find where it gives out
+  probe         what this machine's own cores do, with no pipeline involved: the first
+                thing to run when a step falls short   (minutes, nothing starts)
   report        results/suite.json -> results/suite.txt + results/suite.md
   down          stop everything, check nothing survived, give the disk space back
   all           up -> preflight -> completeness -> tinyproof -> fill -> suite -> report,
@@ -1486,9 +1488,19 @@ def cmd_report():
             if h:
                 widest = max((r.get("spread", 0) for m in (h.get("ofLinearRange") or {}).values()
                               for r in m.values()), default=0)
+                # the shortfall this is being asked to explain
+                gap = max((1 - (r["ratio"] / (r["idealRatio"] * T["scalingFloor"]))
+                           for r in short), default=0)
                 print(f"  A pipeline cannot beat its machine — but the probe's own spread is "
-                      f"{widest:.0%} over {h.get('repeats', 1)} repeats. A bound that moves more than "
-                      f"the shortfall explains nothing; check the range before leaning on it.")
+                      f"{widest:.0%} over {h.get('repeats', 1)} repeats, against a shortfall of "
+                      f"{gap:.0%}.")
+                if widest >= gap:
+                    print("  That is too wide to explain anything. Before looking at the pipeline,")
+                    print("  tighten it: `prove.py probe --repeats 9` takes minutes and starts no")
+                    print("  stack. If it is still wider than the shortfall, say so and stop — the")
+                    print("  machine cannot be ruled in or out here.")
+                else:
+                    print("  That is tighter than the shortfall, so it is worth comparing against.")
         except Exception:
             pass
         print("  What this rig has shown: memory that does not scale per subtask costs about 14%;"
@@ -1589,6 +1601,54 @@ def cmd_all(steps=None, results=None):
 
 # ---------------------------------------------------------------------- main
 
+def cmd_probe():
+    """What this machine's own cores do, with no pipeline involved.
+
+    Preflight already runs three repeats. That is enough to put a number on the
+    page and rarely enough to explain a shortfall: run 31's memory-bound 2->4
+    read 76% with a range of 70-88%, which is wider than the 14 points it was
+    being asked to account for. This runs it again with as many repeats as it
+    takes to be worth quoting, and says plainly whether it is.
+
+    Minutes, and no stack: `prove.py probe --repeats 9`.
+    """
+    c = cfg()
+    reps = 3
+    for i, a in enumerate(sys.argv):
+        if a == "--repeats" and i + 1 < len(sys.argv):
+            reps = int(sys.argv[i + 1])
+    print(f"probing this machine at {sorted(set(c.cases))} cores, {reps} repeats per case, "
+          f"no pipeline involved")
+    h = L.host_scaling(seconds=6.0, cases=tuple(sorted(set(c.cases))), repeats=reps)
+    if not h or h.get("error"):
+        print(f"could not probe: {(h or {}).get('error', 'no probe source')}")
+        return 1
+    save_json("hostprobe.json", h)
+    print()
+    for mode, label in (("alu", "simple arithmetic"), ("mem", "memory-heavy work")):
+        pc = (h.get("perCore") or {}).get(mode) or {}
+        if pc:
+            print(f"  {label:<20} per core: " +
+                  "  ".join(f"{k}c {v:,.0f}" for k, v in sorted(pc.items(), key=lambda x: int(x[0]))))
+        for step, v in ((h.get("ofLinear") or {}).get(mode) or {}).items():
+            try:
+                a, b = (float(x) for x in step.split("->"))
+                ideal = b / a
+            except Exception:
+                ideal = 2.0
+            r = ((h.get("ofLinearRange") or {}).get(mode) or {}).get(step) or {}
+            rng = (f"  [{r['low'] * ideal:.2f}-{r['high'] * ideal:.2f}x]" if r else "")
+            print(f"  {label:<20} {step}: {v * ideal:.2f}x{rng}")
+    widest = max((r.get("spread", 0) for m in (h.get("ofLinearRange") or {}).values()
+                  for r in m.values()), default=0)
+    print()
+    print(f"  the probe's own spread is {widest:.0%} over {reps} repeats.")
+    print("  Compare that with the shortfall before leaning on it: a bound that moves more")
+    print("  than the thing it is meant to explain, explains nothing. If it is still too")
+    print("  wide, run this again with more repeats, or say it cannot be settled here.")
+    return 0
+
+
 COMMANDS = {
     "replay": lambda: cmd_replay(),
     "selftest": lambda: cmd_selftest(live=True),
@@ -1600,6 +1660,7 @@ COMMANDS = {
     "completeness": cmd_completeness,
     "suite": cmd_suite,
     "ceiling": cmd_ceiling,
+    "probe": cmd_probe,
     "report": cmd_report,
     "down": lambda: (L.stack_down(), 0)[1],
     "all": cmd_all,

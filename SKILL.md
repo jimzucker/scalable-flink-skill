@@ -391,6 +391,16 @@ whoever asked for the run as a plan — what you would change, in what order,
 what you expect it to move — and get a yes before measuring again. A re-run
 costs what the last one cost.
 
+**Before looking at the pipeline, measure the machine.** A step that falls
+short is being compared against a doubling the *host* may not deliver either.
+`prove.py probe` runs the bare cores with no pipeline involved — minutes, and
+it starts nothing — and preflight's three repeats are usually too loose to
+settle it: run 31's memory-heavy 2→4 read 1.52× with a range of 1.41–1.76×,
+wider than the shortfall it was offered to explain. Raise the repeats until
+the range is narrower than the shortfall, or say it cannot be settled here.
+This is the first step of investigating a short step, not an aside — it is
+cheap, and it decides whether there is anything in the pipeline to look for.
+
 **When there is no human to say yes, fix one thing and measure once more.**
 Not a loop: take the *first* item on that list, apply the single change the
 scorecard names, write down in `FIXES.md` what you changed and what you

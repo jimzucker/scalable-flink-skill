@@ -311,6 +311,29 @@ def cmd_selftest(live=True, topic=None):
            labelled(dict(tmCapFrac=0.9495, sourceBackpressured=0.6738), "Kafka writes"), "", should_fire=False)
     expect("bottleneck label: Input feed (must not fire)",
            labelled(dict(tmCapFrac=0.80, sourceIdle=0.40), "Input feed"), "", should_fire=False)
+    def sizes(byts, want):
+        def go():
+            got = L.gib_str(byts)
+            assert got == want, f"mib_str({byts}) said {got!r}, expected {want!r}"
+        return go
+
+    expect("size: 4 GiB reads as 4g (must not fire)", sizes(4 * 1024**3, "4g"), "", should_fire=False)
+    expect("size: 6 GiB reads as 6g (must not fire)", sizes(6 * 1024**3, "6g"), "", should_fire=False)
+    expect("size: 6400 MiB reads as 6.25g (must not fire)",
+           sizes(6400 * 1024**2, "6.25g"), "", should_fire=False)
+
+    def from_record(kw, want):
+        """The Kafka memory column reads the run's own limit, not the config."""
+        r = dict(good); r.update(kw)
+
+        def go():
+            shown = L.gib_str(r.get("brokerLimitBytes"))
+            assert shown == want, f"column would show {shown!r}, the run recorded {want!r}"
+        return go
+
+    expect("the Kafka memory column comes from the record (must not fire)",
+           from_record(dict(brokerLimitBytes=4 * 1024**3), "4g"), "", should_fire=False)
+
     def acts(kw, want):
         r = dict(good); r.update(kw)
 
@@ -321,9 +344,9 @@ def cmd_selftest(live=True, topic=None):
 
     expect("action: nothing to do when CPU is the block (must not fire)",
            acts(dict(tmCapFrac=0.99), "add cores"), "", should_fire=False)
-    expect("action: names the Kafka memory to try (must not fire)",
+    expect("action: names the Kafka memory to try, in gigabytes (must not fire)",
            acts(dict(tmCapFrac=0.96, brokerLimitHits=12780, brokerLimitBytes=4096 * 1048576),
-                "6400m"), "", should_fire=False)
+                "to about 6.25g"), "", should_fire=False)
     expect("action: more memory for the pipeline (must not fire)",
            acts(dict(tmCapFrac=0.99, gcFracOfCapacity=0.064), "more memory"), "", should_fire=False)
     expect("action: compress the writes (must not fire)",

@@ -444,15 +444,16 @@ and whether doubling the resource doubled the work.
 ```
 SCORECARD
 
-  cores        speed  pipeline CPU  pipeline mem  Kafka CPU   Kafka mem   blocking higher throughput
-      2     374,507/s         100%       2.0% GC        12%      0 hits   CPU
-      4     673,414/s          97%       1.2% GC        25%      0 hits   CPU
+  cores        speed     pipeline CPU     pipeline memory    Kafka CPU        Kafka memory   blocking higher throughput
+      2     374,507/s         2 / 100%  uncapped / 2.0% GC    2.5 / 12%         6g / 0 hits   CPU
+      4     673,414/s          4 / 97%  uncapped / 1.2% GC    2.5 / 25%         6g / 0 hits   CPU
 
   2->4 cores: doubling gave 1.80x, it needed 1.90x  ->  missed
 ```
 
 The four measurements sit beside the answer rather than behind it, so a
-reader can see why it says what it says: the pipeline's share of its cores,
+reader can see why it says what it says. Each column is what the component
+was given and how much of it went: the pipeline's cores,
 the share of its time spent on memory, Kafka's share of its own cores, and
 the number of times Kafka hit its memory limit. Where the answer is not CPU,
 the sentence explaining it follows the table. Nothing here is new — the

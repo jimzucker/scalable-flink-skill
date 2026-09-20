@@ -1516,24 +1516,29 @@ def scorecard(out):
     c = cfg()
     L = ["SCORECARD", ""]
     kcap = getattr(c, "kafka_cap", 0) or 0
-    L.append(f"  {'cores':>5}{'speed':>13}{'pipeline CPU':>14}{'pipeline mem':>14}"
-             f"{'Kafka CPU':>11}{'Kafka mem':>12}   blocking higher throughput")
+    kmem = getattr(c, "kafka_mem", "") or "?"
+    tmem = c.tm_mem if tm_memory_capped() else "uncapped"
+    # Each column is what it was given, then how much of it was used, so a
+    # reader sees the size and the utilisation without looking anything up.
+    L.append(f"  {'cores':>5}{'speed':>13}   {'pipeline CPU':>14}{'pipeline memory':>20}"
+             f"{'Kafka CPU':>13}{'Kafka memory':>20}   blocking higher throughput")
     notes = []
     for cs in t.get("cases", {}).values():
         last = next((r for r in reversed(out.get("runs") or [])
                      if r.get("cores") == cs["cores"] and r.get("status") in ("OK", "CEILING")), None)
         if not last:
-            L.append(f"  {cs['cores']:>5}{cs['meanRecordsPerSec']:>12,.0f}/s"
-                     + f"{'—':>14}{'—':>14}{'—':>11}{'—':>12}   investigating")
+            L.append(f"  {cs['cores']:>5}{cs['meanRecordsPerSec']:>12,.0f}/s   "
+                     f"{'—':>14}{'—':>20}{'—':>13}{'—':>20}   investigating")
             continue
         gc = last.get("gcFracOfCapacity")
         kc = last.get("kafkaCores")
         hits = last.get("brokerLimitHits")
-        L.append(f"  {cs['cores']:>5}{cs['meanRecordsPerSec']:>12,.0f}/s"
-                 f"{last.get('tmCapFrac', 0):>13.0%} "
-                 f"{(f'{gc:.1%} GC' if gc is not None else '—'):>13} "
-                 f"{(f'{kc / kcap:.0%}' if kc is not None and kcap else '—'):>10} "
-                 f"{(f'{hits:,} hits' if hits is not None else '—'):>11}"
+        cpu = "{} / {:.0%}".format(cs["cores"], last.get("tmCapFrac") or 0)
+        mem = "{} / {:.1%} GC".format(tmem, gc) if gc is not None else "—"
+        kcpu = "{:g} / {:.0%}".format(kcap, kc / kcap) if kc is not None and kcap else "—"
+        kmemcol = "{} / {:,} hits".format(kmem, hits) if hits is not None else "—"
+        L.append(f"  {cs['cores']:>5}{cs['meanRecordsPerSec']:>12,.0f}/s   "
+                 f"{cpu:>14}{mem:>20}{kcpu:>13}{kmemcol:>20}"
                  f"   {bottleneck_short(last)}"
                  + ("" if cs.get("reportable") else "  (not usable)"))
         # the full sentence only where it is not the answer we hoped for
@@ -2189,19 +2194,25 @@ def render_markdown(out):
             L.append(f"**{r['step'].replace('->', '→')} cores: not reported — {r['reason']}.**")
     kcap = getattr(c, "kafka_cap", 0) or 0
     L += ["", "| cores | speed | pipeline CPU | pipeline memory | Kafka CPU | Kafka memory | "
-          "blocking higher throughput |", "|---:|---:|---:|---:|---:|---:|---|"]
+          "blocking higher throughput |", "|---:|---:|---|---|---|---|---|",
+          "| | | given / used | given / spent on GC | given / used | given / times full | |"]
     for cs in t.get("cases", {}).values():
         last = next((r for r in reversed(out.get("runs") or [])
                      if r.get("cores") == cs["cores"] and r.get("status") in ("OK", "CEILING")), None)
         if not last:
             L.append(f"| {cs['cores']} | {cs['meanRecordsPerSec']:,.0f}/s | — | — | — | — | investigating |")
             continue
-        gc, kc, hits = (last.get("gcFracOfCapacity"), last.get("kafkaCores"),
-                        last.get("brokerLimitHits"))
-        L.append(f"| {cs['cores']} | {cs['meanRecordsPerSec']:,.0f}/s | {last.get('tmCapFrac', 0):.0%} | "
-                 f"{f'{gc:.1%} GC' if gc is not None else '—'} | "
-                 f"{f'{kc / kcap:.0%}' if kc is not None and kcap else '—'} | "
-                 f"{f'{hits:,} hits' if hits is not None else '—'} | {bottleneck_short(last)} |")
+        gc = last.get("gcFracOfCapacity")
+        kc = last.get("kafkaCores")
+        hits = last.get("brokerLimitHits")
+        tmem = c.tm_mem if tm_memory_capped() else "uncapped"
+        kmem = getattr(c, "kafka_mem", "") or "?"
+        cpu = "{} / {:.0%}".format(cs["cores"], last.get("tmCapFrac") or 0)
+        mem = "{} / {:.1%} GC".format(tmem, gc) if gc is not None else "—"
+        kcpu = "{:g} / {:.0%}".format(kcap, kc / kcap) if kc is not None and kcap else "—"
+        kmemcol = "{} / {:,} hits".format(kmem, hits) if hits is not None else "—"
+        L.append(f"| {cs['cores']} | {cs['meanRecordsPerSec']:,.0f}/s | {cpu} | {mem} | "
+                 f"{kcpu} | {kmemcol} | {bottleneck_short(last)} |")
     for cs in t.get("cases", {}).values():
         last = next((r for r in reversed(out.get("runs") or [])
                      if r.get("cores") == cs["cores"] and r.get("status") in ("OK", "CEILING")), None)

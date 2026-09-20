@@ -322,6 +322,16 @@ class Cfg:
                                  f"among each case's subtasks, so cases {self.cases} would each run with a "
                                  "different amount of memory per subtask and could not be compared. "
                                  "Measured: a flat 2048m read 2->4 = 1.645 where per-core memory read 1.910.")
+        floor = broker_cache_floor_mib()
+        total, heap = mib(self.kafka_mem), mib(self.kafka_heap)
+        if floor and total and heap and (total - heap) < floor:
+            raise Refusal("rig", f"caps.kafkaMemory {self.kafka_mem} minus caps.kafkaHeap "
+                                 f"{self.kafka_heap} leaves Kafka {(total - heap) / 1024:.2f} GB to cache "
+                                 f"the backlog with. Every configuration on record that produced a usable "
+                                 f"table left it at least {floor / 1024:.2f} GB. Below that the broker reads "
+                                 f"the backlog back off disk and becomes the constraint instead of the "
+                                 f"worker, and the cases come back as ceilings. Raise kafkaMemory to about "
+                                 f"{int((floor + heap + 255) / 256) * 256:.0f}m, or lower kafkaHeap.")
         if self.baseline not in self.cases:
             raise Refusal("rig", f"baseline {self.baseline} is not one of the cases {self.cases}")
         if QUICK:
@@ -1341,6 +1351,60 @@ def next_boundary(after=None, timeout=90, settle_ms=None):
             drained(t)
         time.sleep(0.4)
     raise Refusal("case", f"committed offset did not advance within {timeout}s")
+
+
+def mib(v):
+    """A docker memory string as MiB. "6g" -> 6144, "1024M" -> 1024."""
+    if v is None:
+        return None
+    v = str(v).strip()
+    if not v or not v[:-1].replace(".", "", 1).isdigit():
+        return None
+    return float(v[:-1]) * 1024 if v[-1] in "gG" else float(v[:-1])
+
+
+def broker_cache_floor_mib():
+    """The least page cache any recorded configuration produced a table with.
+
+    Not a chosen number: read out of record/configs.json, where every entry is
+    a configuration whose verdict is already known. Accepted entries leave the
+    broker 4.25-5.00 GB after its heap. Clean-room run 31's default left 1.00 GB
+    and lost a 44-minute suite -- the broker could not hold the backlog, read it
+    back off disk, and three cases came back as ceilings.
+
+    It is a floor from evidence, not a model: a much smaller backlog would
+    presumably need less. It is checked at config time rather than from a
+    running broker's limit hits because hits do not separate the two outcomes --
+    run 23's 1-core case hit the limit 9,437 times at 99.6% of cap with no
+    effect on its rate, and its table was accepted.
+    """
+    path = os.path.join(HERE, "record", "configs.json")
+    if not os.path.exists(path):
+        return None
+    best = []
+    for c in (json.load(open(path)).get("configs") or []):
+        if c.get("expect") != "accept":
+            continue
+        caps = c.get("caps") or {}
+        total, heap = mib(caps.get("kafkaMemory")), mib(caps.get("kafkaHeap"))
+        if total and heap:
+            best.append(total - heap)
+    return min(best) if best else None
+
+
+def size_broker_memory(limit_bytes, hits):
+    """What Kafka's memory should be, given that it ran out `hits` times.
+
+    Mirrors size_backlog: the tiny proof measures, and the caller is told the
+    number to set before the suite is spent rather than after. The step is the
+    one the broker ceiling already uses and the one run 21 measured -- 3,840
+    MiB gave 995 hits, 6,144 gave none, so x1.6 rounded up to 256 MiB.
+
+    Returns None when nothing needs changing.
+    """
+    if hits <= T["brokerLimitHits"] or not limit_bytes:
+        return None
+    return int(limit_bytes * 1.6 / 268435456) * 256
 
 
 def drained(tick):

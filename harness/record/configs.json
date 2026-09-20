@@ -115,6 +115,37 @@
         "kafkaMemory": "6g",
         "kafkaHeap": "1G"
       }
+    },
+    {
+      "name": "run 31 (accepted, 2->4 = 1.528x reported, zero broker limit hits across ten cases)",
+      "expect": "accept",
+      "cases": [
+        1,
+        2,
+        4
+      ],
+      "partitions": 8,
+      "caps": {
+        "kafka": 2.5,
+        "jobmanager": 0.5,
+        "kafkaMemory": "6400m",
+        "kafkaHeap": "3G"
+      }
+    },
+    {
+      "name": "the default shipped before run 31 (4g with a 3G heap leaves 1.00 GB of page cache; the broker read the backlog off disk 84,520 times and three cases came back as ceilings)",
+      "expect": "refuse",
+      "cases": [
+        2,
+        4
+      ],
+      "partitions": 8,
+      "caps": {
+        "kafka": 2.5,
+        "jobmanager": 0.5,
+        "kafkaMemory": "4g",
+        "kafkaHeap": "3G"
+      }
     }
   ]
 }

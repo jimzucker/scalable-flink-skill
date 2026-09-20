@@ -36,7 +36,7 @@ fan-out are known.
 **Ask only what changes what gets built.** Everything else the skill decides
 and states, it does not request: it always runs on a laptop in Docker, always
 builds the dashboard, always proves completeness, always checks correctness,
-and always measures 1, 2 and 4 cores for near-linear scaling. Asking permission
+and always measures 2 and 4 cores for near-linear scaling. Asking permission
 for those invites a "no" that will not be honoured, and spends a question. They
 are declared in the plan (§1a) instead, where the user can object to all of
 them at once.
@@ -113,7 +113,7 @@ been asked:
 
 | | |
 |---|---|
-| the objective | near-linear scaling across 1, 2 and 4 cores, judged against ≥95% of linear per step |
+| the objective | near-linear scaling across 2 and 4 cores, judged against ≥95% of linear per step. The one-core case is not run: §5 says not to, and it is the case that reads low and makes the step off it look impossible |
 | where it runs | a laptop, in Docker |
 | the stack | the images in `pipeline.json` — Flink, and the Kafka chosen in question 6 |
 | what is measured | the drain rate of a fixed backlog at each core count, read from committed broker offsets, with the resource columns beside it |
@@ -147,6 +147,7 @@ bad window voids one case — so anything checkable now is checked now.
 | retention on every topic written but never drained | `retention.bytes` set; it is a periodic sweep, not a bound | sink log 7× its cap between sweeps |
 | the generator is deterministic | two fills with one seed are byte-identical | no expected answer can be computed |
 | CPU cap mechanism chosen once | `--cpus` throughout **or** quota/period throughout; `--cpus 0` is a no-op, `--cpu-quota=-1` sets a period the daemon then will not change | second case measured at the first case's cap |
+| the broker can cache the backlog | `kafkaMemory` minus `kafkaHeap` against the least any recorded configuration produced a table with | the broker reads the backlog back off disk, becomes the constraint instead of the worker, and the cases come back as ceilings — 44 minutes to find out |
 | slots ≥ parallelism × jobs | compare before submitting | job waits for resources while the harness times an empty pipeline |
 | transactional-ID prefix and consumer group are scoped per run | include the run id | 470-second cold start after ten runs; 22 dead series on the backlog panel |
 | back-pressure counters exist on the endpoint you will read | dump the endpoint and read what is there | ten minutes on a deprecated path |

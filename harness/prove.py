@@ -110,6 +110,29 @@ def replay_sizing():
     return bad
 
 
+def replay_broker_memory():
+    """Broker sizing against the sizes whose outcome we know.
+
+    size_broker_memory gates the tiny proof, so it can stop a run before rig
+    time is spent -- and it can also wave through a broker that will lose the
+    suite, which is what happened in run 31. Both directions are recorded.
+    """
+    path = os.path.join(L.HERE, "record", "broker-memory.json")
+    if not os.path.exists(path):
+        return 0
+    doc = json.load(open(path))
+    bad = 0
+    for s in doc["sizings"]:
+        got = L.size_broker_memory(s["limitMb"] * 1048576, s["hits"])
+        if got != s["expectMb"]:
+            print(f"REPLAY FAIL: {s['run']} -- sizing says {got}, the record says "
+                  f"{s['expectMb']}: {s['why']}")
+            bad += 1
+    if not bad:
+        print(f"replayed {len(doc['sizings'])} recorded broker memory sizings")
+    return bad
+
+
 def replay_configs():
     """Config guards against configurations whose verdict we already know.
 
@@ -154,11 +177,18 @@ def cmd_replay():
     which step ratios the record considers valid."""
     import glob
     rec_dir = os.path.join(L.HERE, "record")
-    files = [f for f in sorted(glob.glob(os.path.join(rec_dir, "*.json")))
-             if os.path.basename(f) not in ("configs.json", "cases.json", "sizing.json")]
+    # Suites are the files that carry per-pass rates. Naming the others instead
+    # meant every new record file broke this the moment it was added -- which it
+    # duly did when broker-memory.json arrived.
+    files, docs = [], {}
+    for f in sorted(glob.glob(os.path.join(rec_dir, "*.json"))):
+        d = json.load(open(f))
+        if isinstance(d, dict) and isinstance(d.get("rates"), dict):
+            files.append(f)
+            docs[f] = d
     bad, n = [], 0
     for f in files:
-        d = json.load(open(f))
+        d = docs[f]
         runs = []
         for cores, rates in d["rates"].items():
             for i, r in enumerate(rates):
@@ -181,7 +211,8 @@ def cmd_replay():
     if bad:
         print("REPLAY FAILED: a threshold disagrees with the record. Fix the threshold, not the record.")
         return 1
-    if replay_names() or replay_cases() or replay_configs() or replay_sizing():
+    if (replay_names() or replay_cases() or replay_configs() or replay_sizing()
+            or replay_broker_memory()):
         print("REPLAY FAILED: a guard disagrees with a recorded configuration. Fix the guard, not the record.")
         return 1
     print("REPLAY OK: no recorded valid table would fail, no recorded invalid one reported, "
@@ -806,6 +837,32 @@ def cmd_tinyproof():
             else:
                 log(f"  backlog: {c.backlog:,} configured, {want:,} needed at the measured "
                     f"{recs[hi]['recordsPerSec']:,.0f} rec/s")
+            # Kafka's memory, sized the same way and at the same moment as the
+            # backlog. Run 31 saw 1,104 limit hits here in a 30 s window, passed,
+            # and then lost a 44-minute suite to the same broker at 60 s windows
+            # with 90 s of warm-up in front of them -- four times the exposure.
+            # The tiny proof is where this gets caught, because it is the first
+            # real drain and it already knows the rate.
+            worst = max(recs.values(), key=lambda r: r.get("brokerLimitHits") or 0)
+            hits = worst.get("brokerLimitHits") or 0
+            want_mem = L.size_broker_memory(worst.get("brokerLimitBytes") or 0, hits)
+            out["brokerLimitHits"] = hits
+            out["brokerMemoryNeededMb"] = want_mem
+            if want_mem:
+                # Reported, not failed. The record has a case the other way:
+                # run 23's 1-core case hit the limit 9,437 times at 99.6% of cap
+                # with no effect on its rate, and its suite was accepted. Hits
+                # alone do not separate a broker that will lose the suite from
+                # one that will not, so this says what it saw and what it would
+                # cost to be safe, and lets the config check upstream do the
+                # gating.
+                have = (worst.get("brokerLimitBytes") or 0) / 1048576
+                log(f"  kafka memory: ran out {hits:,} times in a {worst.get('elapsedS', 0):.0f}s "
+                    f"window at {have:.0f}m. The suite's windows are longer. If its cases come "
+                    f"back as ceilings, {want_mem}m is the size to try.")
+            else:
+                log(f"  kafka memory: {(worst.get('brokerLimitBytes') or 0) / 1048576:.0f}m, "
+                    f"ran out {hits} times")
             ratio = recs[hi]["recordsPerSec"] / recs[lo]["recordsPerSec"]
             ideal = hi / lo
             out["ratio"] = round(ratio, 3)

@@ -158,7 +158,6 @@ bad window voids one case — so anything checkable now is checked now.
 | slots ≥ parallelism × jobs | compare before submitting | job waits for resources while the harness times an empty pipeline |
 | transactional-ID prefix and consumer group are scoped per run | include the run id | 470-second cold start after ten runs; 22 dead series on the backlog panel |
 | back-pressure counters exist on the endpoint you will read | dump the endpoint and read what is there | ten minutes on a deprecated path |
-| no credential helper is in docker's path | `credsStore` / `credHelpers` in the config `DOCKER_CONFIG` points at | every docker command calls a helper that can hang rather than fail — 25 minutes and a 900 s timeout for a diagnosis, and a permission prompt on every run |
 | the VM trim command is known | `docker run --rm --privileged --pid=host alpine nsenter -t 1 -m -u -n -i -- fstrim -v /var/lib/docker` | space freed inside a Docker Desktop VM never returns to the host |
 
 **Then the tiny proof, before any fill.** A few thousand records, end to end:

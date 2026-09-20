@@ -1497,6 +1497,11 @@ def bottleneck(rec):
             f"throughput, and nothing we measured says what.")
 
 
+def n_cores(n):
+    """\"1 core\", not \"1 cores\"."""
+    return f"{n} core" if n == 1 else f"{n} cores"
+
+
 def bottleneck_short(rec):
     """The bottleneck in two or three words, for a column."""
     # Four of these name a column in the table, so a reader can look the answer
@@ -1552,23 +1557,23 @@ def action_detail(rec, cores, step=None, is_baseline=False):
     label = bottleneck_short(rec)
     if label == "Pipeline CPU":
         if is_baseline:
-            return (f"{cores} cores is the baseline: there is nothing below it to compare against, so "
+            return (f"{n_cores(cores)} is the baseline: there is nothing below it to compare against, so "
                     f"the way up is a faster pipeline, not more cores.")
         if not step or not step.get("reportable"):
-            return f"{cores} cores: no usable step into this case, so there is nothing to judge it by."
+            return f"{n_cores(cores)}: no usable step into this case, so there is nothing to judge it by."
         ratio, ideal = step["ratio"], step["idealRatio"]
         need = ideal * T["scalingFloor"]
         if (step.get("ratioLowCI") or 0) > ideal:
-            return (f"{cores} cores: doubling gave {ratio:.2f}x, more than the {ideal:.2f}x a doubling "
+            return (f"{n_cores(cores)}: doubling gave {ratio:.2f}x, more than the {ideal:.2f}x a doubling "
                     f"can give, so the smaller case reads too low.")
         if not step.get("meetsClaim"):
-            return f"{cores} cores: doubling gave {ratio:.2f}x, short of the {need:.2f}x needed."
+            return f"{n_cores(cores)}: doubling gave {ratio:.2f}x, short of the {need:.2f}x target."
         return None
     if label == "Kafka memory":
         have = rec.get("brokerLimitBytes") or 0
         want = size_broker_memory(have, rec.get("brokerLimitHits") or 0)
         if want:
-            return (f"{cores} cores: raise kafkaMemory from {gib_str(have)} to about "
+            return (f"{n_cores(cores)}: raise kafkaMemory from {gib_str(have)} to about "
                     f"{gib_str(want * 1048576)}.")
     return None
 
@@ -1629,13 +1634,13 @@ def scorecard(out):
                          f"and what to do about them still applies.")
         # the full sentence only where it is not the answer we hoped for
         if bottleneck_short(last) != "Pipeline CPU":
-            notes.append(f"  {cs['cores']} cores: {bottleneck(last)}")
+            notes.append(f"  {n_cores(cs['cores'])}: {bottleneck(last)}")
     L.append("")
     L.append("  Each pair is what it was allowed and how much of that went:")
     L.append("    pipeline CPU      cores it could use / how much of them it used")
     L.append("    pipeline memory   memory it could use / share of the time spent tidying memory up")
     L.append("    Kafka CPU         cores Kafka could use / how much of them it used")
-    L.append("    Kafka memory     memory Kafka could use, and how often it filled up")
+    L.append("    Kafka memory      memory Kafka could use, and how often it filled up")
     L.append("")
     for n in notes:
         line = "  "
@@ -1653,9 +1658,16 @@ def scorecard(out):
         need = r["idealRatio"] * T["scalingFloor"]
         if not r.get("reportable"):
             L.append(f"  {r['step']} cores: not reported — {r.get('reason')}")
+            continue
+        # A step above its ideal clears the target, because the target is a
+        # floor -- but reporting that as a plain "met" contradicts the note
+        # above it saying the smaller case reads low. Say what it is instead.
+        if (r.get("ratioLowCI") or 0) > r["idealRatio"]:
+            verdict = f"above {r['idealRatio']:.2f}x, so the smaller case reads low"
         else:
-            L.append(f"  {r['step']} cores: doubling gave {r['ratio']:.2f}x, it needed {need:.2f}x"
-                     f"  ->  {'met' if r.get('meetsClaim') else 'missed'}")
+            verdict = "met" if r.get("meetsClaim") else "missed"
+        L.append(f"  {r['step']} cores: doubling gave {r['ratio']:.2f}x, target {need:.2f}x"
+                 f"  ->  {verdict}")
     return "\n".join(L)
 
 
@@ -2327,7 +2339,7 @@ def render_markdown(out):
                      if r.get("cores") == cs["cores"] and r.get("status") in ("OK", "CEILING")), None)
         if last and bottleneck_short(last) != "Pipeline CPU":
             L.append("")
-            L.append(f"**{cs['cores']} cores:** {bottleneck(last)}")
+            L.append(f"**{n_cores(cs['cores'])}:** {bottleneck(last)}")
     L += ["", "| cores | pass | records/s | tm cores | % of cap | throttled | broker cores | src idle | src BP | headroom | vantage |",
           "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for r in out["runs"]:

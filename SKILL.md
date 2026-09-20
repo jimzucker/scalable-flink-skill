@@ -325,6 +325,15 @@ preflight row in §3), *judgment* (prose, and keep that pile small).
 
 ## 7. The dashboard explains; the harness measures
 
+**Add it through `extraServices` in `pipeline.json`** — a map of service name to
+a compose service body, spliced into the stack the harness generates. Two rules,
+because the measurement depends on them: the container name must start with the
+project prefix, or teardown leaves it behind and then refuses for a survivor it
+did not create; and give it a CPU cap, because anything sharing the cores under
+test changes the number being measured. Whatever you add is recorded in the
+results header, so a reader knows what else was on the machine. That is the only
+sanctioned way — the harness is still not to be forked.
+
 Build it, provision it from a file that ships with the stack, and never take a
 reported number off it — engine meters are ~60 s moving averages and its
 metric service starves at exactly the load you care about. Render images

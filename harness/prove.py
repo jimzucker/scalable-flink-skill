@@ -611,7 +611,9 @@ def cmd_preflight():
         info = L.sh("docker info --format '{{.MemTotal}}'", check=False).stdout.strip()
         vm = int(info) if info.isdigit() else 0
         top = max(c.cases)
-        worker = L._mib(L.mem_for(c.tm_mem_per_core, top, c.tm_mem_base)) if c.tm_mem_per_core else L._mib(c.tm_mem)
+        capped = L.tm_memory_capped()
+        worker = (L._mib(L.mem_for(c.tm_mem_per_core, top, c.tm_mem_base)) if c.tm_mem_per_core
+                  else L._mib(c.tm_mem)) if capped else 0.0
         broker = L._mib(c.kafka_mem)
         jm = 1024.0
         need = worker + broker + jm
@@ -624,7 +626,12 @@ def cmd_preflight():
         # normal and the cases that matter are caught by the cap floor and the
         # broker's own limit-hit guard.
         over = " (over-committed, which is normal — the broker's cache is elastic)" if vm and need > vm / 1048576.0 else ""
-        return (f"worker {worker:.0f}m at {top} cores + broker {broker:.0f}m + job manager {jm:.0f}m "
+        # Say "uncapped" here too. Budgeting Cfg.tm_mem's 4096m default while the
+        # row above reports the worker as uncapped states a figure that was never
+        # applied, and the over-commit warning it produces is then arithmetic on
+        # a phantom. Clean-room run 30 reported the contradiction.
+        w = f"worker {worker:.0f}m at {top} cores" if capped else "worker uncapped (engine default)"
+        return (f"{w} + broker {broker:.0f}m + job manager {jm:.0f}m "
                 f"= {need:.0f}m of {vm / 1048576:.0f}m VM{over}" if vm
                 else f"{need:.0f}m requested, VM size unknown")
 
@@ -963,7 +970,11 @@ def cmd_suite():
            "outputsPerInput": c.out_per_in,
            "heldStill": {"kafkaCap": c.kafka_cap, "jobManagerCap": c.jm_cap, "partitions": c.partitions,
                          "checkpointMs": c.ckpt_ms, "sinkRetentionBytesPerPartition": T["sinkRetentionBytes"],
-                         "tmProcessMemory": c.tm_mem},
+                         # null when nothing was capped: Cfg.tm_mem's default is not a
+                         # setting that was in effect, and the record says only true things
+                         "tmProcessMemory": (c.tm_mem if L.tm_memory_capped() else None),
+                         # anything else that was on the machine while this was measured
+                         "extraServices": sorted((c.raw.get("extraServices") or {}).keys()) or None},
            "thresholds": dict(T), "harness": harness_version(),
            "startedAt": time.strftime("%Y-%m-%d %H:%M:%S %Z"), "runs": [], "refusals": []}
 
@@ -1081,10 +1092,19 @@ def cmd_report():
             h = (pf.get("hostScaling") if isinstance(pf, dict) else None) or {}
             for mode, label in (("alu", "register-only"), ("mem", "memory-bound")):
                 steps = (h.get("ofLinear") or {}).get(mode) or {}
+                rng = (h.get("ofLinearRange") or {}).get(mode) or {}
                 if steps:
-                    print(f"  this host, {label:<13} " + "  ".join(f"{k} {v:.0%}" for k, v in steps.items()))
+                    parts = []
+                    for k, v in steps.items():
+                        r = rng.get(k) or {}
+                        parts.append(f"{k} {v:.0%}" + (f" [{r['low']:.0%}-{r['high']:.0%}]" if r else ""))
+                    print(f"  this host, {label:<13} " + "  ".join(parts))
             if h:
-                print("  A pipeline cannot beat its machine: judge the shortfall against those two bounds.")
+                widest = max((r.get("spread", 0) for m in (h.get("ofLinearRange") or {}).values()
+                              for r in m.values()), default=0)
+                print(f"  A pipeline cannot beat its machine — but the probe's own spread is "
+                      f"{widest:.0%} over {h.get('repeats', 1)} repeats. A bound that moves more than "
+                      f"the shortfall explains nothing; check the range before leaning on it.")
         except Exception:
             pass
         print("  What this rig has shown: worker memory that does not scale per subtask costs about 14%;"

@@ -33,6 +33,7 @@ import hashlib
 import json
 import os
 import re
+import statistics
 import tempfile
 import shutil
 import subprocess
@@ -564,10 +565,67 @@ services:
       - ckpt:/ckpt
       - {c.jar_dir}:/jobs:ro
 
+""" + extra_services_text() + """
 volumes:
   kafkadata:
   ckpt:
 """
+
+
+def extra_services_text():
+    """Services the pipeline adds to the stack -- a dashboard, an exporter.
+
+    Section 7 asks for a dashboard, section 6 requires anything watching the
+    stack to live in the compose file, and sections 1 and 10 forbid forking the
+    harness. With no hook the three cancelled out: clean-room run 30 read all
+    of them, concluded the dashboard could not be built, and skipped it. This
+    is the hook.
+
+    `extraServices` in pipeline.json is a map of service name to a compose
+    service body, spliced in under the harness's own. Two rules, because the
+    measurement depends on them:
+
+      * the container name must start with the project prefix, or `down` will
+        leave it behind and then refuse for a survivor it did not create;
+      * give it a CPU cap. Anything sharing the cores under test changes the
+        number being measured, which is the whole reason section 6 exists.
+
+    They are recorded in the results header, so a reader knows something else
+    was on the machine.
+    """
+    extra = cfg().raw.get("extraServices") or {}
+    if not extra:
+        return ""
+    out = []
+    for name, body in extra.items():
+        out.append(f"  {name}:")
+        for line in yaml_block(body, indent=4):
+            out.append(line)
+    return "\n" + "\n".join(out) + "\n"
+
+
+def yaml_block(value, indent=0):
+    """The little of YAML a compose service body needs, so the harness stays
+    standard library only."""
+    pad = " " * indent
+    lines = []
+    if isinstance(value, dict):
+        for k, v in value.items():
+            if isinstance(v, (dict, list)):
+                lines.append(f"{pad}{k}:")
+                lines.extend(yaml_block(v, indent + 2))
+            else:
+                lines.append(f"{pad}{k}: {v}")
+    elif isinstance(value, list):
+        for v in value:
+            if isinstance(v, (dict, list)):
+                lines.append(f"{pad}-")
+                lines.extend(yaml_block(v, indent + 2))
+            else:
+                lines.append(f"{pad}- {v}")
+    else:
+        lines.append(f"{pad}{value}")
+    return lines
 
 
 def compose_path():
@@ -1019,10 +1077,30 @@ def assert_cap(container, cores):
     return nano
 
 
-def host_scaling(seconds=5.0, cases=(1, 2, 4)):
+def tm_memory_capped():
+    """Is the worker's memory actually capped by us, or left to the engine?
+
+    Cfg.tm_mem carries a 4096m default that applies whether or not anything was
+    set, so asking it is not the same as asking whether a cap exists. Preflight
+    said "uncapped" on one line and budgeted 4096m three lines later, and the
+    same phantom went into suite.json as heldStill.tmProcessMemory -- a recorded
+    setting that was never in effect. Clean-room run 30 reported both.
+    """
+    c = cfg()
+    return bool(c.tm_mem_per_core or c.raw["caps"].get("tmMemory") or c.per_case)
+
+
+def host_scaling(seconds=5.0, cases=(1, 2, 4), repeats=3):
     """What this host's own cores do, before any pipeline is judged for missing
     linear. Register-only and memory-bound arms at each case, in the same image
-    the worker runs in, capped the same way."""
+    the worker runs in, capped the same way.
+
+    Repeated, because a single reading is not a bound. Clean-room run 30 ran the
+    memory-bound arm three times on an idle machine inside 90 minutes and read
+    76.4%, 83% and 91% at 2->4 -- a spread of 15 points, used to judge a 12-point
+    shortfall. It now reports the median with the range it came from, so a
+    reader can see whether the bound is tight enough to explain anything.
+    """
     src = os.path.join(HERE, "probe", "Spin.java")
     if not os.path.exists(src):
         return None
@@ -1032,22 +1110,32 @@ def host_scaling(seconds=5.0, cases=(1, 2, 4)):
     r = sh(f"{cfg().jdk}/bin/javac --release 17 -d {work} {work}/Spin.java", check=False)
     if r.returncode:
         return {"error": (r.stderr or "")[-200:]}
-    out = {"perCore": {}, "ofLinear": {}}
+    out = {"perCore": {}, "ofLinear": {}, "ofLinearRange": {}, "repeats": repeats}
     for mode in ("alu", "mem"):
-        per = {}
-        for n in cases:
-            rr = sh(f"docker run --rm --cpus {n} -v {work}:/probe:ro --entrypoint java "
-                    f"{cfg().flink_img} -cp /probe Spin {n} {int(seconds * 1000)} {mode}", check=False)
-            m = re.search(r"per-core=([\d,]+)", rr.stdout or "")
-            if m:
-                per[n] = float(m.group(1).replace(",", ""))
-        out["perCore"][mode] = per
-        steps = {}
-        ordered = sorted(per)
-        for a, b in zip(ordered, ordered[1:]):
-            if per.get(a):
-                steps[f"{a}->{b}"] = round((per[b] * b) / (per[a] * a) / (b / a), 3)
+        # one reading per case per repeat, so each repeat yields its own step ratios
+        runs = []
+        for _ in range(repeats):
+            per = {}
+            for n in cases:
+                rr = sh(f"docker run --rm --cpus {n} -v {work}:/probe:ro --entrypoint java "
+                        f"{cfg().flink_img} -cp /probe Spin {n} {int(seconds * 1000)} {mode}", check=False)
+                m = re.search(r"per-core=([\d,]+)", rr.stdout or "")
+                if m:
+                    per[n] = float(m.group(1).replace(",", ""))
+            runs.append(per)
+        ordered = sorted(runs[0]) if runs and runs[0] else []
+        out["perCore"][mode] = {n: round(statistics.median([r[n] for r in runs if r.get(n)]), 1)
+                                for n in ordered if any(r.get(n) for r in runs)}
+        steps, ranges = {}, {}
+        for lo, hi in zip(ordered, ordered[1:]):
+            vals = [round((r[hi] * hi) / (r[lo] * lo) / (hi / lo), 3)
+                    for r in runs if r.get(lo) and r.get(hi)]
+            if vals:
+                steps[f"{lo}->{hi}"] = round(statistics.median(vals), 3)
+                ranges[f"{lo}->{hi}"] = {"low": min(vals), "high": max(vals),
+                                         "spread": round(max(vals) - min(vals), 3), "n": len(vals)}
         out["ofLinear"][mode] = steps
+        out["ofLinearRange"][mode] = ranges
     shutil.rmtree(work, ignore_errors=True)
     return out
 

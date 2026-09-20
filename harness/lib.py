@@ -1462,6 +1462,10 @@ def bottleneck(rec):
     being the constraint, which is the condition the whole table depends on.
     """
     cap = rec.get("tmCapFrac") or 0
+    n = rec.get("cores")
+    # "99% of its cores" leaves the reader asking how many. Say the number when
+    # the record carries it.
+    its = f"its {n} cores" if n else "the cores it was given"
     if (rec.get("brokerLimitHits") or 0) > T["brokerLimitHits"] and cap < T["brokerHitsCapExempt"]:
         return (f"Kafka ran out of memory. It hit its limit {rec['brokerLimitHits']:,} times and had to "
                 f"read the test data back off disk, so the pipeline was waiting on Kafka rather than "
@@ -1478,16 +1482,15 @@ def bottleneck(rec):
         return (f"Kafka ran out of CPU. Kafka used {rec['kafkaCores']:.2f} of the {kcap:g} cores it is "
                 f"allowed, so the pipeline was waiting on Kafka rather than working.")
     if cap >= T["capFloorOther"]:
-        return (f"Ran out of CPU. The pipeline used {cap:.0%} of the cores it was given, so CPU is "
-                f"what stopped it going faster. That is what we want, because CPU is what we are "
-                f"adding.")
+        return (f"Ran out of CPU. The pipeline ran at {cap:.0%} of {its}, so CPU is what stopped it "
+                f"going faster. That is what we want, because CPU is what we are adding.")
     bp = rec.get("sourceBackpressured") or 0
     if bp >= 0.30:
-        return (f"Waiting to write to Kafka. The pipeline used only {cap:.0%} of its CPU and spent "
+        return (f"Waiting to write to Kafka. The pipeline ran at only {cap:.0%} of {its} and spent "
                 f"{bp:.0%} of the time held up, because Kafka could not accept records fast enough.")
     # Nothing measured accounts for it. "Investigating" is the honest label and
     # it is also an instruction: go and find out.
-    return (f"Investigating. The pipeline used only {cap:.0%} of its CPU, so something was stopping "
+    return (f"Investigating. The pipeline ran at only {cap:.0%} of {its}, so something was stopping "
             f"it, and nothing we measured says what.")
 
 

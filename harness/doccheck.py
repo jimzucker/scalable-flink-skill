@@ -81,6 +81,45 @@ def check_cases_match(fail):
     return f"skill and example agree on {phrase}"
 
 
+def check_example_backlogs(fail):
+    """The example's backlogs are big enough for the rates on record.
+
+    Three shipped defaults have now been caught by running them rather than
+    reading them: the broker's page cache, the tiny proof's backlog, and the
+    suite's. All three were the example disagreeing with a rule the harness
+    already states and already enforces at run time -- which means it costs
+    20 minutes of rig to find out, or in the suite's case rather more.
+
+    So both backlogs are checked against the fastest rate the record holds,
+    with the harness's own sizing functions. The floor moves with the record.
+    """
+    import lib
+    rec = json.loads(read(HERE, "record", "sizing.json"))
+    suites = rec.get("suites") or []
+    if not suites:
+        return "no recorded rates to size against"
+    top = max(suites, key=lambda s: s["rateAtTop"])
+    ex = json.loads(read(HERE, "pipeline.example.json"))
+    b = ex.get("backlog") or {}
+    ckpt = ex.get("checkpointMs", 10000) / 1000.0
+
+    want = lib.size_backlog(top["rateAtTop"], top["cores"], top["ckptS"],
+                            warmup_max_s=top.get("warmupS"))
+    if (b.get("count") or 0) < want:
+        fail(f"pipeline.example.json backlog.count is {b.get('count'):,}, but the fastest rate on "
+             f"record ({top['run']}, {top['rateAtTop']:,.0f}/s) needs {want:,}. A short suite "
+             f"backlog costs the suite.")
+
+    # the tiny proof: the README's rule, warm-up ceiling + window + two intervals
+    tiny_want = int(top["rateAtTop"] * (120 + 40 + 2 * ckpt))
+    if (b.get("tinyCount") or 0) < tiny_want:
+        fail(f"pipeline.example.json backlog.tinyCount is {b.get('tinyCount'):,}, but at "
+             f"{top['rateAtTop']:,.0f}/s the tiny proof needs {tiny_want:,} to warm up and measure "
+             f"without running dry.")
+    return (f"backlogs cover {top['rateAtTop']:,.0f}/s: suite {b.get('count'):,} >= {want:,}, "
+            f"tiny {b.get('tinyCount'):,} >= {tiny_want:,}")
+
+
 def check_example_broker_memory(fail):
     """The shipped example gives Kafka at least as much page cache as the
     configurations on record that actually produced a table.
@@ -150,7 +189,8 @@ def main():
     problems = []
     lines = []
     for check in (check_spread_ceiling, check_tiny_ratio_band, check_cases_match,
-                  check_example_broker_memory, check_example_comments):
+                  check_example_backlogs, check_example_broker_memory,
+                  check_example_comments):
         lines.append(check(problems.append))
     for p in problems:
         print(f"doccheck: {p}")

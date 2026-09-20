@@ -1499,15 +1499,17 @@ def bottleneck(rec):
 
 def bottleneck_short(rec):
     """The bottleneck in two or three words, for a column."""
+    # Four of these name a column in the table, so a reader can look the answer
+    # up rather than take it on trust.
     long = bottleneck(rec)
-    for needle, label in (("CPU at", "CPU"), ("Kafka's memory", "Kafka memory"),
-                          ("Kafka's CPU", "Kafka CPU"), ("Memory,", "memory"),
-                          ("Waiting to write", "waiting to write"),
-                          ("Nothing to read", "nothing to read"),
-                          ("Investigating", "investigating")):
+    for needle, label in (("CPU at", "Pipeline CPU"), ("Memory,", "Pipeline memory"),
+                          ("Kafka's CPU", "Kafka CPU"), ("Kafka's memory", "Kafka memory"),
+                          ("Waiting to write", "Kafka writes"),
+                          ("Nothing to read", "Input feed"),
+                          ("Investigating", "Investigating")):
         if long.startswith(needle):
             return label
-    return "investigating"
+    return "Investigating"
 
 
 def scorecard(out):
@@ -1542,7 +1544,7 @@ def scorecard(out):
                  f"   {bottleneck_short(last)}"
                  + ("" if cs.get("reportable") else "  (not usable)"))
         # the full sentence only where it is not the answer we hoped for
-        if bottleneck_short(last) != "CPU":
+        if bottleneck_short(last) != "Pipeline CPU":
             notes.append(f"  {cs['cores']} cores: {bottleneck(last)}")
     L.append("")
     for n in notes:
@@ -2216,7 +2218,7 @@ def render_markdown(out):
     for cs in t.get("cases", {}).values():
         last = next((r for r in reversed(out.get("runs") or [])
                      if r.get("cores") == cs["cores"] and r.get("status") in ("OK", "CEILING")), None)
-        if last and bottleneck_short(last) != "CPU":
+        if last and bottleneck_short(last) != "Pipeline CPU":
             L.append("")
             L.append(f"**{cs['cores']} cores:** {bottleneck(last)}")
     L += ["", "| cores | pass | records/s | tm cores | % of cap | throttled | broker cores | src idle | src BP | headroom | vantage |",

@@ -445,8 +445,8 @@ and whether doubling the resource doubled the work.
 SCORECARD
 
   cores        speed     pipeline CPU     pipeline memory    Kafka CPU        Kafka memory   blocking higher throughput
-      2     374,507/s         2 / 100%  uncapped / 2.0% GC    2.5 / 12%         6g / 0 hits   CPU
-      4     673,414/s          4 / 97%  uncapped / 1.2% GC    2.5 / 25%         6g / 0 hits   CPU
+      2     374,507/s         2 / 100%  uncapped / 2.0% GC    2.5 / 12%         6g / 0 hits   Pipeline CPU
+      4     673,414/s          4 / 97%  uncapped / 1.2% GC    2.5 / 25%         6g / 0 hits   Pipeline CPU
 
   2->4 cores: doubling gave 1.80x, it needed 1.90x  ->  missed
 ```
@@ -459,7 +459,8 @@ the number of times Kafka hit its memory limit. Where the answer is not CPU,
 the sentence explaining it follows the table. Nothing here is new — the
 figures were already recorded per case and already used by the guards, in
 the order the guards apply them, so the answer never contradicts a ceiling
-the run reported. *CPU* is the answer
+the run reported. Four of the answers name a column, so a reader can look
+the verdict up rather than take it on trust. *Pipeline CPU* is the answer
 the table depends on; anything else means the number measures something
 other than what it claims to. **A step ratio without this column beside it is
 a number with no idea what produced it.**

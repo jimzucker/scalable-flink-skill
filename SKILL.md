@@ -155,9 +155,13 @@ bad window voids one case — so anything checkable now is checked now.
 **Then the tiny proof, before any fill.** A few thousand records, end to end:
 
 - run **two** cases, one unit and two, and assert cap consumption in both;
-- **bound the ratio to 1.5×–2.5×**. Superlinear is a defect report — it has
-  been an artefact every time (a baseline time-sharing six unchained tasks on
-  one core passed the cap guard at 99.9% and reported 3.73×);
+- **bound the ratio to 0.75×–1.25× of the ideal** — 1.5×–2.5× when the two
+  cases are one unit and two, 3×–5× when they are one and four. Beating the
+  ideal is not an error in itself, and nothing refuses for it outside the tiny
+  proof: the suite has a floor, not a ceiling. A *large* overshoot here is a
+  depressed baseline rather than a fast pipeline — a baseline time-sharing six
+  unchained tasks on one core passed the cap guard at 99.9% and reported 3.73×
+  — which is the baseline-shape problem §5 says to read off the job graph;
 - **kill a worker mid-drain and re-assert the totals** — a guarantee is a
   claim about failure and is untested until something has failed; finding out
   after the suite discards the suite;

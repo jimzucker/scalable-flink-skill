@@ -278,6 +278,31 @@ def cmd_selftest(live=True, topic=None):
     expect("a case that fails twice is not retried again", flaky("case", 5), "attempt 2")
     expect("a rig failure is never retried", flaky("rig", 5), "attempt 1")
     expect("a ceiling is never retried", flaky("ceiling", 5), "attempt 1")
+    # What was holding a case back, named from what was already measured. Each
+    # of these is a case whose cause was established independently -- by a guard
+    # that fired, or in the sink case by a controlled A/B in clean-room run 32.
+    def names(kw, want):
+        r = dict(good); r.update(kw)
+
+        def go():
+            got = L.bottleneck(r)
+            assert want in got, f"bottleneck said {got!r}, expected {want!r}"
+        return go
+
+    expect("bottleneck: the worker's cores (must not fire)",
+           names(dict(tmCapFrac=0.99), "the worker's cores"), "", should_fire=False)
+    expect("bottleneck: Kafka out of memory (must not fire)",
+           names(dict(tmCapFrac=0.96, brokerLimitHits=12780), "Kafka ran out of memory"),
+           "", should_fire=False)
+    expect("bottleneck: worker out of memory (must not fire)",
+           names(dict(tmCapFrac=0.99, gcFracOfCapacity=0.064), "garbage collection"),
+           "", should_fire=False)
+    expect("bottleneck: waiting to write (must not fire)",
+           names(dict(tmCapFrac=0.9495, sourceBackpressured=0.6738), "waiting to write"),
+           "", should_fire=False)
+    expect("bottleneck: waiting for input (must not fire)",
+           names(dict(tmCapFrac=0.80, sourceIdle=0.40), "waiting for input"),
+           "", should_fire=False)
     expect("window has < 3 commit boundaries", case(boundaries=2), "commit boundaries")
     expect("measured rate is zero", case(recordsConsumed=0), "not positive")
     expect("rate came from the engine", case(rateSource="engine numRecordsIn"), "engine")

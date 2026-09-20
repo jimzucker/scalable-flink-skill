@@ -1423,6 +1423,59 @@ def size_broker_memory(limit_bytes, hits):
     return int(limit_bytes * 1.6 / 268435456) * 256
 
 
+def bottleneck(rec):
+    """What was holding this case back, in words, from what was measured.
+
+    Every figure here is already recorded per case and was already used by the
+    guards; nothing new is measured and nothing is inferred. The order is the
+    order the guards themselves apply, so this never disagrees with a ceiling
+    the run reported.
+
+    The good answer is "the worker's cores" -- that is the component under test
+    being the constraint, which is the condition the whole table depends on.
+    """
+    cap = rec.get("tmCapFrac") or 0
+    if (rec.get("brokerLimitHits") or 0) > T["brokerLimitHits"] and cap < T["brokerHitsCapExempt"]:
+        return f"Kafka ran out of memory ({rec['brokerLimitHits']:,} times)"
+    if (rec.get("gcFracOfCapacity") or 0) > T["gcCeil"]:
+        return f"the worker ran out of memory (garbage collection {rec['gcFracOfCapacity']:.0%})"
+    if (rec.get("sourceIdle") or 0) > T["sourceIdleCeil"]:
+        return f"waiting for input ({rec['sourceIdle']:.0%} of the time idle)"
+    c = cfg()
+    kcap = getattr(c, "kafka_cap", 0) or 0
+    if kcap and (rec.get("kafkaCores") or 0) / kcap >= 0.90:
+        return f"Kafka's own cores ({rec['kafkaCores']:.2f} of {kcap:g})"
+    if cap >= T["capFloorOther"]:
+        return f"the worker's cores ({cap:.0%} used) — what we want"
+    bp = rec.get("sourceBackpressured") or 0
+    if bp >= 0.30:
+        return (f"waiting to write ({cap:.0%} of cores used, held up {bp:.0%} of the time)")
+    return f"not the worker's cores ({cap:.0%} used) — unexplained"
+
+
+def scorecard(out):
+    """The run in the fewest lines that still say what happened."""
+    t = out.get("table") or {}
+    c = cfg()
+    L = ["SCORECARD", ""]
+    L.append(f"  {'cores':>6}{'speed':>16}   what was holding it back")
+    for cs in t.get("cases", {}).values():
+        last = next((r for r in reversed(out.get("runs") or [])
+                     if r.get("cores") == cs["cores"] and r.get("status") in ("OK", "CEILING")), None)
+        why = bottleneck(last) if last else "no usable reading"
+        mark = "" if cs.get("reportable") else "  (not usable: " + str(cs.get("unreportableReason")) + ")"
+        L.append(f"  {cs['cores']:>6}{cs['meanRecordsPerSec']:>14,.0f}/s   {why}{mark}")
+    L.append("")
+    for r in t.get("stepRatios") or []:
+        need = r["idealRatio"] * T["scalingFloor"]
+        if not r.get("reportable"):
+            L.append(f"  {r['step']} cores: not reported — {r.get('reason')}")
+        else:
+            L.append(f"  {r['step']} cores: doubling gave {r['ratio']:.2f}x, it needed {need:.2f}x"
+                     f"  ->  {'met' if r.get('meetsClaim') else 'missed'}")
+    return "\n".join(L)
+
+
 def progress(line, pct=None, eta_s=None):
     """One line a person can read, in results/PROGRESS.txt.
 
@@ -1938,8 +1991,7 @@ def render_table(out):
     number is generated from here."""
     t = out["table"]
     c = cfg()
-    L = []
-    L.append("=" * 118)
+    L = [scorecard(out), "", "=" * 118]
     if out.get("table", {}).get("quickLook"):
         L.append("!! QUICK LOOK — " + QUICK_BANNER)
         L.append("=" * 118)
@@ -2049,6 +2101,12 @@ def render_markdown(out):
                      f"range {r['ratioLow']:.2f}–{r['ratioHigh']:.2f}× across passes.**")
         else:
             L.append(f"**{r['step'].replace('->', '→')} cores: not reported — {r['reason']}.**")
+    L += ["", "| cores | speed | what was holding it back |", "|---:|---:|---|"]
+    for cs in t.get("cases", {}).values():
+        last = next((r for r in reversed(out.get("runs") or [])
+                     if r.get("cores") == cs["cores"] and r.get("status") in ("OK", "CEILING")), None)
+        L.append(f"| {cs['cores']} | {cs['meanRecordsPerSec']:,.0f}/s | "
+                 f"{bottleneck(last) if last else 'no usable reading'} |")
     L += ["", "| cores | pass | records/s | tm cores | % of cap | throttled | broker cores | src idle | src BP | headroom | vantage |",
           "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for r in out["runs"]:

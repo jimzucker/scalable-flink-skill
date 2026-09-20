@@ -1566,12 +1566,16 @@ def scorecard(out):
         mem = "{} / {:.1%}".format(tmem, gc) if gc is not None else "—"
         kcpu = "{:g} / {:.0%}".format(kcap, kc / kcap) if kc is not None and kcap else "—"
         kmemcol = "{} / {:,}".format(kmem, hits) if hits is not None else "—"
-        L.append(f"  {cs['cores']:>5}{cs['meanRecordsPerSec']:>12,.0f}/s   "
+        # A dropped row is marked where the row is named, not after the advice:
+        # "raise kafkaMemory to 6400m (not in the table)" read as one sentence.
+        mark = "" if cs.get("reportable") else " *"
+        L.append(f"  {str(cs['cores']) + mark:>5}{cs['meanRecordsPerSec']:>12,.0f}/s   "
                  f"{cpu:>14}{mem:>19}{kcpu:>13}{kmemcol:>19}"
-                 f"   {bottleneck_short(last):<16}{corrective_action(last)}"
-                 + ("" if cs.get("reportable") else "   (not in the table)"))
+                 f"   {bottleneck_short(last):<16}{corrective_action(last)}")
         if not cs.get("reportable"):
-            notes.append(f"  {cs['cores']} cores is not in the table: {cs.get('unreportableReason')}.")
+            notes.append(f"  * the {cs['cores']}-core row is not counted in the table: "
+                         f"{cs.get('unreportableReason')}. Its numbers are still shown, "
+                         f"and what to do about them still applies.")
         # the full sentence only where it is not the answer we hoped for
         if bottleneck_short(last) != "Pipeline CPU":
             notes.append(f"  {cs['cores']} cores: {bottleneck(last)}")
@@ -2255,7 +2259,8 @@ def render_markdown(out):
         mem = "{} / {:.1%}".format(tmem, gc) if gc is not None else "—"
         kcpu = "{:g} / {:.0%}".format(kcap, kc / kcap) if kc is not None and kcap else "—"
         kmemcol = "{} / {:,}".format(kmem, hits) if hits is not None else "—"
-        L.append(f"| {cs['cores']} | {cs['meanRecordsPerSec']:,.0f}/s | {cpu} | {mem} | "
+        mark = "" if cs.get("reportable") else " \\*"
+        L.append(f"| {cs['cores']}{mark} | {cs['meanRecordsPerSec']:,.0f}/s | {cpu} | {mem} | "
                  f"{kcpu} | {kmemcol} | {bottleneck_short(last)} | {corrective_action(last)} |")
     for cs in t.get("cases", {}).values():
         last = next((r for r in reversed(out.get("runs") or [])

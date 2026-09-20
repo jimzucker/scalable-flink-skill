@@ -311,6 +311,29 @@ def cmd_selftest(live=True, topic=None):
            labelled(dict(tmCapFrac=0.9495, sourceBackpressured=0.6738), "Kafka writes"), "", should_fire=False)
     expect("bottleneck label: Input feed (must not fire)",
            labelled(dict(tmCapFrac=0.80, sourceIdle=0.40), "Input feed"), "", should_fire=False)
+    def sizes(byts, want):
+        def go():
+            got = L.mib_str(byts)
+            assert got == want, f"mib_str({byts}) said {got!r}, expected {want!r}"
+        return go
+
+    expect("size: 4 GiB reads as 4g (must not fire)", sizes(4 * 1024**3, "4g"), "", should_fire=False)
+    expect("size: 6 GiB reads as 6g (must not fire)", sizes(6 * 1024**3, "6g"), "", should_fire=False)
+    expect("size: 6400 MiB is not a whole g (must not fire)",
+           sizes(6400 * 1024**2, "6400m"), "", should_fire=False)
+
+    def from_record(kw, want):
+        """The Kafka memory column reads the run's own limit, not the config."""
+        r = dict(good); r.update(kw)
+
+        def go():
+            shown = L.mib_str(r.get("brokerLimitBytes"))
+            assert shown == want, f"column would show {shown!r}, the run recorded {want!r}"
+        return go
+
+    expect("the Kafka memory column comes from the record (must not fire)",
+           from_record(dict(brokerLimitBytes=4 * 1024**3), "4g"), "", should_fire=False)
+
     def acts(kw, want):
         r = dict(good); r.update(kw)
 

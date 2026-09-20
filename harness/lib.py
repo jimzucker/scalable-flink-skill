@@ -1512,6 +1512,14 @@ def bottleneck_short(rec):
     return "Investigating"
 
 
+def mib_str(byts):
+    """A byte count as the sort of size a config file writes: 6144m, 6g."""
+    if not byts:
+        return None
+    m = byts / 1048576
+    return f"{m / 1024:g}g" if m >= 1024 and m % 1024 == 0 else f"{m:.0f}m"
+
+
 def corrective_action(rec):
     """What to do about it, in a few words.
 
@@ -1565,7 +1573,11 @@ def scorecard(out):
         cpu = "{} / {:.0%}".format(cs["cores"], last.get("tmCapFrac") or 0)
         mem = "{} / {:.1%}".format(tmem, gc) if gc is not None else "—"
         kcpu = "{:g} / {:.0%}".format(kcap, kc / kcap) if kc is not None and kcap else "—"
-        kmemcol = "{} / {:,}".format(kmem, hits) if hits is not None else "—"
+        # from the record, not from today's pipeline.json: a report rendered
+        # against a changed config would otherwise show a limit the run never
+        # had, beside advice computed from the limit it did have.
+        kmemcol = ("{} / {:,}".format(mib_str(last.get("brokerLimitBytes")) or kmem, hits)
+                   if hits is not None else "—")
         # A dropped row is marked where the row is named, not after the advice:
         # "raise kafkaMemory to 6400m (not in the table)" read as one sentence.
         mark = "" if cs.get("reportable") else " *"
@@ -2258,7 +2270,11 @@ def render_markdown(out):
         cpu = "{} / {:.0%}".format(cs["cores"], last.get("tmCapFrac") or 0)
         mem = "{} / {:.1%}".format(tmem, gc) if gc is not None else "—"
         kcpu = "{:g} / {:.0%}".format(kcap, kc / kcap) if kc is not None and kcap else "—"
-        kmemcol = "{} / {:,}".format(kmem, hits) if hits is not None else "—"
+        # from the record, not from today's pipeline.json: a report rendered
+        # against a changed config would otherwise show a limit the run never
+        # had, beside advice computed from the limit it did have.
+        kmemcol = ("{} / {:,}".format(mib_str(last.get("brokerLimitBytes")) or kmem, hits)
+                   if hits is not None else "—")
         mark = "" if cs.get("reportable") else " \\*"
         L.append(f"| {cs['cores']}{mark} | {cs['meanRecordsPerSec']:,.0f}/s | {cpu} | {mem} | "
                  f"{kcpu} | {kmemcol} | {bottleneck_short(last)} | {corrective_action(last)} |")

@@ -117,7 +117,7 @@ been asked:
 | where it runs | a laptop, in Docker |
 | the stack | the images in `pipeline.json` — Flink, and the Kafka chosen in question 6 |
 | what is measured | the drain rate of a fixed backlog at each core count, read from committed broker offsets, with the resource columns beside it |
-| what is proved first | completeness with no tolerances, re-checked after killing a worker; no throughput table is published for a build that has not passed |
+| what is proved first | completeness with no tolerances, re-checked after killing the pipeline mid-drain; no throughput table is published for a build that has not passed |
 | what is built | the pipeline, a deterministic generator, a verifier, and the dashboard |
 | the shape of the suite | the passes per case from `pipeline.json`, ascending then descending, then the baseline once more as a drift check. State the number — it is most of the wall clock |
 | the guarantee | exactly-once checkpointing at the configured interval; an at-least-once sink made idempotent by emitting the absolute value per key. State both, and the interval |
@@ -168,7 +168,7 @@ bad window voids one case — so anything checkable now is checked now.
 | retention on every topic written but never drained | `retention.bytes` set; it is a periodic sweep, not a bound | sink log 7× its cap between sweeps |
 | the generator is deterministic | two fills with one seed are byte-identical | no expected answer can be computed |
 | CPU cap mechanism chosen once | `--cpus` throughout **or** quota/period throughout; `--cpus 0` is a no-op, `--cpu-quota=-1` sets a period the daemon then will not change | second case measured at the first case's cap |
-| the broker can cache the backlog | `kafkaMemory` minus `kafkaHeap` against the least any recorded configuration produced a table with | the broker reads the backlog back off disk, becomes the constraint instead of the worker, and the cases come back as ceilings — 44 minutes to find out |
+| the broker can cache the backlog | `kafkaMemory` minus `kafkaHeap` against the least any recorded configuration produced a table with | the broker reads the backlog back off disk, becomes the constraint instead of the cores, and the cases come back as ceilings — 44 minutes to find out |
 | slots ≥ parallelism × jobs | compare before submitting | job waits for resources while the harness times an empty pipeline |
 | transactional-ID prefix and consumer group are scoped per run | include the run id | 470-second cold start after ten runs; 22 dead series on the backlog panel |
 | back-pressure counters exist on the endpoint you will read | dump the endpoint and read what is there | ten minutes on a deprecated path |
@@ -193,7 +193,7 @@ bad window voids one case — so anything checkable now is checked now.
   and made the step read 3.73×. That is the baseline-shape problem §5 says to
   read off the job graph, and the harness prints the share beside the ratio so
   the short case names itself;
-- **kill a worker mid-drain and re-assert the totals** — a guarantee is a
+- **kill the pipeline mid-drain and re-assert the totals** — a guarantee is a
   claim about failure and is untested until something has failed; finding out
   after the suite discards the suite;
 - run one full case with a 10–15 s window so every line of the harness
@@ -216,7 +216,7 @@ compared to that. Assert, with no tolerances:
 | distinct keys = the number predicted in the interview | a key you did not intend, or one that never arrived |
 | every aggregation sums to the manifest exactly | a lost or duplicated record |
 | two paths over the same input agree exactly | same, located |
-| after killing a worker mid-drain, all of the above still hold | the guarantee you configured is not the one you have |
+| after killing the pipeline mid-drain mid-drain, all of the above still hold | the guarantee you configured is not the one you have |
 
 **Two settings, not one, and both are needed.** The user is asked what must be
 exactly right (§1 q4); which settings deliver it is a build decision made here:
@@ -247,7 +247,7 @@ step — that is what a vendor sells, so the number prices.
 This is the rule runs break most, always with the evidence in their own table,
 so the harness owns it (§6): ≥95% of cap at every case (the baseline included),
 and no material back-pressure **at the boundary to the external component**.
-Internal back-pressure inside a capped single-slot worker is expected — the
+Internal back-pressure inside a single-slot case is expected — the
 source waits on the aggregation threads sharing its core — so it is reported in
 a column and gated on nothing.
 
@@ -362,9 +362,9 @@ for it.
 | the resource cap was not applied | read it back from the container, never the environment variable |
 | parallelism ≠ cap ≠ allocated slots | all three read back from the engine on every case |
 | the job graph differs from the other cases | vertex count and edge ship strategies read off the running plan |
-| the component under test is not the constraint | ≥95% of cap at every case, baseline included; external-boundary back-pressure not material; the broker never hits its own memory limit inside a window (a starved page cache depresses the rate while the worker still reads 96% of cap) . A case that misses is a **ceiling**: measured, reported with its rate as where scaling stops, and excluded from the ratios — never deleted |
+| the component under test is not the constraint | ≥95% of cap at every case, baseline included; external-boundary back-pressure not material; the broker never hits its own memory limit inside a window (a starved page cache depresses the rate while the cores still read 96% of cap) . A case that misses is a **ceiling**: measured, reported with its rate as where scaling stops, and excluded from the ratios — never deleted |
 | the input divides evenly across subtasks | partition count divisible by every parallelism under test (8 partitions serves 1, 2, 4; 6 would leave the 4-core case reading 2/2/1/1 and never reaching its cap) |
-| memory is not the constraint | worker memory uncapped by default (the demo caps none); a case whose GC exceeds 5.5% of its capacity is a ceiling, not a result. Cap deliberately with `tmMemoryPerCore` or `perCase` when the study is about memory |
+| memory is not the constraint | memory uncapped by default (the demo caps none); a case whose GC exceeds 5.5% of its capacity is a ceiling, not a result. Cap deliberately with `tmMemoryPerCore` or `perCase` when the study is about memory |
 | the claim itself | each step returns **1.90× or better** on a doubling, or the chain fails with the per-core, idle, GC and cap figures for both cases — a valid table that does not scale is a result about the pipeline, not a table to publish |
 | a failed case still owns the cluster | job torn down on **every** exit path |
 | no job is actually running | engine reports RUNNING with the expected parallelism |
@@ -445,12 +445,12 @@ and whether doubling the resource doubled the work.
 SCORECARD
 
   2 cores  374,507/s
-    held back by: The worker's cores. It used 100% of the cores it was given.
-      That is what we want, because the worker is what we are measuring.
+    held back by: Cores. The pipeline used 100% of the cores it was given.
+      That is what we want, because cores are what we are changing.
 
   4 cores  673,414/s
-    held back by: The worker's cores. It used 97% of the cores it was given.
-      That is what we want, because the worker is what we are measuring.
+    held back by: Cores. The pipeline used 97% of the cores it was given.
+      That is what we want, because cores are what we are changing.
 
   2->4 cores: doubling gave 1.80x, it needed 1.90x  ->  missed
 ```
@@ -458,7 +458,7 @@ SCORECARD
 The bottleneck is named from figures already recorded per case and already
 used by the guards — cap consumption, back-pressure, idle, GC, the broker's
 limit hits and its cores — in the order the guards apply them, so it never
-contradicts a ceiling the run reported. *The worker's cores* is the answer
+contradicts a ceiling the run reported. *Cores* is the answer
 the table depends on; anything else means the number measures something
 other than what it claims to. **A step ratio without this column beside it is
 a number with no idea what produced it.**
@@ -525,7 +525,7 @@ else's run** — absolute throughput is not comparable across implementations,
 and neither are explanations of it; one investigation spent hours on a
 ten-percent shortfall that belonged to a different pipeline entirely — and
 **arithmetic offered as evidence**, which runs backwards easily: fixed
-per-worker cost *flatters* wider cases, and was offered to explain a
+per-unit cost *flatters* wider cases, and was offered to explain a
 sub-linear one.
 
 When a result is short: say what you measured, say what you have ruled out and

@@ -103,7 +103,7 @@ def check_plan_discloses(fail):
         "the time it takes": "in hours",
         "the disk it writes": "backlogs",
         "the ports it takes": "ports in",
-        "the worker kill": "killing a worker",
+        "the mid-drain kill": "killing the pipeline mid-drain",
         "where it runs": "in Docker",
     }
     missing = [name for name, needle in needed.items() if needle not in plan]

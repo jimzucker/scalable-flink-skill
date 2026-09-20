@@ -11,7 +11,7 @@ scalable-flink-skill harness — the one entry point.
   preflight     the §3 table, PASS/FAIL per row
   tinyproof     two cases on a small backlog, ratio bounded 1.5x-2.5x, + selftest
   fill          fill the full backlog and write results/manifest.json (run it detached)
-  completeness  drain a small backlog twice (clean, worker killed), verify, no tolerances
+  completeness  drain a small backlog twice (clean, and killed mid-drain), verify, no tolerances
   suite         the table: every case, N passes, asc/desc, rig vs data refusals
   ceiling       hold the largest case, starve the broker in steps
   report        results/suite.json -> results/suite.txt + results/suite.md
@@ -289,12 +289,12 @@ def cmd_selftest(live=True, topic=None):
             assert want in got, f"bottleneck said {got!r}, expected {want!r}"
         return go
 
-    expect("bottleneck: the worker's cores (must not fire)",
-           names(dict(tmCapFrac=0.99), "The worker's cores"), "", should_fire=False)
+    expect("bottleneck: cores (must not fire)",
+           names(dict(tmCapFrac=0.99), "Cores. The pipeline used"), "", should_fire=False)
     expect("bottleneck: Kafka out of memory (must not fire)",
            names(dict(tmCapFrac=0.96, brokerLimitHits=12780), "Kafka ran out of memory"),
            "", should_fire=False)
-    expect("bottleneck: worker out of memory (must not fire)",
+    expect("bottleneck: out of memory (must not fire)",
            names(dict(tmCapFrac=0.99, gcFracOfCapacity=0.064), "cleaning up memory"),
            "", should_fire=False)
     expect("bottleneck: waiting to write (must not fire)",
@@ -313,17 +313,17 @@ def cmd_selftest(live=True, topic=None):
     expect("backlog lacks headroom at close", case(backlogRemaining=1000, headroomS=0.006), "nearly ran out")
     expect("external-boundary samples missing", case(sourceIdle=None), "no back-pressure reading")
     expect("too few reporter samples in the window", case(bpSamples=2), "readings landed inside")
-    expect("worker is not the constraint (baseline, run 5\'s 94%)", case(tmCapFrac=0.94, _baseline=True), "only used", ceiling=True)
+    expect("cores are not the constraint (baseline, run 5\'s 94%)", case(tmCapFrac=0.94, _baseline=True), "only used", ceiling=True)
     expect("baseline at 95.9% is the constraint (run 12 p3; must not fire)",
            case(tmCapFrac=0.959, _baseline=True), "", should_fire=False)
-    expect("worker is not the constraint (other)", case(tmCapFrac=0.90), "only used", ceiling=True)
+    expect("cores are not the constraint (other)", case(tmCapFrac=0.90), "only used", ceiling=True)
     expect("source idle past the ceiling", case(sourceIdle=0.4), "waiting for input", ceiling=True)
     expect("garbage collection is the constraint", case(gcFracOfCapacity=0.13), "garbage collection", ceiling=True)
     expect("GC at the worst level that behaved, 4.8% (must not fire)",
            case(gcFracOfCapacity=0.048), "", should_fire=False)
-    expect("the broker was starved of page cache (worker off its cap)",
+    expect("the broker was starved of page cache (cores off their cap)",
            case(brokerLimitHits=310423, brokerRefaults=6270562, tmCapFrac=0.964), "ran out of memory", ceiling=True)
-    expect("broker limit hits while the worker is pinned (must not fire)",
+    expect("broker limit hits while the cores are pinned (must not fire)",
            case(brokerLimitHits=9437, brokerRefaults=572000, tmCapFrac=0.996), "", should_fire=False)
     expect("a broker that never hit its limit (must not fire)",
            case(brokerLimitHits=0, brokerRefaults=1200), "", should_fire=False)
@@ -712,7 +712,8 @@ def cmd_preflight():
         # row above reports the worker as uncapped states a figure that was never
         # applied, and the over-commit warning it produces is then arithmetic on
         # a phantom. Clean-room run 30 reported the contradiction.
-        w = f"worker {worker:.0f}m at {top} cores" if capped else "worker uncapped (engine default)"
+        w = (f"memory {worker:.0f}m at {top} cores" if capped
+             else "memory uncapped (engine default)")
         return (f"{w} + broker {broker:.0f}m + job manager {jm:.0f}m "
                 f"= {need:.0f}m of {vm / 1048576:.0f}m VM{over}" if vm
                 else f"{need:.0f}m requested, VM size unknown")
@@ -770,7 +771,7 @@ def cmd_preflight():
 
     def bp_endpoint():
         v = rest("/config")["flink-version"]
-        return f"Flink {v}: busy/idle/backPressured read from the worker's slf4j reporter; REST path deprecated"
+        return f"Flink {v}: busy/idle/backPressured read from the slf4j reporter; REST path deprecated"
 
     def trim():
         return "docker run --rm --privileged --pid=host alpine nsenter -t 1 -m -u -n -i -- fstrim -v /var/lib/docker"
@@ -791,7 +792,7 @@ def cmd_preflight():
     check("CPU cap mechanism chosen once", capmech)
     check("slots >= parallelism x jobs", slots)
     check("partitions divide evenly by every parallelism", partitions_per_subtask)
-    check("worker memory is per subtask, not per container", memory_per_subtask)
+    check("memory is per subtask, not per container", memory_per_subtask)
 
     def host_ceiling():
         """No pipeline beats its machine. Measured here so a missed claim can be
@@ -808,7 +809,7 @@ def cmd_preflight():
         return "; ".join(parts)
     check("what this host's own cores do", host_ceiling)
     check("backlog covers warm-up, window and headroom", backlog_sizing_hint)
-    check("worker, broker and job manager against the VM (reported)", memory_budget)
+    check("pipeline, broker and job manager against the VM (reported)", memory_budget)
     check("group / txn-id prefix scoped per run", scoping)
     check("back-pressure counters exist on the endpoint read", bp_endpoint)
     check("the VM trim command is known", trim)
@@ -1033,7 +1034,7 @@ def cmd_completeness():
                 cm = max([t.get("committed", -1) for t in ticks] or [-1])
                 if kill_at and not killed and cm >= c.small:
                     # run 5: a kill after the drain has finished proves nothing
-                    raise Refusal("rig", f"the drain finished ({cm:,} records committed) before the worker "
+                    raise Refusal("rig", f"the drain finished ({cm:,} records committed) before the pipeline "
                                          f"could be killed at {kill_at:.0%}. Nothing was proved. Make "
                                          f"backlog.smallCount big enough to span several checkpoint "
                                          f"intervals at the baseline rate.")
@@ -1046,10 +1047,10 @@ def cmd_completeness():
                     time.sleep(3)
                     L.start_tm(cores)
                     L.wait_running(jid, cores, timeout=240)
-                    log("KILL: job RUNNING again on the replacement worker")
+                    log("KILL: job RUNNING again after the restart")
                 if cm >= c.small:
                     time.sleep(c.ckpt_s + 2)
-                    log(f"drained to the last record in {time.time()-t0:.1f}s" + (" (worker killed mid-drain)" if killed else ""))
+                    log(f"drained to the last record in {time.time()-t0:.1f}s" + (" (killed and restarted mid-drain)" if killed else ""))
                     return {"group": group, "killed": killed, "drainS": round(time.time() - t0, 1),
                             "killedAtCommitted": killed_at}
                 if time.time() - t0 > 1800:
@@ -1072,7 +1073,7 @@ def cmd_completeness():
 
     try:
         a = drain(f"{c.project}-complete-clean"); a["verify"] = verify("clean drain"); out["arms"].append(a)
-        b = drain(f"{c.project}-complete-kill", kill_at=c.kill_frac); b["verify"] = verify("worker killed"); out["arms"].append(b)
+        b = drain(f"{c.project}-complete-kill", kill_at=c.kill_frac); b["verify"] = verify("killed mid-drain"); out["arms"].append(b)
         out["result"] = "PASS"
     except Refusal as e:
         out["result"] = "FAIL"; out["error"] = e.msg
@@ -1082,7 +1083,7 @@ def cmd_completeness():
     finally:
         L._CFG.topic_in = c.raw["topics"]["in"]
     save_json("completeness.json", out)
-    print(f"COMPLETENESS PASSED FOR BUILD {out['build']} (clean drain, and a worker killed at {c.kill_frac:.0%})")
+    print(f"COMPLETENESS PASSED FOR BUILD {out['build']} (clean drain, and one killed and restarted at {c.kill_frac:.0%})")
     return 0
 
 
@@ -1222,13 +1223,13 @@ def cmd_ceiling():
         for cap in steps:
             sh(f"docker update --cpus {cap} {c.kafka}")
             L.assert_cap(c.kafka, cap)
-            log(f"---- ceiling: broker capped at {cap} cores, worker at {top} ----")
+            log(f"---- ceiling: broker capped at {cap} cores, pipeline at {top} ----")
             try:
                 rec, _ = L.run_case(top, f"k{cap:g}", run_id, None, False, man, kafka_cap=cap)
                 rec["brokerCap"] = cap
                 rec["brokerCapFrac"] = rec["kafkaCapFrac"]
                 out["steps"].append(rec)
-                log(f"  broker {rec['kafkaCores']:.2f}/{cap:g} ({rec['brokerCapFrac']:.0%})  worker {rec['tmCapFrac']:.1%}  "
+                log(f"  broker {rec['kafkaCores']:.2f}/{cap:g} ({rec['brokerCapFrac']:.0%})  cores {rec['tmCapFrac']:.1%}  "
                     f"{rec['recordsPerSec']:,.0f} rec/s  srcIdle {rec['sourceIdle']:.1%}")
             except CaseRefused as e:
                 e.rec["brokerCap"] = cap
@@ -1340,7 +1341,7 @@ def cmd_report():
                       f"the shortfall explains nothing; check the range before leaning on it.")
         except Exception:
             pass
-        print("  What this rig has shown: worker memory that does not scale per subtask costs about 14%;"
+        print("  What this rig has shown: memory that does not scale per subtask costs about 14%;"
               "\n  a broker starved of page cache costs about 13%; four subtasks instead of two costs about"
               "\n  8% on the same cores, of which ~3 points is the source idling. Partition count and network"
               "\n  buffers were tested and changed nothing. See harness/README.md.")
@@ -1390,7 +1391,7 @@ def cmd_all(steps=None, results=None):
     mark("phase=all start")
     verdict = "PASS"
     say = {"up": "starting the stack", "preflight": "preflight checks",
-           "completeness": "proving nothing is lost, including after killing a worker",
+           "completeness": "proving nothing is lost, including after killing the pipeline mid-drain",
            "tinyproof": "the tiny proof: two cases end to end, and every guard broken on purpose",
            "fill": "filling the backlog — the long quiet one",
            "suite": "measuring the cases", "report": "writing the report"}

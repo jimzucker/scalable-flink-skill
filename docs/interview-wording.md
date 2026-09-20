@@ -167,14 +167,22 @@ Question text unchanged. The default is new:
 
 > **What are the keys, and how many distinct ones?**
 >
-> *Default: two key spaces. Symbol, and account / sub-account / symbol.*
+> *Default: two key spaces. Symbol, and account / sub-account / symbol. The
+> demo used 4 symbols, 4 accounts and 1 sub-account: **4 symbol keys and 16
+> account keys**, with 4 allocations per order.*
 >
 > *Make sure the cardinality is realistic, as 4K symbols vs 4 will materially
 > impact the application design.*
 
 The old default read "symbol, 4 of them; and account+symbol, 16" with no
-indication of where the numbers came from, and it is wrong besides: the
-account key is account+subaccount+symbol.
+indication of where the numbers came from, and named the account key wrongly:
+it is account+subaccount+symbol.
+
+The numbers are now stated with their source. Read from `ReferenceData`: four
+symbols (AAPL, MSFT, GOOG, AMZN), four accounts (ACC1-4), one sub-account
+(SUB1), so `SYMBOL_KEY_COUNT` is 4 and `ACCOUNT_KEY_COUNT` is accounts x
+symbols = 16, and `ALLOCATIONS_PER_TRADE` is 4 — which is where question 2's
+"4 allocations, 5 records" comes from. The two defaults describe one pipeline.
 
 The author's second line replaces a weaker one of mine that said cardinality
 "changes the memory budget". It changes the design: state size, garbage

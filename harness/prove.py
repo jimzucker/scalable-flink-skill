@@ -102,7 +102,7 @@ def replay_sizing():
                               warmup_max_s=s.get("warmupS"),
                               window_s=doc.get("sizingWindowS"))
         if want > s["backlog"]:
-            print(f"REPLAY FAIL: {s['run']} would be refused -- sizing wants {want:,} "
+            print(f"REPLAY FAIL: {s['run']} would fail -- sizing wants {want:,} "
                   f"records, the suite ran on {s['backlog']:,} and its table was accepted")
             bad += 1
     if not bad:
@@ -184,7 +184,7 @@ def cmd_replay():
     if replay_names() or replay_cases() or replay_configs() or replay_sizing():
         print("REPLAY FAILED: a guard disagrees with a recorded configuration. Fix the guard, not the record.")
         return 1
-    print("REPLAY OK: no recorded valid table would be refused, no recorded invalid one reported, "
+    print("REPLAY OK: no recorded valid table would fail, no recorded invalid one reported, "
           "and every recorded configuration still gets its recorded verdict")
     return 0
 
@@ -207,7 +207,7 @@ def cmd_selftest(live=True, topic=None):
                        result="CEILING", message=e.msg[:200])
         except (Refusal, CaseRefused) as e:
             msg = e.msg if isinstance(e, Refusal) else e.refusal.msg
-            res = dict(guard=name, ok=should_fire and needle.lower() in msg.lower(), result="REFUSED", message=msg[:200])
+            res = dict(guard=name, ok=should_fire and needle.lower() in msg.lower(), result="FAILED", message=msg[:200])
         except Exception as e:
             res = dict(guard=name, ok=False, result=f"WRONG ERROR {type(e).__name__}: {e}"[:200])
         results.append(res)
@@ -227,20 +227,20 @@ def cmd_selftest(live=True, topic=None):
     expect("window has < 3 commit boundaries", case(boundaries=2), "commit boundaries")
     expect("measured rate is zero", case(recordsConsumed=0), "not positive")
     expect("rate came from the engine", case(rateSource="engine numRecordsIn"), "engine")
-    expect("two vantage points disagree", case(vantageDisagreement=0.12), "vantage")
-    expect("backlog lacks headroom at close", case(backlogRemaining=1000, headroomS=0.006), "headroom")
-    expect("external-boundary samples missing", case(sourceIdle=None), "samples")
-    expect("too few reporter samples in the window", case(bpSamples=2), "samples")
-    expect("worker is not the constraint (baseline, run 5\'s 94%)", case(tmCapFrac=0.94, _baseline=True), "not the constraint", ceiling=True)
+    expect("two vantage points disagree", case(vantageDisagreement=0.12), "do not agree")
+    expect("backlog lacks headroom at close", case(backlogRemaining=1000, headroomS=0.006), "nearly ran out")
+    expect("external-boundary samples missing", case(sourceIdle=None), "no back-pressure reading")
+    expect("too few reporter samples in the window", case(bpSamples=2), "readings landed inside")
+    expect("worker is not the constraint (baseline, run 5\'s 94%)", case(tmCapFrac=0.94, _baseline=True), "only used", ceiling=True)
     expect("baseline at 95.9% is the constraint (run 12 p3; must not fire)",
            case(tmCapFrac=0.959, _baseline=True), "", should_fire=False)
-    expect("worker is not the constraint (other)", case(tmCapFrac=0.90), "not the constraint", ceiling=True)
-    expect("source idle past the ceiling", case(sourceIdle=0.4), "waited on input", ceiling=True)
+    expect("worker is not the constraint (other)", case(tmCapFrac=0.90), "only used", ceiling=True)
+    expect("source idle past the ceiling", case(sourceIdle=0.4), "waiting for input", ceiling=True)
     expect("garbage collection is the constraint", case(gcFracOfCapacity=0.13), "garbage collection", ceiling=True)
     expect("GC at the worst level that behaved, 4.8% (must not fire)",
            case(gcFracOfCapacity=0.048), "", should_fire=False)
     expect("the broker was starved of page cache (worker off its cap)",
-           case(brokerLimitHits=310423, brokerRefaults=6270562, tmCapFrac=0.964), "memory limit", ceiling=True)
+           case(brokerLimitHits=310423, brokerRefaults=6270562, tmCapFrac=0.964), "ran out of memory", ceiling=True)
     expect("broker limit hits while the worker is pinned (must not fire)",
            case(brokerLimitHits=9437, brokerRefaults=572000, tmCapFrac=0.996), "", should_fire=False)
     expect("a broker that never hit its limit (must not fire)",
@@ -413,7 +413,7 @@ def cmd_selftest(live=True, topic=None):
                  n_out_topics=2, ckpt_bytes=1e9)
     expect("disk: run 11's build A fitted (must not fire)",
            lambda: L.disk_verdict(103e9, **run11), "", should_fire=False)
-    expect("disk: the suite would not fit", lambda: L.disk_verdict(60e9, **run11), "would not fit")
+    expect("disk: the suite would not fit", lambda: L.disk_verdict(60e9, **run11), "of disk and only")
 
     def chain():
         # in its own directory: the first version wrote its fake chain into the
@@ -769,7 +769,7 @@ def cmd_tinyproof():
                     f"vantage {rec['vantageDisagreement']:.2%}")
             except CaseRefused as e:
                 out["cases"].append(e.rec)
-                log(f"  REFUSED ({e.refusal.scope}): {e.refusal.msg}")
+                log(f"  FAILED ({e.refusal.scope}): {e.refusal.msg}")
                 out["result"] = "FAIL"
                 rc = 1
         if rc == 0:
@@ -779,7 +779,7 @@ def cmd_tinyproof():
             except Refusal as e:
                 out["disk"] = getattr(e, "detail", None)
                 out["result"] = "FAIL"
-                log(f"  REFUSED ({e.scope}): {e.msg}")
+                log(f"  FAILED ({e.scope}): {e.msg}")
                 rc = 1
         if rc == 0:
             d = out["disk"]
@@ -799,7 +799,7 @@ def cmd_tinyproof():
             out["backlogConfigured"] = c.backlog
             if c.backlog < want:
                 out["result"] = "FAIL"
-                log(f"  REFUSED (rig): backlog {c.backlog:,} is short of the {want:,} records the "
+                log(f"  FAILED (rig): backlog {c.backlog:,} is short of the {want:,} records the "
                     f"{hi}-core case needs at its measured {recs[hi]['recordsPerSec']:,.0f} rec/s "
                     f"(warm-up + window + headroom, x1.5); set backlog.count to at least that")
                 rc = 1
@@ -810,11 +810,28 @@ def cmd_tinyproof():
             ideal = hi / lo
             out["ratio"] = round(ratio, 3)
             bound = (T["tinyRatioLo"] * ideal / 2, T["tinyRatioHi"] * ideal / 2)
+            # Say which case is wrong, not that the ratio looks odd. A big ratio
+            # is almost always the small case running slow, so print both rates
+            # and what the small one should have been.
+            share = recs[lo]["recordsPerSec"] / recs[hi]["recordsPerSec"]
+            out["baselineShare"] = round(share, 4)
+            out["baselineShareExpected"] = round(1 / ideal, 4)
             print(f"\ntiny proof {lo} -> {hi} ratio: {ratio:.3f}x (bounds {bound[0]:.2f}-{bound[1]:.2f})")
+            print(f"  {lo} core(s)  {recs[lo]['recordsPerSec']:>12,.0f} rec/s")
+            print(f"  {hi} core(s)  {recs[hi]['recordsPerSec']:>12,.0f} rec/s")
+            print(f"  {lo} of {hi} cores did {share:.0%} of the work. It should be about {1 / ideal:.0%}.")
             if not (bound[0] <= ratio <= bound[1]):
                 out["result"] = "FAIL"
-                print("STOPPING: ratio outside bounds. Superlinear is a defect report, sublinear at this "
-                      "size means the rig is not what you think it is.")
+                if ratio > bound[1]:
+                    print(f"STOPPING: the {lo}-core case is too slow. The {hi}-core case is fine.")
+                    print(f"  Look at the {lo}-core case only. Two things make it slow:")
+                    print(f"  its job graph is a different shape, or its threads are sharing one core.")
+                    print(f"  Check the graph shape and the CPU cap on that case before using either number.")
+                else:
+                    print(f"STOPPING: {hi} cores did only {ratio:.2f}x the work of {lo}. "
+                          f"It should be about {ideal:.0f}x.")
+                    print(f"  The rig is not set up the way you think. Check three things:")
+                    print(f"  the CPU cap, the partition count, and the backlog size.")
                 rc = 1
             else:
                 out["result"] = "PASS"
@@ -871,8 +888,10 @@ def cmd_completeness():
                 cm = max([t.get("committed", -1) for t in ticks] or [-1])
                 if kill_at and not killed and cm >= c.small:
                     # run 5: a kill after the drain has finished proves nothing
-                    raise Refusal("rig", f"the drain finished ({cm} committed) before the kill at {kill_at:.0%} could land: "
-                                         f"smallCount must span several checkpoint intervals at the baseline rate")
+                    raise Refusal("rig", f"the drain finished ({cm:,} records committed) before the worker "
+                                         f"could be killed at {kill_at:.0%}. Nothing was proved. Make "
+                                         f"backlog.smallCount big enough to span several checkpoint "
+                                         f"intervals at the baseline rate.")
                 if kill_at and not killed and cm >= c.small * kill_at:
                     log(f"KILL: committed={cm}, killing the task manager mid-drain")
                     sh(f"docker kill {c.tm}")
@@ -1000,9 +1019,10 @@ def cmd_suite():
             except CaseRefused as e:
                 out["runs"].append(e.rec)
                 kind = "CEILING" if e.refusal.scope == "ceiling" else "REFUSED"
+                label = "CEILING" if kind == "CEILING" else "FAILED"
                 out.setdefault("ceilings" if kind == "CEILING" else "refusals", []).append(
                     {"case": cores, "pass": pass_id, "scope": e.refusal.scope, "message": e.refusal.msg})
-                log(f"  {kind}: {e.refusal.msg}")
+                log(f"  {label}: {e.refusal.msg}")
                 if e.refusal.scope == "rig":
                     stop = ("rig refusal", e.refusal.msg)
             save()
@@ -1067,7 +1087,15 @@ def cmd_report():
     out = load_json("suite.json")
     out["table"] = build_table(out["runs"], quick=out.get("quickLook", False))
     c = cfg()
-    short = [r for r in out["table"]["stepRatios"] if r.get("meetsClaim") is False]
+    steps = out["table"]["stepRatios"]
+    short = [r for r in steps if r.get("meetsClaim") is False]
+    # A step above its ideal is not a fast pipeline. Nothing does more than
+    # double the work on double the cores, so the lower case of that step read
+    # too low, and every step it appears in means less than it looks like.
+    # Judged on the low end of the interval, so a noisy pair is not called
+    # impossible on one bad pass.
+    impossible = [r for r in steps if r.get("reportable")
+                  and (r.get("ratioLowCI") or 0) > r["idealRatio"]]
     with open(os.path.join(c.results, "suite.txt"), "w") as f:
         f.write(render_table(out) + "\n")
     with open(os.path.join(c.results, "suite.md"), "w") as f:
@@ -1076,19 +1104,51 @@ def cmd_report():
     print("wrote results/suite.txt and results/suite.md")
     if short:
         t = out["table"]
-        for r in short:
-            print(f"CLAIM NOT MET: {r['step']} returned {r['ratio']:.3f}x of an ideal {r['idealRatio']:.0f}x "
-                  f"— {r['efficiency']:.1%} of linear, floor {T['scalingFloor']:.0%}. The table stands; "
-                  f"the pipeline did not scale on this rig.")
+        need = 2 * T["scalingFloor"]
+
+        def why(r, pad):
+            """What changed across one step, for whoever has to chase it."""
             a, b = t["cases"].get(r["from"]), t["cases"].get(r["to"])
-            if a and b:
-                pa = a["meanRecordsPerSec"] / r["from"]
-                pb = b["meanRecordsPerSec"] / r["to"]
-                print(f"  per core        {pa:>12,.0f} -> {pb:>12,.0f}   ({pb / pa - 1:+.1%})")
-                for k, label in (("tmCapFrac", "% of cap"), ("sourceIdle", "source idle"),
-                                 ("gcFracOfCapacity", "GC"), ("sourceBackpressured", "back-pressure")):
-                    if a.get(k) is not None and b.get(k) is not None:
-                        print(f"  {label:<15} {a[k]:>11.1%} -> {b[k]:>11.1%}")
+            if not (a and b):
+                return
+            pa = a["meanRecordsPerSec"] / r["from"]
+            pb = b["meanRecordsPerSec"] / r["to"]
+            print(f"{pad}per core        {pa:>12,.0f} -> {pb:>12,.0f}   ({pb / pa - 1:+.1%})")
+            for k, label in (("tmCapFrac", "% of cap"), ("sourceIdle", "source idle"),
+                             ("gcFracOfCapacity", "GC"), ("sourceBackpressured", "back-pressure")):
+                if a.get(k) is not None and b.get(k) is not None:
+                    print(f"{pad}{label:<15} {a[k]:>11.1%} -> {b[k]:>11.1%}")
+
+        print("\nCLAIM NOT MET\n")
+
+        # The whole picture first: every case, with each step beside the case
+        # it lands on. A reader should not have to hunt for the good step.
+        print(f"  {'cores':>6}{'speed':>15}" + "".join(f"{r['step'] + ' cores':>15}" for r in steps))
+        for cs in t["cases"].values():
+            cells = [f"{r['ratio']:.2f}x" if r["to"] == cs["cores"] and r.get("reportable") else ""
+                     for r in steps]
+            print(f"  {cs['cores']:>6}{cs['meanRecordsPerSec']:>13,.0f}/s"
+                  + "".join(f"{x:>15}" for x in cells))
+        print(f"\n  Doubling the cores should give 2.00x. This run needs {need:.2f}x or better.")
+
+        print("\n  Fix these in order:\n")
+        n = 1
+        for r in impossible:
+            print(f"  {n}. {r['step']} cores reads {r['ratio']:.2f}x. Nothing does more than "
+                  f"{r['idealRatio']:.2f}x, so the {r['from']}-core reading is too low.")
+            print(f"     Fix this one first. While it is wrong, every step it appears in is")
+            print(f"     wrong too. Check the {r['from']}-core case: is its job graph the same")
+            print(f"     shape as the others, and did it get the cores it asked for?")
+            why(r, "     ")
+            print()
+            n += 1
+        for r in short:
+            print(f"  {n}. {r['step']} cores reads {r['ratio']:.2f}x, under the {need:.2f}x it needs."
+                  f" This is the real shortfall.")
+            why(r, "     ")
+            print()
+            n += 1
+
         try:
             pf = load_json("preflight.json")
             h = (pf.get("hostScaling") if isinstance(pf, dict) else None) or {}
@@ -1113,6 +1173,11 @@ def cmd_report():
               "\n  a broker starved of page cache costs about 13%; four subtasks instead of two costs about"
               "\n  8% on the same cores, of which ~3 points is the source idling. Partition count and network"
               "\n  buffers were tested and changed nothing. See harness/README.md.")
+        print("\n  The table stands. The pipeline did not scale on this machine.\n")
+        print("  This is a list, not a decision. Take it to whoever asked for the run as a")
+        print("  plan -- what you would change, in this order, and what you expect it to")
+        print("  move -- and get a yes before changing anything and measuring again. A")
+        print("  re-run costs about what the run that just finished cost.")
         return 1
     return 0
 
@@ -1159,7 +1224,7 @@ def cmd_all(steps=None, results=None):
         try:
             rc = fn()
         except Refusal as e:
-            log(f"REFUSED ({e.scope}): {e.msg}")
+            log(f"FAILED ({e.scope}): {e.msg}")
             rc = 1
         finally:
             if name in ("completeness", "tinyproof", "suite"):
@@ -1218,12 +1283,12 @@ if __name__ == "__main__":
     if name not in ("replay", "selftest-pure", "report"):
         rc = cmd_replay()
         if rc:
-            print("refusing to run with a threshold that disagrees with the record")
+            print("not running: a threshold disagrees with the record")
             sys.exit(rc)
     try:
         rc = COMMANDS[name]()
     except Refusal as e:
-        print(f"REFUSED ({e.scope}): {e.msg}")
+        print(f"FAILED ({e.scope}): {e.msg}")
         rc = 1
     except KeyboardInterrupt:
         rc = 130

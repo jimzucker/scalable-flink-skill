@@ -318,10 +318,10 @@ class Cfg:
         if (caps.get("tmMemory") and self.tm_mem_per_core is None
                 and len(set(self.cases)) > 1
                 and not all(n in self.per_case for n in self.cases)):
-            raise Refusal("rig", "caps.tmMemoryPerCore is not set: a flat taskmanager memory divides "
-                                 f"across the subtasks of each case, so {self.cases} would run with "
-                                 "different memory per subtask and the cases would not be comparable "
-                                 "(measured: a flat 2048m read 2->4 = 1.645 where per-core memory read 1.910)")
+            raise Refusal("rig", "caps.tmMemoryPerCore is not set. One flat memory figure gets split "
+                                 f"among each case's subtasks, so cases {self.cases} would each run with a "
+                                 "different amount of memory per subtask and could not be compared. "
+                                 "Measured: a flat 2048m read 2->4 = 1.645 where per-core memory read 1.910.")
         if self.baseline not in self.cases:
             raise Refusal("rig", f"baseline {self.baseline} is not one of the cases {self.cases}")
         if QUICK:
@@ -436,10 +436,11 @@ def disk_verdict(free, in_bytes_per_rec, backlog, sink_bytes_per_in, partitions,
          "checkpointBytes": int(ckpt_bytes), "floorBytes": int(T["diskFloorBytes"]),
          "neededBytes": int(need), "fits": need <= free}
     if need > free:
-        e = Refusal("rig", f"the suite would not fit on disk: input {inp/1e9:.1f} GB + sinks {sink/1e9:.1f} GB "
-                           f"(retention-capped at {sink_cap/1e9:.1f} GB) + checkpoints {ckpt_bytes/1e9:.1f} GB + "
-                           f"floor {T['diskFloorBytes']/1e9:.0f} GB = {need/1e9:.1f} GB against {free/1e9:.1f} GB free once the tiny proof's topics are gone "
-                           f"— shrink the backlog or the records before the fill, not after the suite")
+        e = Refusal("rig", f"the suite needs {need/1e9:.1f} GB of disk and only {free/1e9:.1f} GB will be free "
+                           f"once the tiny proof's topics are deleted. That is {inp/1e9:.1f} GB of input, "
+                           f"{sink/1e9:.1f} GB of sinks (capped at {sink_cap/1e9:.1f} GB), "
+                           f"{ckpt_bytes/1e9:.1f} GB of checkpoints and {T['diskFloorBytes']/1e9:.0f} GB kept spare. "
+                           f"Shrink the backlog or the record size now. After the suite is too late.")
         e.detail = d
         raise e
     return d
@@ -1345,8 +1346,9 @@ def next_boundary(after=None, timeout=90, settle_ms=None):
 def drained(tick):
     """The backlog ran out under the job: a sizing error of the caller's, named as such."""
     if tick.get("endIn", 0) > 0 and tick["committed"] >= tick["endIn"]:
-        raise Refusal("case", f"backlog drained ({tick['endIn']:,} records) before the window closed — "
-                              f"size it for warm-up + window at the largest case's rate")
+        raise Refusal("case", f"the backlog ran out ({tick['endIn']:,} records) before the window closed. "
+                              f"Make it bigger. It has to cover warm-up plus the window at the fastest "
+                              f"case's rate.")
 
 
 def warmup_verdict(rates, elapsed_s):
@@ -1386,10 +1388,11 @@ def wait_flat(deadline_s):
             if ok:
                 return detail
         time.sleep(0.5)
-    raise Refusal("case", f"warm-up never reached a flat trend (slope <{T['warmupFlatTol']:.0%}, "
-                          f"scatter <={T['warmupScatterTol']:.0%}, >= {T['warmupMinS']:.0f}s) within {deadline_s:.0f}s; "
-                          f"last intervals {[round(r) for r in detail.get('rates', [])]} "
-                          f"drift {detail.get('drift')} scatter {detail.get('scatter')}")
+    raise Refusal("case", f"the rate never settled down within {deadline_s:.0f}s. It has to hold steady for "
+                          f"{T['warmupMinS']:.0f}s, drifting less than {T['warmupFlatTol']:.0%} with scatter under "
+                          f"{T['warmupScatterTol']:.0%}. Last readings were "
+                          f"{[round(r) for r in detail.get('rates', [])]}, drift {detail.get('drift')}, "
+                          f"scatter {detail.get('scatter')}.")
 
 
 def check_case(rec, cores, is_baseline):
@@ -1403,20 +1406,30 @@ def check_case(rec, cores, is_baseline):
     if rec.get("rateSource", "").startswith("engine"):
         raise Refusal("case", "rate came from the engine, not the transport")
     if rec["vantageDisagreement"] > T["vantageTol"]:
-        raise Refusal("case", f"vantage points disagree by {rec['vantageDisagreement']:.1%} "
-                              f"(source committed {rec['recordsConsumed']}, sinks imply {rec['vantageSinkRecords']:.0f}) "
-                              f"> tolerance {T['vantageTol']:.0%}")
+        raise Refusal("case", f"the two ways of counting do not agree. The source says "
+                              f"{rec['recordsConsumed']:,} records went through; the sinks say "
+                              f"{rec['vantageSinkRecords']:,.0f}. That is {rec['vantageDisagreement']:.1%} apart "
+                              f"and the limit is {T['vantageTol']:.0%}. One of them is wrong, so neither can "
+                              f"be used.")
     if rec["backlogRemaining"] < rec["recordsPerSec"] * c.ckpt_s:
-        raise Refusal("case", f"backlog headroom at close is {rec['backlogRemaining']} records "
-                              f"({rec['headroomS']:.1f}s) < one checkpoint interval at the measured rate")
-    if rec.get("sourceIdle") is None or (rec.get("bpSamples") or 0) < T["minBpSamples"]:
-        raise Refusal("case", f"{rec.get('bpSamples') or 0} source back-pressure samples inside the window "
-                              f"(< {T['minBpSamples']}): the external-boundary guard would not have been evaluated")
+        raise Refusal("case", f"the backlog nearly ran out: {rec['backlogRemaining']:,} records left at the "
+                              f"end of the window, which is {rec['headroomS']:.1f}s of work at this rate. "
+                              f"It needs at least one checkpoint interval left over, or the end of the "
+                              f"window was measuring a pipeline that was running dry.")
+    # Two different problems, so two different messages: the old one reported a
+    # sample count even when the real fault was that no reading came back at all.
+    if rec.get("sourceIdle") is None:
+        raise Refusal("case", "no back-pressure reading came back for the source, so there is no way to "
+                              "tell whether the pipeline was working or waiting on Kafka.")
+    if (rec.get("bpSamples") or 0) < T["minBpSamples"]:
+        raise Refusal("case", f"only {rec.get('bpSamples') or 0} back-pressure readings landed inside the "
+                              f"window and {T['minBpSamples']} are needed. Without enough of them there is "
+                              f"no way to tell whether the pipeline was working or waiting on Kafka.")
     floor = T["capFloorBaseline"] if is_baseline else T["capFloorOther"]
     if rec["tmCapFrac"] < floor:
-        raise Ceiling(f"task manager used {rec['tmCapFrac']:.1%} of its {cores}-core cap "
-                      f"(floor {floor:.0%}) — it is not the constraint, so this case is where "
-                      f"scaling stops rather than a point on the curve", rec)
+        raise Ceiling(f"the worker only used {rec['tmCapFrac']:.1%} of its {cores} cores, and it needs "
+                      f"{floor:.0%} to count. Something else was holding it back, so this case shows where "
+                      f"scaling stops. It is kept in the table and left out of the ratios.", rec)
     # A worker at its cap is not waiting on the broker, whatever the broker's
     # cgroup is doing. Measured twice: run 23's 1-core case hit the limit 9,437
     # times at 99.6% of cap with no rate effect, while its 4-core case hit it
@@ -1429,17 +1442,17 @@ def check_case(rec, cores, is_baseline):
         # so the step that worked was x1.6. Named here so the next run raises it once.
         hint = (f" — raise caps.kafkaMemory from {lim / 1048576:.0f}m to about "
                 f"{int(lim * 1.6 / 268435456) * 256:.0f}m") if lim else ""
-        raise Ceiling(f"the broker hit its memory limit {rec['brokerLimitHits']:,} times inside the window "
-                      f"({rec.get('brokerRefaults', 0):,} file-page refaults): it was reading the backlog off "
-                      f"disk, so the broker is the constraint here, not the worker{hint}", rec)
+        raise Ceiling(f"Kafka ran out of memory {rec['brokerLimitHits']:,} times during the window and had "
+                      f"to read the backlog back off disk ({rec.get('brokerRefaults', 0):,} page refaults). "
+                      f"Kafka was the bottleneck here, not the worker.{hint}", rec)
     if (rec.get("gcFracOfCapacity") or 0) > T["gcCeil"]:
-        raise Ceiling(f"garbage collection took {rec['gcFracOfCapacity']:.1%} of this case's capacity "
-                      f"(ceiling {T['gcCeil']:.0%}): memory is the constraint here, not cores — give the "
-                      f"worker more memory rather than capping it", rec)
+        raise Ceiling(f"garbage collection used {rec['gcFracOfCapacity']:.1%} of this case's time and the "
+                      f"limit is {T['gcCeil']:.0%}. The worker ran short of memory, not cores. Give it more "
+                      f"memory instead of more cores.", rec)
     if rec["sourceIdle"] > T["sourceIdleCeil"]:
-        raise Ceiling(f"source idle {rec['sourceIdle']:.1%} > {T['sourceIdleCeil']:.0%}: the source waited on "
-                      f"input for more of the window than any at-cap case on record, so the input side is "
-                      f"the constraint here", rec)
+        raise Ceiling(f"the source sat idle {rec['sourceIdle']:.1%} of the window and the limit is "
+                      f"{T['sourceIdleCeil']:.0%}. It spent that time waiting for input, so whatever feeds "
+                      f"the pipeline is the bottleneck, not the worker.", rec)
 
 
 def check_shape(shape, shape_ref):
@@ -1807,7 +1820,7 @@ def render_table(out):
                 L.append(f"        ceiling: {r.get('ceiling')}")
         else:
             L.append(f"{r['cores']:>5} {r['pass']:>8} {'—':>11} {'—':>11} {'—':>10} {'—':>6} {'—':>5} "
-                     f"{'—':>10} {'—':>8} {'—':>7} {'—':>6} {'—':>6} {'REFUSED':>8}")
+                     f"{'—':>10} {'—':>8} {'—':>7} {'—':>6} {'—':>6} {'FAILED':>8}")
             L.append(f"        refusal ({r.get('refusalScope')}): {r.get('refusal')}")
     L.append("-" * len(hdr))
     for cs in t["cases"].values():
@@ -1890,7 +1903,7 @@ def render_markdown(out):
                      f"{r['tmThrottledPeriodsPct']:.0f}% | {r['kafkaCores']:.2f} / {c.kafka_cap:g} | {r['sourceIdle']:.1%} | "
                      f"{r['sourceBackpressured']:.1%} | {r['headroomS']:.0f} s | {r['vantageDisagreement']:.2%} |")
         else:
-            L.append(f"| {r['cores']} | {r['pass']} | REFUSED ({r.get('refusalScope')}) — {r.get('refusal','')[:80]} | | | | | | | | |")
+            L.append(f"| {r['cores']} | {r['pass']} | FAILED ({r.get('refusalScope')}) — {r.get('refusal','')[:80]} | | | | | | | | |")
     L += ["", "| cores | passes | mean records/s | spread | reportable |", "|---:|---:|---:|---:|---|"]
     for cs in t["cases"].values():
         L.append(f"| {cs['cores']} | {cs['passes']} | {cs['meanRecordsPerSec']:,.0f} | {cs['spread']:.1%} | "

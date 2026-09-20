@@ -32,6 +32,9 @@ jobs:
       - name: Break every guard on purpose
         run: python3 harness/prove.py selftest-pure
 
+      - name: The prose and the code state the same numbers
+        run: python3 harness/doccheck.py
+
       - name: The skill's name matches the directory it installs into
         run: |
           name=$(sed -n 's/^name: //p' SKILL.md | head -1)

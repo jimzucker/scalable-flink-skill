@@ -67,6 +67,85 @@ Verbatim from `SKILL.md` §1.
    own. Neither is more valid, but the claim differs. Default to what the
    audience runs in production, and say which next to the numbers.
 
+## Proposed wording
+
+Four changed, five untouched. The rule applied: **the question is plain even
+when the answer is not**, and a default shows the shape of a usable answer
+rather than presuming the reader shares ours.
+
+### 1 — the default stops presuming our problem
+
+> **What goes into the pipeline, and what comes out?** One sentence, in your
+> own words.
+>
+> *(For example: "orders arrive, and I want a running total per customer", or
+> "sensor readings arrive, and I want a rolling average per device". One
+> sentence is enough — this becomes the spec.)*
+
+The examples teach the format without naming a problem the reader has never
+seen. Two of them, deliberately, so neither reads as the expected answer.
+
+### 2 — "fan-out ratio" is not a phrase anyone arrives with
+
+> **Does one thing going in produce more than one thing coming out?** If each
+> order updates three tables, that is three.
+>
+> *Worth getting right: at five outputs per input the write side is five times
+> the read side, and the write side is usually what runs out of speed first —
+> and what fills the disk.*
+
+Same content; the term is gone and the consequence leads.
+
+### 8 — the question that decides what gets measured
+
+> **When you say it scales, which do you mean?**
+>
+> **(a)** Give **one machine more cores** and it does proportionally more work.
+> **(b)** Add **more machines** and it does proportionally more work.
+>
+> *These are different measurements and give different numbers, so the answer
+> decides what gets built and measured. (a) is what a laptop can prove.
+> (b) needs real machines, because every new machine pays its own start-up
+> cost — its own memory, its own garbage collection, its own network hops —
+> while adding cores to one machine does not.*
+>
+> *(Default: (a), one machine with more cores.)*
+
+Gone: *axis*, *one worker growing*, *workers multiplying*, *amortises its fixed
+cost*, and the parenthetical about parallelism and slots — which is an
+instruction to the harness, not a question to a person, and already lives in §5.
+
+### 4 — plain question, technical answer
+
+> **What has to be exactly right?**
+>
+> *If an output is a running total, a record processed twice is a wrong number,
+> not a duplicate — so this usually matters more than it first sounds.*
+>
+> *If it does matter, there are two separate settings and both are needed:*
+> - *the **sink**, where sending the absolute total per key rather than "add 3"
+>   makes a repeat harmless;*
+> - *the **saved state** the total is computed from, which needs exactly-once
+>   checkpointing, or a replayed record is counted twice inside the snapshot.*
+>
+> *(Default: exactly-once checkpointing, at-least-once sink. Both get named in
+> the report, and it gets tested by killing a worker mid-run.)*
+
+The question is now one short line. The jargon survives, in the explanation,
+where a reader who needs it will find it and a reader who does not can take the
+default.
+
+### Left alone
+
+3, 5, 6, 7 and 9. They already read plainly, and 7 in particular should stay
+blunt: *"What claim do you want to make? I write it down verbatim."*
+
+## What this costs
+
+Nothing in behaviour — the interview asks the same nine things in the same
+order and gates on the same two. It is a wording change to the first thing a
+stranger reads.
+
 ## What the reader actually hears
 
 The same nine, as they are put to someone one at a time. Recorded because the

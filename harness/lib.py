@@ -312,7 +312,7 @@ class Cfg:
         for k in self.flink_props:
             if k in reserved or k.startswith("metrics.reporter.slf4j."):
                 raise Refusal("rig", f"flinkProperties sets {k}, which the harness sets for the "
-                                     f"measurement. Slots, parallelism, worker memory and the checkpoint "
+                                     f"measurement. Task slots, parallelism, memory and the checkpoint "
                                      f"store decide what is being measured, and the slf4j reporter is "
                                      f"where busy, idle and back-pressure are read from. Add settings, "
                                      f"do not replace these.")
@@ -355,7 +355,7 @@ class Cfg:
                                  f"the backlog with. Every configuration on record that produced a usable "
                                  f"table left it at least {floor / 1024:.2f} GB. Below that the broker reads "
                                  f"the backlog back off disk and becomes the constraint instead of the "
-                                 f"worker, and the cases come back as ceilings. Raise kafkaMemory to about "
+                                 f"cores, and the cases come back as ceilings. Raise kafkaMemory to about "
                                  f"{int((floor + heap + 255) / 256) * 256:.0f}m, or lower kafkaHeap.")
         if self.baseline not in self.cases:
             raise Refusal("rig", f"baseline {self.baseline} is not one of the cases {self.cases}")
@@ -1464,28 +1464,28 @@ def bottleneck(rec):
     cap = rec.get("tmCapFrac") or 0
     if (rec.get("brokerLimitHits") or 0) > T["brokerLimitHits"] and cap < T["brokerHitsCapExempt"]:
         return (f"Kafka ran out of memory. It hit its limit {rec['brokerLimitHits']:,} times and had to "
-                f"read the backlog off disk. The worker was waiting on Kafka, not working.")
+                f"read the backlog off disk. The pipeline was waiting on Kafka instead of using its cores.")
     if (rec.get("gcFracOfCapacity") or 0) > T["gcCeil"]:
-        return (f"The worker ran out of memory. It spent {rec['gcFracOfCapacity']:.0%} of the time "
-                f"cleaning up memory instead of working. Give it more memory, not more cores.")
+        return (f"Ran out of memory. The pipeline spent {rec['gcFracOfCapacity']:.0%} of the time cleaning "
+                f"up memory instead of working. Give it more memory, not more cores.")
     if (rec.get("sourceIdle") or 0) > T["sourceIdleCeil"]:
-        return (f"Nothing to read. The source sat idle {rec['sourceIdle']:.0%} of the time waiting for "
-                f"input. Whatever feeds the pipeline is the slow part.")
+        return (f"Nothing to read. The pipeline sat idle {rec['sourceIdle']:.0%} of the time waiting for "
+                f"input, so whatever feeds it is the slow part.")
     c = cfg()
     kcap = getattr(c, "kafka_cap", 0) or 0
     if kcap and (rec.get("kafkaCores") or 0) / kcap >= 0.90:
-        return (f"Kafka's own cores. Kafka used {rec['kafkaCores']:.2f} of the {kcap:g} cores it is "
-                f"allowed. The worker was waiting on it.")
+        return (f"Kafka's cores. Kafka used {rec['kafkaCores']:.2f} of the {kcap:g} cores it is allowed, "
+                f"so the pipeline was waiting on Kafka.")
     if cap >= T["capFloorOther"]:
-        return (f"The worker's cores. It used {cap:.0%} of the cores it was given. That is what we want, "
-                f"because the worker is what we are measuring.")
+        return (f"Cores. The pipeline used {cap:.0%} of the cores it was given. That is what we want, "
+                f"because cores are what we are changing.")
     bp = rec.get("sourceBackpressured") or 0
     if bp >= 0.30:
-        return (f"Waiting to write. The worker used only {cap:.0%} of its cores and spent {bp:.0%} of "
-                f"the time held up. Kafka could not accept records fast enough.")
+        return (f"Waiting to write. The pipeline used only {cap:.0%} of its cores and spent {bp:.0%} of "
+                f"the time held up, because Kafka could not accept records fast enough.")
     # Nothing measured accounts for it. "Investigating" is the honest label and
     # it is also an instruction: go and find out.
-    return (f"Investigating. The worker used only {cap:.0%} of its cores and nothing we measured "
+    return (f"Investigating. The pipeline used only {cap:.0%} of its cores and nothing we measured "
             f"says why.")
 
 
@@ -1678,7 +1678,7 @@ def check_case(rec, cores, is_baseline):
                               f"no way to tell whether the pipeline was working or waiting on Kafka.")
     floor = T["capFloorBaseline"] if is_baseline else T["capFloorOther"]
     if rec["tmCapFrac"] < floor:
-        raise Ceiling(f"the worker only used {rec['tmCapFrac']:.1%} of its {cores} cores, and it needs "
+        raise Ceiling(f"the pipeline only used {rec['tmCapFrac']:.1%} of the {cores} cores it was given, and it needs "
                       f"{floor:.0%} to count. Something else was holding it back, so this case shows where "
                       f"scaling stops. It is kept in the table and left out of the ratios.", rec)
     # A worker at its cap is not waiting on the broker, whatever the broker's
@@ -1695,15 +1695,15 @@ def check_case(rec, cores, is_baseline):
                 f"{int(lim * 1.6 / 268435456) * 256:.0f}m") if lim else ""
         raise Ceiling(f"Kafka ran out of memory {rec['brokerLimitHits']:,} times during the window and had "
                       f"to read the backlog back off disk ({rec.get('brokerRefaults', 0):,} page refaults). "
-                      f"Kafka was the bottleneck here, not the worker.{hint}", rec)
+                      f"Kafka was the bottleneck here, not the cores.{hint}", rec)
     if (rec.get("gcFracOfCapacity") or 0) > T["gcCeil"]:
         raise Ceiling(f"garbage collection used {rec['gcFracOfCapacity']:.1%} of this case's time and the "
-                      f"limit is {T['gcCeil']:.0%}. The worker ran short of memory, not cores. Give it more "
+                      f"limit is {T['gcCeil']:.0%}. The pipeline ran short of memory, not cores. Give it more "
                       f"memory instead of more cores.", rec)
     if rec["sourceIdle"] > T["sourceIdleCeil"]:
         raise Ceiling(f"the source sat idle {rec['sourceIdle']:.1%} of the window and the limit is "
                       f"{T['sourceIdleCeil']:.0%}. It spent that time waiting for input, so whatever feeds "
-                      f"the pipeline is the bottleneck, not the worker.", rec)
+                      f"the pipeline is the bottleneck, not the cores.", rec)
 
 
 def check_shape(shape, shape_ref):

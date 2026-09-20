@@ -444,9 +444,15 @@ and whether doubling the resource doubled the work.
 ```
 SCORECARD
 
-  cores        speed     pipeline CPU     pipeline memory    Kafka CPU        Kafka memory   blocking higher throughput
-      2     374,507/s         2 / 100%  uncapped / 2.0% GC    2.5 / 12%         6g / 0 hits   Pipeline CPU
-      4     673,414/s          4 / 97%  uncapped / 1.2% GC    2.5 / 25%         6g / 0 hits   Pipeline CPU
+  cores        speed     pipeline CPU     pipeline memory     Kafka CPU         Kafka memory   blocking higher throughput
+      2     374,507/s         2 / 100%     uncapped / 2.0%     2.5 / 12%                6g / 0   Pipeline CPU
+      4     673,414/s          4 / 97%     uncapped / 1.2%     2.5 / 25%                6g / 0   Pipeline CPU
+
+  Each pair is what it was allowed and how much of that went:
+    pipeline CPU      cores it could use / how much of them it used
+    pipeline memory   memory it could use / share of the time spent tidying memory up
+    Kafka CPU         cores Kafka could use / how much of them it used
+    Kafka memory      memory Kafka could use / how many times it filled up
 
   2->4 cores: doubling gave 1.80x, it needed 1.90x  ->  missed
 ```

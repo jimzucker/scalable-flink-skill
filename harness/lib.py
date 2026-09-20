@@ -1497,26 +1497,59 @@ def bottleneck(rec):
             f"throughput, and nothing we measured says what.")
 
 
+def bottleneck_short(rec):
+    """The bottleneck in two or three words, for a column."""
+    long = bottleneck(rec)
+    for needle, label in (("CPU at", "CPU"), ("Kafka's memory", "Kafka memory"),
+                          ("Kafka's CPU", "Kafka CPU"), ("Memory,", "memory"),
+                          ("Waiting to write", "waiting to write"),
+                          ("Nothing to read", "nothing to read"),
+                          ("Investigating", "investigating")):
+        if long.startswith(needle):
+            return label
+    return "investigating"
+
+
 def scorecard(out):
     """The run in the fewest lines that still say what happened."""
     t = out.get("table") or {}
     c = cfg()
     L = ["SCORECARD", ""]
+    kcap = getattr(c, "kafka_cap", 0) or 0
+    L.append(f"  {'cores':>5}{'speed':>13}{'pipeline CPU':>14}{'pipeline mem':>14}"
+             f"{'Kafka CPU':>11}{'Kafka mem':>12}   blocking higher throughput")
+    notes = []
     for cs in t.get("cases", {}).values():
         last = next((r for r in reversed(out.get("runs") or [])
                      if r.get("cores") == cs["cores"] and r.get("status") in ("OK", "CEILING")), None)
-        why = bottleneck(last) if last else "investigating — no usable reading"
-        mark = "" if cs.get("reportable") else "   (not usable: " + str(cs.get("unreportableReason")) + ")"
-        L.append(f"  {cs['cores']} cores  {cs['meanRecordsPerSec']:,.0f}/s{mark}")
-        # the sentence wraps rather than running off the side of a terminal
-        line = "    held back by: "
-        for word in why.split():
+        if not last:
+            L.append(f"  {cs['cores']:>5}{cs['meanRecordsPerSec']:>12,.0f}/s"
+                     + f"{'—':>14}{'—':>14}{'—':>11}{'—':>12}   investigating")
+            continue
+        gc = last.get("gcFracOfCapacity")
+        kc = last.get("kafkaCores")
+        hits = last.get("brokerLimitHits")
+        L.append(f"  {cs['cores']:>5}{cs['meanRecordsPerSec']:>12,.0f}/s"
+                 f"{last.get('tmCapFrac', 0):>13.0%} "
+                 f"{(f'{gc:.1%} GC' if gc is not None else '—'):>13} "
+                 f"{(f'{kc / kcap:.0%}' if kc is not None and kcap else '—'):>10} "
+                 f"{(f'{hits:,} hits' if hits is not None else '—'):>11}"
+                 f"   {bottleneck_short(last)}"
+                 + ("" if cs.get("reportable") else "  (not usable)"))
+        # the full sentence only where it is not the answer we hoped for
+        if bottleneck_short(last) != "CPU":
+            notes.append(f"  {cs['cores']} cores: {bottleneck(last)}")
+    L.append("")
+    for n in notes:
+        line = "  "
+        for word in n.split():
             if len(line) + len(word) + 1 > 96:
                 L.append(line)
                 line = "      " + word
             else:
                 line += (" " if line.strip() else "") + word
         L.append(line)
+    if notes:
         L.append("")
     L.append("")
     for r in t.get("stepRatios") or []:
@@ -2154,12 +2187,27 @@ def render_markdown(out):
                      f"range {r['ratioLow']:.2f}–{r['ratioHigh']:.2f}× across passes.**")
         else:
             L.append(f"**{r['step'].replace('->', '→')} cores: not reported — {r['reason']}.**")
-    L += ["", "| cores | speed | what was holding it back |", "|---:|---:|---|"]
+    kcap = getattr(c, "kafka_cap", 0) or 0
+    L += ["", "| cores | speed | pipeline CPU | pipeline memory | Kafka CPU | Kafka memory | "
+          "blocking higher throughput |", "|---:|---:|---:|---:|---:|---:|---|"]
     for cs in t.get("cases", {}).values():
         last = next((r for r in reversed(out.get("runs") or [])
                      if r.get("cores") == cs["cores"] and r.get("status") in ("OK", "CEILING")), None)
-        L.append(f"| {cs['cores']} | {cs['meanRecordsPerSec']:,.0f}/s | "
-                 f"{bottleneck(last) if last else 'investigating — no usable reading'} |")
+        if not last:
+            L.append(f"| {cs['cores']} | {cs['meanRecordsPerSec']:,.0f}/s | — | — | — | — | investigating |")
+            continue
+        gc, kc, hits = (last.get("gcFracOfCapacity"), last.get("kafkaCores"),
+                        last.get("brokerLimitHits"))
+        L.append(f"| {cs['cores']} | {cs['meanRecordsPerSec']:,.0f}/s | {last.get('tmCapFrac', 0):.0%} | "
+                 f"{f'{gc:.1%} GC' if gc is not None else '—'} | "
+                 f"{f'{kc / kcap:.0%}' if kc is not None and kcap else '—'} | "
+                 f"{f'{hits:,} hits' if hits is not None else '—'} | {bottleneck_short(last)} |")
+    for cs in t.get("cases", {}).values():
+        last = next((r for r in reversed(out.get("runs") or [])
+                     if r.get("cores") == cs["cores"] and r.get("status") in ("OK", "CEILING")), None)
+        if last and bottleneck_short(last) != "CPU":
+            L.append("")
+            L.append(f"**{cs['cores']} cores:** {bottleneck(last)}")
     L += ["", "| cores | pass | records/s | tm cores | % of cap | throttled | broker cores | src idle | src BP | headroom | vantage |",
           "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for r in out["runs"]:

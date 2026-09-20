@@ -1731,6 +1731,42 @@ def build_table(runs, cases_order=None, quick=False):
             "quickLook": quick, "publishable": not quick}
 
 
+def suite_span(out):
+    """When the suite started and finished, as epoch seconds.
+
+    The dashboard is read after the run, and the run is a drain: every panel
+    goes flat when the last case closes. A dashboard left on a five-minute
+    default is empty for everyone who opens it afterwards, so the span it
+    should be showing is printed beside the table (skill section 7).
+
+    Prefers the epoch stamps the suite writes; falls back to the extremes of
+    the cases' own window timestamps so a results file written by an older
+    harness still reports a span. Returns None when neither is present."""
+    a, b = out.get("startedAtEpoch"), out.get("savedAtEpoch")
+    if not (a and b):
+        ts = [r[k] for r in out.get("runs") or [] for k in ("tSteady", "tOpen", "tClose")
+              if isinstance(r.get(k), (int, float))]
+        if not ts:
+            return None
+        a, b = a or min(ts), b or max(ts)
+    return (a, b) if b >= a else None
+
+
+def span_line(out):
+    """The span as one human interval plus the epoch-ms pair a dashboard URL
+    takes, so a range that does not cover the suite is visible next to the
+    numbers it failed to show."""
+    span = suite_span(out)
+    if not span:
+        return None
+    a, b = span
+    fmt = lambda e: time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(e))
+    m = int(round((b - a) / 60.0))
+    dur = f"{m // 60}h {m % 60:02d}m" if m >= 60 else f"{m}m"
+    return (f"{fmt(a)} -> {fmt(b)} {time.strftime('%Z', time.localtime(b))} ({dur})"
+            f"  dashboard: from={int(a * 1000)}&to={int(b * 1000)}")
+
+
 def render_table(out):
     """The table as text, from the results file. Every artifact that carries a
     number is generated from here."""
@@ -1751,6 +1787,9 @@ def render_table(out):
     L.append(f"workload             : {workload_line(out)}")
     L.append(f"backlog              : {out['backlogRecords']:,} records, {out['partitions']} partitions, "
              f"{c.out_per_in:g} outputs per input")
+    sl = span_line(out)
+    if sl:
+        L.append(f"suite span           : {sl}")
     L.append("=" * 118)
     hdr = (f"{'cores':>5} {'pass':>8} {'records/s':>11} {'out rec/s':>11} {'tm cpu':>10} {'%cap':>6} "
            f"{'thr%':>5} {'kafka':>10} {'srcIdle':>8} {'srcBP':>7} {'hdrm':>6} {'vant':>6} {'status':>8}")
@@ -1826,7 +1865,11 @@ def render_markdown(out):
          f"| study | {out.get('study', 'scaling: every case configured identically')} |",
          f"| workload | {workload_line(out)} |",
          f"| rate source | committed broker offsets on `{c.topic_in}` |",
-         f"| CPU source | cgroup `cpu.stat usage_usec` |", ""]
+         f"| CPU source | cgroup `cpu.stat usage_usec` |"]
+    sl = span_line(out)
+    if sl:
+        L.append(f"| suite span | {sl} |")
+    L.append("")
     for r in t["stepRatios"]:
         if r["reportable"] and t.get("quickLook"):
             # one pass per case: min and max are the same measurement, so a

@@ -405,9 +405,10 @@ write-up is the window the number came from.
 retention to outlast it.** What is being measured is a drain: the producer is
 stopped, the backlog empties, and every panel goes flat the moment the last
 case ends. A dashboard left on a five-minute default is therefore empty for
-everyone who opens it afterwards — which is everyone except the run. The span
-is already on disk: `suite.json` carries `startedAt` and `savedAt`, and every
-case its `tOpen` and `tClose`.
+everyone who opens it afterwards — which is everyone except the run. You do
+not have to work the span out: the report prints it as `suite span`, as a human
+interval and as the `from=`/`to=` epoch pair a dashboard URL takes, so a range
+that does not cover the suite is visible beside the numbers it failed to show.
 
 | panel | the question it answers |
 |---|---|

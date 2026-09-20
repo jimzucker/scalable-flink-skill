@@ -11,7 +11,7 @@ scalable-flink-skill harness — the one entry point.
   preflight     the §3 table, PASS/FAIL per row
   tinyproof     two cases on a small backlog, ratio bounded 1.5x-2.5x, + selftest
   fill          fill the full backlog and write results/manifest.json (run it detached)
-  completeness  drain a small backlog twice (clean, and killed mid-drain), verify, no tolerances
+  completeness  work through a small backlog twice (clean, and killed mid-run), verify, no tolerances
   suite         the table: every case, N passes, asc/desc, rig vs data refusals
   ceiling       hold the largest case, starve the broker in steps
   report        results/suite.json -> results/suite.txt + results/suite.md
@@ -1007,7 +1007,7 @@ def cmd_fill():
 # ---------------------------------------------------------------- completeness
 
 def cmd_completeness():
-    """Drain a small backlog twice — clean, and with the worker killed mid-drain —
+    """Work through a small backlog twice — clean, and killed and restarted mid-run —
     and compare the sinks to the generator manifest with no tolerances."""
     c = cfg()
     topic = f"{c.topic_in}-small"
@@ -1034,12 +1034,12 @@ def cmd_completeness():
                 cm = max([t.get("committed", -1) for t in ticks] or [-1])
                 if kill_at and not killed and cm >= c.small:
                     # run 5: a kill after the drain has finished proves nothing
-                    raise Refusal("rig", f"the drain finished ({cm:,} records committed) before the pipeline "
+                    raise Refusal("rig", f"the run finished ({cm:,} records committed) before the pipeline "
                                          f"could be killed at {kill_at:.0%}. Nothing was proved. Make "
                                          f"backlog.smallCount big enough to span several checkpoint "
                                          f"intervals at the baseline rate.")
                 if kill_at and not killed and cm >= c.small * kill_at:
-                    log(f"KILL: committed={cm}, killing the task manager mid-drain")
+                    log(f"KILL: committed={cm}, killing the pipeline mid-run")
                     sh(f"docker kill {c.tm}")
                     if L.tm_running():
                         raise Refusal("rig", "docker kill reported success but the container is alive")
@@ -1050,11 +1050,11 @@ def cmd_completeness():
                     log("KILL: job RUNNING again after the restart")
                 if cm >= c.small:
                     time.sleep(c.ckpt_s + 2)
-                    log(f"drained to the last record in {time.time()-t0:.1f}s" + (" (killed and restarted mid-drain)" if killed else ""))
+                    log(f"worked through every record in {time.time()-t0:.1f}s" + (" (killed and restarted mid-run)" if killed else ""))
                     return {"group": group, "killed": killed, "drainS": round(time.time() - t0, 1),
                             "killedAtCommitted": killed_at}
                 if time.time() - t0 > 1800:
-                    raise Refusal("rig", f"drain did not finish: committed={cm} of {c.small}")
+                    raise Refusal("rig", f"it did not work through the whole backlog: {cm:,} of {c.small:,} records")
                 time.sleep(0.5)
         finally:
             try:
@@ -1073,7 +1073,7 @@ def cmd_completeness():
 
     try:
         a = drain(f"{c.project}-complete-clean"); a["verify"] = verify("clean drain"); out["arms"].append(a)
-        b = drain(f"{c.project}-complete-kill", kill_at=c.kill_frac); b["verify"] = verify("killed mid-drain"); out["arms"].append(b)
+        b = drain(f"{c.project}-complete-kill", kill_at=c.kill_frac); b["verify"] = verify("killed mid-run"); out["arms"].append(b)
         out["result"] = "PASS"
     except Refusal as e:
         out["result"] = "FAIL"; out["error"] = e.msg
@@ -1083,7 +1083,7 @@ def cmd_completeness():
     finally:
         L._CFG.topic_in = c.raw["topics"]["in"]
     save_json("completeness.json", out)
-    print(f"COMPLETENESS PASSED FOR BUILD {out['build']} (clean drain, and one killed and restarted at {c.kill_frac:.0%})")
+    print(f"COMPLETENESS PASSED FOR BUILD {out['build']} (a clean run, and one killed and restarted at {c.kill_frac:.0%})")
     return 0
 
 
@@ -1391,7 +1391,7 @@ def cmd_all(steps=None, results=None):
     mark("phase=all start")
     verdict = "PASS"
     say = {"up": "starting the stack", "preflight": "preflight checks",
-           "completeness": "proving nothing is lost, including after killing the pipeline mid-drain",
+           "completeness": "proving nothing is lost, including after killing the pipeline mid-run",
            "tinyproof": "the tiny proof: two cases end to end, and every guard broken on purpose",
            "fill": "filling the backlog — the long quiet one",
            "suite": "measuring the cases", "report": "writing the report"}

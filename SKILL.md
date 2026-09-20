@@ -117,7 +117,7 @@ been asked:
 | where it runs | a laptop, in Docker |
 | the stack | the images in `pipeline.json` — Flink, and the Kafka chosen in question 6 |
 | what is measured | the drain rate of a fixed backlog at each core count, read from committed broker offsets, with the resource columns beside it |
-| what is proved first | completeness with no tolerances, re-checked after killing the pipeline mid-drain; no throughput table is published for a build that has not passed |
+| what is proved first | completeness with no tolerances, re-checked after killing the pipeline mid-run; no throughput table is published for a build that has not passed |
 | what is built | the pipeline, a deterministic generator, a verifier, and the dashboard |
 | the shape of the suite | the passes per case from `pipeline.json`, ascending then descending, then the baseline once more as a drift check. State the number — it is most of the wall clock |
 | the guarantee | exactly-once checkpointing at the configured interval; an at-least-once sink made idempotent by emitting the absolute value per key. State both, and the interval |
@@ -193,7 +193,7 @@ bad window voids one case — so anything checkable now is checked now.
   and made the step read 3.73×. That is the baseline-shape problem §5 says to
   read off the job graph, and the harness prints the share beside the ratio so
   the short case names itself;
-- **kill the pipeline mid-drain and re-assert the totals** — a guarantee is a
+- **kill the pipeline mid-run and re-assert the totals** — a guarantee is a
   claim about failure and is untested until something has failed; finding out
   after the suite discards the suite;
 - run one full case with a 10–15 s window so every line of the harness
@@ -216,7 +216,7 @@ compared to that. Assert, with no tolerances:
 | distinct keys = the number predicted in the interview | a key you did not intend, or one that never arrived |
 | every aggregation sums to the manifest exactly | a lost or duplicated record |
 | two paths over the same input agree exactly | same, located |
-| after killing the pipeline mid-drain mid-drain, all of the above still hold | the guarantee you configured is not the one you have |
+| after killing the pipeline mid-run, all of the above still hold | the guarantee you configured is not the one you have |
 
 **Two settings, not one, and both are needed.** The user is asked what must be
 exactly right (§1 q4); which settings deliver it is a build decision made here:

@@ -626,7 +626,7 @@ services:
         state.backend.type: hashmap
         parallelism.default: {c.baseline}
         heartbeat.timeout: 120000
-""" + "".join(f"        {k}: {v}\n" for k, v in c.flink_props.items()) + """
+""" + "".join(f"        {k}: {v}\n" for k, v in c.flink_props.items()) + f"""
     volumes:
       - ckpt:/ckpt
       - {c.jar_dir}:/jobs:ro

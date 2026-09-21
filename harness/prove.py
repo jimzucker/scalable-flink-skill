@@ -30,6 +30,7 @@ Exit code 0 means the command's own assertion held; anything else, read the log.
 """
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -343,6 +344,35 @@ def cmd_selftest(live=True, topic=None):
 
     expect("a step above 2x is not reported as met (must not fire)",
            verdict_not_met_above_ideal(), "", should_fire=False)
+
+    def compose_is_filled_in():
+        """The generated stack file has no unfilled placeholders and parses.
+
+        compose_text() is three string literals joined. Adding flinkProperties
+        split it and left the trailing segment a plain string, so the job
+        manager's jar mount was written out as the literal "{c.jar_dir}" and
+        the file was not valid YAML. Nothing caught it: the harness renders
+        that file on every `up`, and no test had ever looked at it. Clean-room
+        run 35 lost about 25 minutes to it and could only get past it by
+        patching the string in memory.
+        """
+        def go():
+            text = L.compose_text()
+            left = re.findall(r"\{[A-Za-z_][A-Za-z0-9_.\[\]']*\}", text)
+            assert not left, f"the generated compose file still contains {sorted(set(left))}"
+            # and it is a document, not just placeholder-free
+            import subprocess as sp
+            r = sp.run(["python3", "-c",
+                        "import sys,yaml;yaml.safe_load(sys.stdin.read())"],
+                       input=text, capture_output=True, text=True)
+            if r.returncode and "No module named" not in r.stderr:
+                raise AssertionError(f"the generated compose file is not valid YAML: {r.stderr.strip()[:120]}")
+            for want in ("services:", "volumes:", "/jobs:ro"):
+                assert want in text, f"the generated compose file has no {want!r}"
+        return go
+
+    expect("the generated stack file is filled in (must not fire)",
+           compose_is_filled_in(), "", should_fire=False)
 
     def scorecard_width(limit=136):
         """The scorecard stays readable. It reached 175 characters once, a word

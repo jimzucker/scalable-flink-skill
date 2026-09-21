@@ -180,6 +180,7 @@ bad window voids one case — so anything checkable now is checked now.
 | slots ≥ parallelism × jobs | compare before submitting | job waits for resources while the harness times an empty pipeline |
 | transactional-ID prefix and consumer group are scoped per run | include the run id | 470-second cold start after ten runs; 22 dead series on the backlog panel |
 | back-pressure counters exist on the endpoint you will read | dump the endpoint and read what is there | ten minutes on a deprecated path |
+| nothing else is using the cores | load average against the core count, and what is busiest | a cap is a **share**, not a promise of cycles: on a busy host every case reads 100% of its cap and does less work for it, and no other column shows it |
 | the VM trim command is known | `docker run --rm --privileged --pid=host alpine nsenter -t 1 -m -u -n -i -- fstrim -v /var/lib/docker` | space freed inside a Docker Desktop VM never returns to the host |
 
 **Then the tiny proof, before any fill.** A few thousand records, end to end:
@@ -242,6 +243,15 @@ table is published for a build that has not passed. Put the same script in CI
 from a cold start, so it stays true after this morning's change.
 
 ## 5. Measurement discipline
+
+**Hold the machine still too.** A browser and a word processor are enough:
+clean-room run 34 read 100% of cap in all ten cases and produced no usable
+number at all, its readings 37%, 25% and 20% apart, because the host load
+reached 7.18 on 8 cores while it measured. A cgroup cap is a share of what
+the host has left, so the case still pins at its cap and simply does less
+work per cycle — the one failure mode every resource column in the table is
+blind to. The load average is recorded at the open and close of every window
+for exactly this reason.
 
 **Cap the component under test; hold everything else still.** Capping a task
 manager at 1, 2 and 4 cores on one laptop reproduces the curve that took 32

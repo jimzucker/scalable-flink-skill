@@ -1635,6 +1635,16 @@ def scorecard(out):
         # the full sentence only where it is not the answer we hoped for
         if bottleneck_short(last) != "Pipeline CPU":
             notes.append(f"  {n_cores(cs['cores'])}: {bottleneck(last)}")
+    busy = [(cs["cores"], r.get("hostLoadClose") or r.get("hostLoadOpen"), r.get("hostCores"))
+            for cs in (t.get("cases") or {}).values()
+            for r in (out.get("runs") or [])
+            if r.get("cores") == cs["cores"] and (r.get("hostLoadClose") or 0) > (r.get("hostCores") or 1e9)]
+    if busy:
+        worst = max(busy, key=lambda x: x[1])
+        notes.append(f"  the machine was busy with something else: load reached {worst[1]:.1f} on "
+                     f"{worst[2]} cores while measuring. A CPU cap is a share, not a promise of "
+                     f"cycles — every case can read 100% of its cap and still do less work. Close "
+                     f"what else is running and measure again.")
     L.append("")
     L.append("  Each pair is what it was allowed and how much of that went:")
     L.append("    pipeline CPU      cores it could use / how much of them it used")
@@ -1920,6 +1930,14 @@ def run_case(cores, pass_id, run_id, shape_ref, is_baseline, manifest,
         mem0_k = cgroup_mem(c.kafka)
         rec["tOpen"] = time.time()
         rec["open"] = open_tick
+        # What else the machine was doing. A cgroup cap is a share, not a
+        # guarantee of cycles: on a busy host a case reads 100% of its cap and
+        # does less work for it, which is invisible in every other column.
+        try:
+            rec["hostLoadOpen"] = round(os.getloadavg()[0], 2)
+            rec["hostCores"] = os.cpu_count()
+        except Exception:
+            pass
         boundaries, last, close_tick = 1, open_tick, None
         while True:
             tick = next_boundary(after=last)
@@ -1939,6 +1957,10 @@ def run_case(cores, pass_id, run_id, shape_ref, is_baseline, manifest,
         rec["brokerLimitBytes"] = mem1_k.get("limitBytes") or 0
         rec["tClose"] = time.time()
         rec["close"] = close_tick
+        try:
+            rec["hostLoadClose"] = round(os.getloadavg()[0], 2)
+        except Exception:
+            pass
         rec["boundaries"] = boundaries - 1
 
         bp = backpressure_in_window(rec["tOpen"], rec["tClose"])

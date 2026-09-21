@@ -837,6 +837,26 @@ def cmd_preflight():
             sh(f"docker rm -f {probe}", check=False)
         return f"--cpus throughout; read back NanoCpus={nano} and cgroup cpu.max = 2.0 cores"
 
+    def quiet_machine():
+        """Nothing else should be competing for the cores under test.
+
+        Reported, not enforced: a busy laptop is the owner's business and the
+        number to compare against is not one this project has measured. But a
+        cgroup cap is a share of what the host has left, so a case can read
+        100% of its cap on a machine that is doing half as much work per cycle,
+        and nothing else in the table would show it.
+        """
+        try:
+            one, five, fifteen = os.getloadavg()
+        except Exception:
+            return "load average not available on this host"
+        n = os.cpu_count() or 1
+        top = L.sh("ps -Ao %cpu,comm -r | head -4 | tail -3", check=False).stdout.strip().splitlines()
+        busiest = "; ".join(" ".join(x.split()[:2]) for x in top) if top else ""
+        verdict = "quiet" if one < n * 0.5 else ("busy" if one < n else "OVERSUBSCRIBED")
+        return (f"{verdict}: load {one:.2f} / {five:.2f} / {fifteen:.2f} on {n} cores"
+                + (f" — busiest now: {busiest}" if busiest else ""))
+
     def memory_budget():
         """Worker at its largest case, broker and job manager must fit the VM with
         room to spare. Runs 20 and 21 each lost attempts discovering this by
@@ -961,6 +981,7 @@ def cmd_preflight():
         return "; ".join(parts)
     check("what this host's own cores do", host_ceiling)
     check("backlog covers warm-up, window and headroom", backlog_sizing_hint)
+    check("nothing else is using the cores (reported)", quiet_machine)
     check("pipeline, broker and job manager against the VM (reported)", memory_budget)
     check("group / txn-id prefix scoped per run", scoping)
     check("back-pressure counters exist on the endpoint read", bp_endpoint)

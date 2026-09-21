@@ -104,6 +104,7 @@ def check_plan_discloses(fail):
         "the disk it writes": "backlogs",
         "the ports it takes": "ports in",
         "the mid-run kill": "killing the pipeline mid-run",
+        "where to watch it run": "results/PROGRESS.txt",
         "where it runs": "in Docker",
     }
     # section 1a had no unattended path and deadlocked clean-room run 31; section

@@ -867,6 +867,36 @@ def cmd_preflight():
             sh(f"docker rm -f {probe}", check=False)
         return f"--cpus throughout; read back NanoCpus={nano} and cgroup cpu.max = 2.0 cores"
 
+    def interview_and_plan():
+        """The run wrote down what it decided, before it had any numbers.
+
+        doccheck proves SKILL.md *asks* for these. Nothing proved a run ever
+        produced them, so the interview and the plan were honour-system and
+        every run produced them differently. Missing files fail; a plan that
+        does not name one of the disclosures is listed, because matching prose
+        is loose and a loose check that refuses is worse than one that tells
+        you what it could not find.
+        """
+        root = os.path.dirname(os.path.abspath(cfg().results))
+        missing = [f for f in ("ASSUMPTIONS.md", "PLAN.md")
+                   if not os.path.exists(os.path.join(root, f))]
+        if missing:
+            raise Exception(f"{' and '.join(missing)} not written. Section 1 says to answer the six "
+                            f"questions and write them down; section 1a says to write the plan even "
+                            f"with nobody to approve it. Both come before building.")
+        plan = open(os.path.join(root, "PLAN.md")).read().lower()
+        want = {"the objective": ("1.90", "near-linear"),
+                "how long it takes": ("hour",),
+                "what it writes": ("record", "backlog"),
+                "the ports it takes": ("port",),
+                "the guarantee": ("exactly-once",),
+                "the shape of the suite": ("pass",),
+                "the mid-run kill": ("kill",),
+                "where to watch it": ("progress.txt",)}
+        absent = [k for k, needles in want.items() if not any(n in plan for n in needles)]
+        return ("the plan names every disclosure" if not absent
+                else "the plan does not mention: " + ", ".join(absent))
+
     def quiet_machine():
         """Nothing else should be competing for the cores under test.
 
@@ -1011,6 +1041,7 @@ def cmd_preflight():
         return "; ".join(parts)
     check("what this host's own cores do", host_ceiling)
     check("backlog covers warm-up, window and headroom", backlog_sizing_hint)
+    check("the interview and the plan were written down", interview_and_plan)
     check("nothing else is using the cores (reported)", quiet_machine)
     check("pipeline, broker and job manager against the VM (reported)", memory_budget)
     check("group / txn-id prefix scoped per run", scoping)

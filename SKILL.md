@@ -183,6 +183,7 @@ bad window voids one case — so anything checkable now is checked now.
 | transactional-ID prefix and consumer group are scoped per run | include the run id | 470-second cold start after ten runs; 22 dead series on the backlog panel |
 | back-pressure counters exist on the endpoint you will read | dump the endpoint and read what is there | ten minutes on a deprecated path |
 | every case runs the same collector | the collector name off the engine's metrics, on every case | `--cpus 1` picks the serial collector and every case above it runs G1, so the baseline is a different program — worth +19% and a whole superlinear step |
+| the interview and the plan were written down | `ASSUMPTIONS.md` and `PLAN.md` exist before the stack does, and the plan names every disclosure | a run that never wrote down what it decided leaves a reader unable to tell what was agreed from what was assumed — and the six answers are the spec |
 | nothing else is using the cores | load average against the core count, and what is busiest | a cap is a **share**, not a promise of cycles: on a busy host every case reads 100% of its cap and does less work for it, and no other column shows it |
 | the VM trim command is known | `docker run --rm --privileged --pid=host alpine nsenter -t 1 -m -u -n -i -- fstrim -v /var/lib/docker` | space freed inside a Docker Desktop VM never returns to the host |
 

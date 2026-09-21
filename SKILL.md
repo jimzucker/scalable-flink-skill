@@ -124,6 +124,7 @@ been asked:
 | how long it takes | state an estimate in hours. Clean-room runs have taken two to three, and a user who expected twenty minutes will stop it halfway |
 | what it writes | the three backlogs from `pipeline.json` — suite, tiny proof and completeness — as record counts, and that they are tens of gigabytes of Kafka log. Host free disk is checked before every case, but a user who did not know should not find out from a guard |
 | what it occupies | the ports in `pipeline.json`, the partition count, and containers named for the project. Anything already on those ports will not start |
+| where to watch it | `results/PROGRESS.txt` — one sentence, overwritten: which step of seven, which case of ten, and roughly how long is left. Say this **in the plan**, before the yes, because the next thing that happens is two hours of quiet |
 
 Then the six answers, and every assumption made where a question was not asked.
 If the user objects, change it and show the plan again. **Do not start until
@@ -151,6 +152,13 @@ read it and pass it on at each step boundary and each case, with the number
 just measured. A person who has approved two hours of their laptop is owed
 more than silence, and a case that comes back wrong is worth knowing about
 before the other nine have run.
+
+**If you cannot speak to anyone until you finish** — a background run, a
+detached agent — then say so in the plan and name `results/PROGRESS.txt` as the
+place to watch. Promising updates you have no channel to deliver is worse than
+promising nothing: the reader waits for a message that cannot arrive. Whoever
+started the run is then the one who relays it, and they can only do that if
+they were told where to look.
 
 ## 3. Preflight: assertions that print PASS or FAIL before anything is built
 

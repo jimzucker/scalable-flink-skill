@@ -56,7 +56,10 @@
     "kafkaLibs": "/opt/kafka/libs"
   },
   "_flinkProperties": "Extra Flink settings for the job manager and every task manager. A metrics reporter goes here -- section 7 wants panels that need one. Example: {\"metrics.reporter.prom.factory.class\": \"org.apache.flink.metrics.prometheus.PrometheusReporterFactory\", \"metrics.reporter.prom.port\": \"9249\"} with the prometheus jar in the image's plugins directory. Slots, parallelism, worker memory, the checkpoint store and metrics.reporter.slf4j.* are refused: they decide what is being measured.",
-  "flinkProperties": {},
+  "_flinkProperties": "Extra Flink settings for the job manager and every task manager. env.java.opts.taskmanager pins the garbage collector, and it is not optional: --cpus 1 makes the JVM see one processor and choose the serial collector, while every other case gets G1. Clean-room run 35 measured it -- pinning G1 gave the one-core case +19% and moved 1->2 from 2.364x to 1.997x, so the whole superlinear first step had been the baseline running different code. A metrics reporter goes here too. Slots, parallelism, memory, the checkpoint store and metrics.reporter.slf4j.* are refused: they decide what is being measured.",
+  "flinkProperties": {
+    "env.java.opts.taskmanager": "-XX:+UseG1GC"
+  },
   "ports": {
     "kafka": 19092,
     "rest": 18081

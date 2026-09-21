@@ -111,7 +111,8 @@ def check_plan_discloses(fail):
     # 6 had the same hole and stopped run 32 with a fix in hand. Both are checked
     # so the third one does not happen quietly.
     for where, needle in (("section 1a", "When there is no human to say yes"),
-                          ("section 6", "no human to say yes, fix one thing"),
+                          ("section 6", "no human to say yes, tune until you run out of levers"),
+                          ("section 6", "If the step got worse, revert it"),
                           ("section 6", "Before looking at the pipeline, measure the machine"),
                           ("section 6", "prove.py ceiling"),
                           ("section 6", "prove.py probe --repeats"),

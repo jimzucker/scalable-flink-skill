@@ -1398,6 +1398,13 @@ def cmd_ceiling():
 
 # ---------------------------------------------------------------------- report
 
+def bottleneck_short_of(out, step):
+    """What held back the case a step ends at, for the report's fix list."""
+    last = next((r for r in reversed(out.get("runs") or [])
+                 if r.get("cores") == step.get("to") and r.get("status") in ("OK", "CEILING")), None)
+    return L.bottleneck_short(last) if last else None
+
+
 def cmd_report():
     out = load_json("suite.json")
     out["table"] = build_table(out["runs"], quick=out.get("quickLook", False))
@@ -1512,11 +1519,30 @@ def cmd_report():
         print("  plan -- what you would change, in this order, and what you expect it to")
         print("  move -- and get a yes before changing anything and measuring again. A")
         print("  re-run costs about what the run that just finished cost.")
+        # A short step with the pipeline pinned on CPU has nothing obvious to
+        # fix, and guessing is what section 8 exists to prevent. Two cheap
+        # measurements answer it, in this order, before anything is changed.
+        if any(bottleneck_short_of(out, r) == "Pipeline CPU" for r in short):
+            print()
+            print("  Every case was pinned on CPU, so there is no setting on the table to")
+            print("  change. Two measurements answer this, cheapest first:")
+            print()
+            print("   1. prove.py probe --repeats 9")
+            print("      Can this machine do the step at all, with no pipeline in the way?")
+            print("      Minutes, starts nothing. If the machine itself cannot, stop here.")
+            print()
+            print("   2. prove.py ceiling")
+            print("      Is the largest case already against a ceiling? Holds it at its size")
+            print("      and squeezes Kafka in steps. If the rate barely moves as Kafka is")
+            print("      starved, Kafka is not the ceiling and the pipeline is at its own.")
+            print("      A few short cases on the stack that is already up.")
+            print()
+            print("  Only then change something, and only one thing.")
         print()
-        print("  With no one to ask: apply the first item only, write what you changed and")
-        print("  what you expected in FIXES.md, measure once more, and stop there whether")
-        print("  or not it worked. Report both tables. One change per measurement is what")
-        print("  makes the second one mean anything.")
+        print("  With no one to ask: run those two, write what they said and what you")
+        print("  changed into FIXES.md, apply the first item only, measure once more, and")
+        print("  stop there whether or not it worked. Report both tables. One change per")
+        print("  measurement is what makes the second one mean anything.")
         return 1
     return 0
 

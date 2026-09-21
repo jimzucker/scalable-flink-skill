@@ -84,8 +84,10 @@ A reader can then see what was assumed rather than agreed.
    Duplicates have to be handled and not double counted, in all cases.*
 
    Ordering holds **per key** within a keyed stream — not across keys, and not
-   across a rebalance. Say so if the user's answer assumes otherwise. How the
-   duplicates are handled is a build decision, not a question: §4.
+   across a rebalance. Say so if the user's answer assumes otherwise. It is
+   not a caveat you mention and move past: §4 requires the verifier to assert
+   it, on both arms. How the duplicates are handled is a build decision, not a
+   question: §4.
 
 5. **Which Flink API should we use?** DataStream, where the developer has more
    control over the execution graph, or SQL, where the optimizer makes more of
@@ -229,7 +231,18 @@ compared to that. Assert, with no tolerances:
 | distinct keys = the number predicted in the interview | a key you did not intend, or one that never arrived |
 | every aggregation sums to the manifest exactly | a lost or duplicated record |
 | two paths over the same input agree exactly | same, located |
+| **each key's published values never go backwards** | order within a key is the one ordering guarantee a keyed stream makes, and the interview asked for it. A key that goes backwards on a clean run means the sink is not keyed by the aggregation key, or a rebalance sits between the aggregation and the sink |
+| **each key appears in exactly one partition** | per-key order cannot survive a key split across partitions, whatever the pipeline does. This is what makes the assertion above mean anything end to end |
 | after killing the pipeline mid-run, all of the above still hold | the guarantee you configured is not the one you have |
+
+**The killed arm is where the ordering rule earns its keep, and it needs
+stating carefully.** A restart replays, so a key may step backwards **once**
+and must then reach the same final value; more than once per key is a
+different fault, and never going backwards at all on a *clean* run is not
+negotiable. Clean-room run 35 measured exactly this shape — exactly one
+backward step per key across 4 symbol and 16 account keys, every total still
+exact — which is what an at-least-once sink made idempotent by the absolute
+value is supposed to look like.
 
 **Two settings, not one, and both are needed.** The user is asked what must be
 exactly right (§1 q4); which settings deliver it is a build decision made here:

@@ -125,6 +125,25 @@ def check_plan_discloses(fail):
     return f"the plan discloses all {len(needed)} unconditionals"
 
 
+def check_order_is_asserted(fail):
+    """The interview asks for ordering, so the verifier has to check it.
+
+    Section 1 q4's default says positions must be "published in order" and
+    section 4 listed four assertions, none of them about order. A skill that
+    asks a question and never verifies the answer is collecting an opinion.
+    Ordering within a key is the one ordering guarantee a keyed stream makes,
+    which is exactly why it is cheap to assert and worth refusing without.
+    """
+    skill = read(ROOT, "SKILL.md")
+    needed = {"per-key order": "published values never go backwards",
+              "one key in one partition": "each key appears in exactly one partition",
+              "what the killed arm may do": "may step backwards **once**"}
+    for name, needle in needed.items():
+        if needle not in skill:
+            fail(f"section 4 does not require {name} to be asserted")
+    return f"the verifier must assert {len(needed)} things about order"
+
+
 def check_example_backlogs(fail):
     """The example's backlogs are big enough for the rates on record.
 
@@ -233,7 +252,7 @@ def main():
     problems = []
     lines = []
     for check in (check_spread_ceiling, check_tiny_ratio_band, check_cases_match,
-                  check_plan_discloses, check_example_backlogs,
+                  check_plan_discloses, check_order_is_asserted, check_example_backlogs,
                   check_example_broker_memory, check_example_comments):
         lines.append(check(problems.append))
     for p in problems:

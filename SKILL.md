@@ -68,6 +68,16 @@ A reader can then see what was assumed rather than agreed.
    outputs **per input**, and a throttled emit is per interval. Counting a
    timer-driven output as fan-out is what makes the two-vantage guard disagree.
 
+   **A default with two inputs is not a problem, it is two topics.** The
+   harness owns exactly one input — the one it fills, measures and drains, the
+   one being scaled to capacity — and the outputs whose growth is a constant
+   multiple of it. A price feed is a topic you create, fill and read, named in
+   neither list, and the harness leaves it alone. The same goes for the
+   timer-driven market value on the way out. Three clean-room runs each stopped
+   to work this out and each reached the same answer, because the contract said
+   "the input topic" and "every topic it writes" and left the rest to be
+   inferred.
+
 3. **What are the keys, and how many distinct ones?**
 
    *Default: two key spaces. Symbol, and account / sub-account / symbol.

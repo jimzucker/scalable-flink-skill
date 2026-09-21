@@ -965,8 +965,22 @@ def cmd_preflight():
         2->4 = 1.645 with GC at 9.3%; the same build with memory scaled per core
         read 1.910 with GC at 2.3%, and the 2-core figure did not move)."""
         if not (c.tm_mem_per_core or c.raw["caps"].get("tmMemory") or c.per_case):
-            return ("uncapped: no process size and no container limit, so memory cannot be "
-                    "the thing that runs out; the GC ceiling checks it was not the constraint")
+            # "uncapped" was never true. Passing no process size does not leave
+            # memory to the engine: the image ships one. flink:1.20.1's
+            # config.yaml sets taskmanager.memory.process.size: 1728m, so every
+            # case gets the same flat figure -- the configuration this very
+            # check refuses when somebody writes it down. Clean-room run 36
+            # measured the cost: 2->4 read 1.510 on the image default and 1.743
+            # with memory scaled per subtask, and GC never flagged it (it was
+            # LOWEST, 1.40%, on the case losing the most).
+            img = L.image_tm_memory()
+            flat = img or "the image's own default"
+            raise Exception(
+                f"no memory keys are set, so every case runs on {flat} from the image's "
+                f"config.yaml -- one flat figure for 1, 2 and 4 cores, which is exactly what "
+                f"this check refuses when it is written down. Set caps.tmMemoryBase and "
+                f"caps.tmMemoryPerCore so each subtask gets the same memory. The GC ceiling "
+                f"does not catch this: run 36 measured GC at its lowest on the starved case.")
         if not c.tm_mem_per_core:
             return f"per case: {', '.join(f'{k}c {v}' for k, v in sorted(c.per_case.items()))}"
         return (f"{c.tm_mem_base} base + {c.tm_mem_per_core} per subtask: "

@@ -1591,8 +1591,8 @@ def scorecard(out):
     lowest = min((cs["cores"] for cs in t.get("cases", {}).values()), default=None)
     # Each column is what it was given, then how much of it was used, so a
     # reader sees the size and the utilisation without looking anything up.
-    L.append(f"  {'cores':>5}{'speed':>13}   {'pipeline CPU':>14}{'pipeline memory':>19}"
-             f"{'Kafka CPU':>13}{'Kafka memory':>22}   {'blocked by':<16}what to do")
+    L.append(f"  {'cores':>5}{'speed':>13}{'scaling':>9}   {'pipeline CPU':>13}{'pipeline memory':>17}"
+             f"{'Kafka CPU':>12}{'Kafka memory':>19}   {'blocked by':<14}what to do")
     # the key for those pairs goes under the table, where there is room for words
 
     notes = []
@@ -1600,9 +1600,9 @@ def scorecard(out):
         last = next((r for r in reversed(out.get("runs") or [])
                      if r.get("cores") == cs["cores"] and r.get("status") in ("OK", "CEILING")), None)
         if not last:
-            L.append(f"  {cs['cores']:>5}{cs['meanRecordsPerSec']:>12,.0f}/s   "
-                     f"{'—':>14}{'—':>19}{'—':>13}{'—':>22}   "
-                     f"{'Investigating':<16}find out what it is")
+            L.append(f"  {cs['cores']:>5}{cs['meanRecordsPerSec']:>12,.0f}/s{'—':>9}   "
+                     f"{'—':>13}{'—':>17}{'—':>12}{'—':>19}   "
+                     f"{'Investigating':<14}find out what it is")
             continue
         gc = last.get("gcFracOfCapacity")
         kc = last.get("kafkaCores")
@@ -1620,9 +1620,11 @@ def scorecard(out):
         # A dropped row is marked where the row is named, not after the advice:
         # "raise kafkaMemory to 6400m (not in the table)" read as one sentence.
         mark = "" if cs.get("reportable") else " *"
-        L.append(f"  {str(cs['cores']) + mark:>5}{cs['meanRecordsPerSec']:>12,.0f}/s   "
-                 f"{cpu:>14}{mem:>19}{kcpu:>13}{kmemcol:>22}"
-                 f"   {bottleneck_short(last):<16}"
+        st = step_into.get(cs["cores"])
+        scale = f"{st['ratio']:.2f}x" if st and st.get("reportable") else "—"
+        L.append(f"  {str(cs['cores']) + mark:>5}{cs['meanRecordsPerSec']:>12,.0f}/s{scale:>9}   "
+                 f"{cpu:>13}{mem:>17}{kcpu:>12}{kmemcol:>19}"
+                 f"   {bottleneck_short(last):<14}"
                  f"{corrective_action(last, step_into.get(cs['cores']), cs['cores'] == lowest)}")
         detail = action_detail(last, cs["cores"], step_into.get(cs["cores"]),
                                cs["cores"] == lowest)
@@ -1647,6 +1649,7 @@ def scorecard(out):
                      f"what else is running and measure again.")
     L.append("")
     L.append("  Each pair is what it was allowed and how much of that went:")
+    L.append("    scaling           what the step into this case gave — nothing on the baseline")
     L.append("    pipeline CPU      cores it could use / how much of them it used")
     L.append("    pipeline memory   memory it could use / share of the time spent tidying memory up")
     L.append("    Kafka CPU         cores Kafka could use / how much of them it used")
@@ -2325,16 +2328,16 @@ def render_markdown(out):
     kcap = getattr(c, "kafka_cap", 0) or 0
     step_into = {r["to"]: r for r in (t.get("stepRatios") or []) if r.get("to") is not None}
     lowest = min((cs["cores"] for cs in t.get("cases", {}).values()), default=None)
-    L += ["", "| cores | speed | pipeline CPU | pipeline memory | Kafka CPU | Kafka memory | "
-          "blocked by | what to do |", "|---:|---:|---|---|---|---|---|---|",
-          "| | | cores it could use / how much it used | memory it could use / share of the time "
+    L += ["", "| cores | speed | scaling | pipeline CPU | pipeline memory | Kafka CPU | Kafka memory | "
+          "blocked by | what to do |", "|---:|---:|---:|---|---|---|---|---|---|",
+          "| | | what the step into it gave | cores it could use / how much it used | memory it could use / share of the time "
           "spent tidying memory up | cores Kafka could use / how much it used | memory Kafka could "
           "use / how many times it filled up | | |"]
     for cs in t.get("cases", {}).values():
         last = next((r for r in reversed(out.get("runs") or [])
                      if r.get("cores") == cs["cores"] and r.get("status") in ("OK", "CEILING")), None)
         if not last:
-            L.append(f"| {cs['cores']} | {cs['meanRecordsPerSec']:,.0f}/s | — | — | — | — | "
+            L.append(f"| {cs['cores']} | {cs['meanRecordsPerSec']:,.0f}/s | — | — | — | — | — | "
                      f"Investigating | find out what it is |")
             continue
         gc = last.get("gcFracOfCapacity")
@@ -2353,7 +2356,9 @@ def render_markdown(out):
         kmemcol = ("—" if hits is None else
                    f"{size}, never full" if hits == 0 else f"{size}, full {hits:,}x")
         mark = "" if cs.get("reportable") else " \\*"
-        L.append(f"| {cs['cores']}{mark} | {cs['meanRecordsPerSec']:,.0f}/s | {cpu} | {mem} | "
+        st = step_into.get(cs["cores"])
+        scale = f"{st['ratio']:.2f}x" if st and st.get("reportable") else "—"
+        L.append(f"| {cs['cores']}{mark} | {cs['meanRecordsPerSec']:,.0f}/s | {scale} | {cpu} | {mem} | "
                  f"{kcpu} | {kmemcol} | {bottleneck_short(last)} | "
                  f"{corrective_action(last, step_into.get(cs['cores']), cs['cores'] == lowest)} |")
     for cs in t.get("cases", {}).values():

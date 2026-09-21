@@ -500,11 +500,12 @@ and whether doubling the resource doubled the work.
 ```
 SCORECARD
 
-  cores        speed     pipeline CPU    pipeline memory    Kafka CPU       Kafka memory   blocked by      what to do
-      2     374,507/s         2 / 100%    uncapped / 2.0%    2.5 / 12%     6g, never full   Pipeline CPU    tune the pipeline
-      4     673,414/s          4 / 97%    uncapped / 1.2%    2.5 / 25%     6g, never full   Pipeline CPU    investigate
+  cores        speed  scaling    pipeline CPU  pipeline memory   Kafka CPU     Kafka memory   blocked by    what to do
+      2     374,507/s        —        2 / 100%  uncapped / 2.0%   2.5 / 12%   6g, never full   Pipeline CPU  tune the pipeline
+      4     673,414/s    1.80x         4 / 97%  uncapped / 1.2%   2.5 / 25%   6g, never full   Pipeline CPU  investigate
 
   Each pair is what it was allowed and how much of that went:
+    scaling           what the step into this case gave — nothing on the baseline
     pipeline CPU      cores it could use / how much of them it used
     pipeline memory   memory it could use / share of the time spent tidying memory up
     Kafka CPU         cores Kafka could use / how much of them it used

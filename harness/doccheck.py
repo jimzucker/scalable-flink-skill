@@ -113,7 +113,8 @@ def check_plan_discloses(fail):
                           ("section 6", "no human to say yes, fix one thing"),
                           ("section 6", "Before looking at the pipeline, measure the machine"),
                           ("section 6", "prove.py ceiling"),
-                          ("section 6", "prove.py probe --repeats")):
+                          ("section 6", "prove.py probe --repeats"),
+                          ("section 6a", "Tuning what you built")):
         if needle not in skill:
             fail(f"{where} has no path for an unattended run")
     missing = [name for name, needle in needed.items() if needle not in plan]

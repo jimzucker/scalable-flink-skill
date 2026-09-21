@@ -547,6 +547,30 @@ the table depends on; anything else means the number measures something
 other than what it claims to. **A step ratio without this column beside it is
 a number with no idea what produced it.**
 
+## 6a. Tuning what you built
+
+Everything above measures. This is what to change, and it is the part a fresh
+agent cannot work out for itself — each line was paid for by a run. **Ordered
+by measured effect, one change at a time, both arms measured on one build with
+the cases interleaved.** Anything else is a guess wearing a number.
+
+| change | what it was worth | when to reach for it |
+|---|---|---|
+| **read the input once** | **+22.5% at 1 core, +24.4% at 4** | the source topic is read once per aggregation. Parse once and fan out through a side output — not a second source read, and not two chained operators, which copy the record per consumer with object reuse off |
+| **memory per subtask, not one flat figure** | **about 14%** | a flat `tmMemory` divides across each case's subtasks. Measured: flat 2048m read 2→4 = 1.645 with GC at 9.3%; the same build with memory scaled per core read 1.910 with GC at 2.3%, and the 2-core figure did not move |
+| **give the broker its page cache** | **about 13%** | a broker that cannot hold the backlog reads it off disk. `kafkaMemory` minus `kafkaHeap` is what it caches with |
+| **compress the sink writes** | **−16% raw, and the claim becomes measurable** | the top case is *waiting to write*. Run 32's 4-core case sat at 93.7% of cap uncompressed and 99.0% with lz4: slower, and the first table of the two that was worth publishing |
+| **fewer subtasks for the same cores** | **about 8%**, ~3 points of it the source idling | four subtasks where two would do |
+
+**Two things were tested and changed nothing**, so do not spend a run on them:
+partition count (8 against 16 — and 16 failed every parallelism-4 case for an
+unstable warm-up) and network buffer fraction (0.15 against 0.30).
+
+**The fourth row is the one that surprises people.** Compressing the writes
+makes the pipeline *slower* and makes the measurement *valid*: a case that is
+waiting on its sink is not measuring cores at all, so its number answers no
+question. A slower table that means something beats a faster one that does not.
+
 ## 7. The dashboard explains; the harness measures
 
 **Add it through `extraServices` in `pipeline.json`** — a map of service name to

@@ -445,7 +445,7 @@ def cmd_selftest(live=True, topic=None):
         return go
 
     expect("detail: the baseline says why (must not fire)",
-           detail(dict(tmCapFrac=0.99), 1, None, True, "nothing below it"), "", should_fire=False)
+           detail(dict(tmCapFrac=0.99), 1, None, True, "Do not tune it"), "", should_fire=False)
     expect("detail: a short step names both numbers (must not fire)",
            detail(dict(tmCapFrac=0.99), 4, short, False, "1.53x, short of the 1.90x"),
            "", should_fire=False)
@@ -455,7 +455,7 @@ def cmd_selftest(live=True, topic=None):
            detail(dict(tmCapFrac=0.96, brokerLimitHits=12780, brokerLimitBytes=4096 * 1048576),
                   2, None, False, "from 4g to about 6.25g"), "", should_fire=False)
     expect("action: the baseline has no step into it (must not fire)",
-           steps(dict(tmCapFrac=0.99), None, True, "tune the pipeline"), "", should_fire=False)
+           steps(dict(tmCapFrac=0.99), None, True, "check it matches"), "", should_fire=False)
     expect("action: a step that doubled needs nothing (must not fire)",
            steps(dict(tmCapFrac=0.99), met, False, "add cores"), "", should_fire=False)
     expect("action: a short step says investigate (must not fire)",

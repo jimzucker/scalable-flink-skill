@@ -1145,6 +1145,22 @@ def assert_cap(container, cores):
     return nano
 
 
+def image_tm_memory():
+    """What the engine image itself sets, when the harness passes nothing.
+
+    Passing no process size does not mean memory is unmanaged: flink:1.20.1
+    ships config.yaml with taskmanager.memory.process.size: 1728m, so every
+    case gets the same flat figure. Read it rather than assume it -- the value
+    moves between images and vendors.
+    """
+    c = cfg()
+    r = sh(f"docker run --rm --entrypoint sh {c.flink_img} -c "
+           f"\"grep -A3 -E '^taskmanager:' /opt/flink/conf/config.yaml 2>/dev/null | "
+           f"grep -oE '[0-9]+[mMgG]' | head -1\"", check=False, timeout=120)
+    v = (r.stdout or "").strip().splitlines()
+    return v[0] if v else None
+
+
 def tm_memory_capped():
     """Is the worker's memory actually capped by us, or left to the engine?
 
@@ -1593,6 +1609,11 @@ def action_detail(rec, cores, step=None, is_baseline=False):
             return (f"{n_cores(cores)}: doubling gave {ratio:.2f}x, more than the {ideal:.2f}x a doubling "
                     f"can give, so the smaller case reads too low.")
         if not step.get("meetsClaim"):
+            lo = step.get("ratioLowCI")
+            if lo and ratio >= need:
+                return (f"{n_cores(cores)}: doubling gave {ratio:.2f}x, which clears the {need:.2f}x "
+                        f"target — but the readings are far enough apart that it could be as low as "
+                        f"{lo:.2f}x, and the lower bound is what is judged.")
             return f"{n_cores(cores)}: doubling gave {ratio:.2f}x, short of the {need:.2f}x target."
         return None
     if label == "Kafka memory":

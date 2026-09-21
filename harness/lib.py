@@ -1563,7 +1563,7 @@ def corrective_action(rec, step=None, is_baseline=False):
     label = bottleneck_short(rec)
     if label == "Pipeline CPU":
         if is_baseline:
-            return "tune the pipeline"
+            return "check it matches"
         if not step or not step.get("reportable"):
             return "investigate"
         if (step.get("ratioLowCI") or 0) > step["idealRatio"] or not step.get("meetsClaim"):
@@ -1581,8 +1581,10 @@ def action_detail(rec, cores, step=None, is_baseline=False):
     label = bottleneck_short(rec)
     if label == "Pipeline CPU":
         if is_baseline:
-            return (f"{n_cores(cores)} is the baseline: there is nothing below it to compare against, so "
-                    f"the way up is a faster pipeline, not more cores.")
+            return (f"{n_cores(cores)} is the baseline. Do not tune it: making the baseline faster makes "
+                    f"the step off it smaller, and the steps are what is being claimed. The only thing "
+                    f"worth fixing here is a way it differs from the other cases — a different garbage "
+                    f"collector, a different job graph, a cap that did not apply.")
         if not step or not step.get("reportable"):
             return f"{n_cores(cores)}: no usable step into this case, so there is nothing to judge it by."
         ratio, ideal = step["ratio"], step["idealRatio"]

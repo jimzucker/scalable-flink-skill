@@ -453,6 +453,13 @@ This is the first step of investigating a short step, not an aside — it is
 cheap, and it decides whether there is anything in the pipeline to look for.
 
 **When there is no human to say yes, tune until you run out of levers.**
+**What is being tuned is the steps, not any case's speed.** The claim is
+1→2 and 2→4, each 1.90× or better. Making the baseline faster makes the step
+off it *smaller*, so a faster one-core case is not progress and can be the
+opposite — the only thing worth fixing on a baseline is a way it differs from
+the cases above it, and clean-room run 35 found exactly one: a different
+garbage collector. Judge every change by what it did to the steps.
+
 §6a is a finite list, so this terminates. One at a time, in its order:
 
 1. Apply **one** change. Write in `FIXES.md` what you changed, which row of
@@ -528,7 +535,7 @@ and whether doubling the resource doubled the work.
 SCORECARD
 
   cores        speed   scaling     pipeline CPU   pipeline memory    Kafka CPU        Kafka memory   blocked by      what to do
-      2    374,507/s         —         2 / 100%   uncapped / 2.0%    2.5 / 12%      6g, never full   Pipeline CPU    tune the pipeline
+      2    374,507/s         —         2 / 100%   uncapped / 2.0%    2.5 / 12%      6g, never full   Pipeline CPU    check it matches
       4    673,414/s     1.80x          4 / 97%   uncapped / 1.2%    2.5 / 25%      6g, never full   Pipeline CPU    investigate
 
   Each pair is what it was allowed and how much of that went:
@@ -538,8 +545,10 @@ SCORECARD
     Kafka CPU         cores Kafka could use / how much of them it used
     Kafka memory      memory Kafka could use, and how often it filled up
 
-  2 cores is the baseline: there is nothing below it to compare against, so the way
-      up is a faster pipeline, not more cores.
+  2 cores is the baseline. Do not tune it: making the baseline faster makes the step
+      off it smaller, and the steps are what is being claimed. The only thing worth
+      fixing here is a way it differs from the other cases — a different garbage
+      collector, a different job graph, a cap that did not apply.
   4 cores: doubling gave 1.80x, short of the 1.90x target.
 
   2->4 cores: doubling gave 1.80x, target 1.90x  ->  missed

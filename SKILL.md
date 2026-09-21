@@ -391,6 +391,24 @@ whoever asked for the run as a plan — what you would change, in what order,
 what you expect it to move — and get a yes before measuring again. A re-run
 costs what the last one cost.
 
+**A short step with every case pinned on CPU has nothing to change, so
+measure before you guess.** Two cheap measurements, in this order, and only
+then a change:
+
+1. **`prove.py probe --repeats 9`** — can this machine do the step at all,
+   with no pipeline in the way? Minutes, starts nothing. If the machine
+   cannot, stop: there is nothing in the pipeline to find.
+2. **`prove.py ceiling`** — is the largest case already against a ceiling?
+   It holds that case at its size and starves the component beside it in
+   steps. If the rate barely moves while the broker is squeezed, the broker
+   is not the ceiling and the pipeline is at its own. A few short cases on
+   the stack that is already up.
+
+Neither is optional when a step falls short and the scorecard says CPU,
+because *CPU* means every setting the run controls was already at its limit.
+Guessing from there is what §8 exists to prevent, and a re-run costs what the
+last one cost.
+
 **Before looking at the pipeline, measure the machine.** A step that falls
 short is being compared against a doubling the *host* may not deliver either.
 `prove.py probe` runs the bare cores with no pipeline involved — minutes, and

@@ -1068,9 +1068,22 @@ def cmd_tinyproof():
                     f"vantage {rec['vantageDisagreement']:.2%}")
             except CaseRefused as e:
                 out["cases"].append(e.rec)
-                log(f"  FAILED ({e.refusal.scope}): {e.refusal.msg}")
-                out["result"] = "FAIL"
-                rc = 1
+                # A ceiling is a result, not a failure -- the suite keeps it,
+                # reports it, and leaves it out of the ratios. The tiny proof
+                # ended the whole chain on one, twice in clean-room run 35, on
+                # a one-core case whose 2- and 4-core neighbours were fine and
+                # would have produced a publishable 2->4.
+                if e.refusal.scope == "ceiling":
+                    e.rec["status"] = "CEILING"
+                    out.setdefault("ceilings", []).append(
+                        {"case": cores, "message": e.refusal.msg})
+                    log(f"  CEILING: {e.refusal.msg}")
+                    log(f"  keeping it: a case that is not the constraint is reported and left out "
+                        f"of the steps, not a reason to stop.")
+                else:
+                    log(f"  FAILED ({e.refusal.scope}): {e.refusal.msg}")
+                    out["result"] = "FAIL"
+                    rc = 1
         if rc == 0:
             # GUARD: the suite's disk, projected from the measured shape, before the fill
             try:
@@ -1142,6 +1155,7 @@ def cmd_tinyproof():
             print()
             for a, b in pairs:
                 if a not in recs or b not in recs:
+                    log(f"  {a}->{b}: not bounded — {a if a not in recs else b} cores was a ceiling")
                     continue
                 ratio = recs[b]["recordsPerSec"] / recs[a]["recordsPerSec"]
                 ideal = b / a
@@ -1592,10 +1606,12 @@ def cmd_report():
             print("  lists what has been worth what on this rig, biggest first, and the two")
             print("  things that were tested and changed nothing.")
         print()
-        print("  With no one to ask: run those two, write what they said and what you")
-        print("  changed into FIXES.md, apply the first item only, measure once more, and")
-        print("  stop there whether or not it worked. Report both tables. One change per")
-        print("  measurement is what makes the second one mean anything.")
+        print("  With no one to ask: run those two first, then work down section 6a one")
+        print("  change at a time. Write what you changed and what you expect it to move")
+        print("  into FIXES.md before you measure. Keep a change that helped; revert one")
+        print("  that did not, so the next is measured against your best pipeline and not")
+        print("  your worst. Stop when the target is met, when no untried row matches the")
+        print("  symptom, or after four changes.")
         return 1
     return 0
 

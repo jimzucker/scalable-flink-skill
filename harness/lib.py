@@ -1345,6 +1345,10 @@ def backpressure_in_window(t_open, t_close):
         out[vtx] = {k.replace("TimeMsPerSecond", ""): round(sum(v) / len(v) / 1000.0, 4) for k, v in mm.items()}
         out[vtx]["samples"] = min(len(v) for v in mm.values())
     out["_gc"] = {k: (max(v) - min(v)) for k, v in gc.items()}
+    # Which collector actually ran, not which one was asked for. --cpus 1 makes
+    # the JVM see one processor and choose the serial collector, so the baseline
+    # runs different code from every case above it unless something pins it.
+    out["_gcNames"] = sorted({k.split(".")[0] for k in gc})
     return out
 
 
@@ -1448,6 +1452,26 @@ def size_broker_memory(limit_bytes, hits):
     if hits <= T["brokerLimitHits"] or not limit_bytes:
         return None
     return int(limit_bytes * 1.6 / 268435456) * 256
+
+
+def tm_mem_of(cores):
+    """What this case was actually given, not Cfg.tm_mem's 4096m default.
+
+    With tmMemoryPerCore set, preflight prints 2560m / 3072m / 4096m and the
+    scorecard printed 4096m on every row -- the default, which pipeline.json
+    never set. The same phantom went into suite.json as heldStill. lib.py
+    already records why that is wrong for the uncapped path; this is the
+    capped one, found by clean-room run 35.
+    """
+    c = cfg()
+    if not tm_memory_capped():
+        return "uncapped"
+    over = (c.per_case.get(cores) or {}).get("tmMemory")
+    if over:
+        return over
+    if c.tm_mem_per_core:
+        return mem_for(c.tm_mem_per_core, cores, c.tm_mem_base)
+    return c.tm_mem
 
 
 def bottleneck(rec):
@@ -1585,7 +1609,6 @@ def scorecard(out):
     L = ["SCORECARD", ""]
     kcap = getattr(c, "kafka_cap", 0) or 0
     kmem = getattr(c, "kafka_mem", "") or "?"
-    tmem = c.tm_mem if tm_memory_capped() else "uncapped"
     # the step that ends at each case, so the advice can ask whether it doubled
     step_into = {r["to"]: r for r in (t.get("stepRatios") or []) if r.get("to") is not None}
     lowest = min((cs["cores"] for cs in t.get("cases", {}).values()), default=None)
@@ -1614,7 +1637,7 @@ def scorecard(out):
         kc = last.get("kafkaCores")
         hits = last.get("brokerLimitHits")
         cpu = "{} / {:.0%}".format(cs["cores"], last.get("tmCapFrac") or 0)
-        mem = "{} / {:.1%}".format(tmem, gc) if gc is not None else "—"
+        mem = "{} / {:.1%}".format(tm_mem_of(cs["cores"]), gc) if gc is not None else "—"
         kcpu = "{:g} / {:.0%}".format(kcap, kc / kcap) if kc is not None and kcap else "—"
         # from the record, not from today's pipeline.json: a report rendered
         # against a changed config would otherwise show a limit the run never
@@ -1648,6 +1671,17 @@ def scorecard(out):
             for cs in (t.get("cases") or {}).values()
             for r in (out.get("runs") or [])
             if r.get("cores") == cs["cores"] and (r.get("hostLoadClose") or 0) > (r.get("hostCores") or 1e9)]
+    seen = {}
+    for cs in (t.get("cases") or {}).values():
+        for r in (out.get("runs") or []):
+            if r.get("cores") == cs["cores"] and r.get("gcNames"):
+                seen[cs["cores"]] = ",".join(r["gcNames"])
+    if len(set(seen.values())) > 1:
+        notes.append("  the cases did not all run the same garbage collector: "
+                     + "; ".join(f"{k} core{'' if k == 1 else 's'} {v}" for k, v in sorted(seen.items()))
+                     + ". A case with a different collector is a different program, so the step into "
+                       "it is not a scaling measurement. Pin it in flinkProperties "
+                       "(env.java.opts.taskmanager: -XX:+UseG1GC) and measure again.")
     if busy:
         worst = max(busy, key=lambda x: x[1])
         notes.append(f"  the machine was busy with something else: load reached {worst[1]:.1f} on "
@@ -1682,10 +1716,18 @@ def scorecard(out):
         # A step above its ideal clears the target, because the target is a
         # floor -- but reporting that as a plain "met" contradicts the note
         # above it saying the smaller case reads low. Say what it is instead.
-        if (r.get("ratioLowCI") or 0) > r["idealRatio"]:
+        lo = r.get("ratioLowCI")
+        if (lo or 0) > r["idealRatio"]:
             verdict = f"above {r['idealRatio']:.2f}x, so the smaller case reads low"
+        elif r.get("meetsClaim"):
+            verdict = "met"
+        elif lo and r["ratio"] >= need:
+            # the number shown clears the target and the verdict says missed,
+            # which reads as a broken tool unless it says what was judged
+            verdict = (f"missed — the readings are far enough apart that it could be as low "
+                       f"as {lo:.2f}x, and that is what is judged")
         else:
-            verdict = "met" if r.get("meetsClaim") else "missed"
+            verdict = "missed"
         L.append(f"  {r['step']} cores: doubling gave {r['ratio']:.2f}x, target {need:.2f}x"
                  f"  ->  {verdict}")
     return "\n".join(L)
@@ -1974,6 +2016,7 @@ def run_case(cores, pass_id, run_id, shape_ref, is_baseline, manifest,
         rec["boundaries"] = boundaries - 1
 
         bp = backpressure_in_window(rec["tOpen"], rec["tClose"])
+        rec["gcNames"] = bp.get("_gcNames") or []
         elapsed = (close_tick["ts"] - open_tick["ts"]) / 1000.0
         d_committed = close_tick["committed"] - open_tick["committed"]
         rec["elapsedS"] = round(elapsed, 2)
@@ -2350,10 +2393,9 @@ def render_markdown(out):
         gc = last.get("gcFracOfCapacity")
         kc = last.get("kafkaCores")
         hits = last.get("brokerLimitHits")
-        tmem = c.tm_mem if tm_memory_capped() else "uncapped"
         kmem = getattr(c, "kafka_mem", "") or "?"
         cpu = "{} / {:.0%}".format(cs["cores"], last.get("tmCapFrac") or 0)
-        mem = "{} / {:.1%}".format(tmem, gc) if gc is not None else "—"
+        mem = "{} / {:.1%}".format(tm_mem_of(cs["cores"]), gc) if gc is not None else "—"
         kcpu = "{:g} / {:.0%}".format(kcap, kc / kcap) if kc is not None and kcap else "—"
         # from the record, not from today's pipeline.json: a report rendered
         # against a changed config would otherwise show a limit the run never

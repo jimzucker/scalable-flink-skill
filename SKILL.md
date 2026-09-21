@@ -180,6 +180,7 @@ bad window voids one case — so anything checkable now is checked now.
 | slots ≥ parallelism × jobs | compare before submitting | job waits for resources while the harness times an empty pipeline |
 | transactional-ID prefix and consumer group are scoped per run | include the run id | 470-second cold start after ten runs; 22 dead series on the backlog panel |
 | back-pressure counters exist on the endpoint you will read | dump the endpoint and read what is there | ten minutes on a deprecated path |
+| every case runs the same collector | the collector name off the engine's metrics, on every case | `--cpus 1` picks the serial collector and every case above it runs G1, so the baseline is a different program — worth +19% and a whole superlinear step |
 | nothing else is using the cores | load average against the core count, and what is busiest | a cap is a **share**, not a promise of cycles: on a busy host every case reads 100% of its cap and does less work for it, and no other column shows it |
 | the VM trim command is known | `docker run --rm --privileged --pid=host alpine nsenter -t 1 -m -u -n -i -- fstrim -v /var/lib/docker` | space freed inside a Docker Desktop VM never returns to the host |
 
@@ -202,6 +203,9 @@ bad window voids one case — so anything checkable now is checked now.
   and made the step read 3.73×. That is the baseline-shape problem §5 says to
   read off the job graph, and the harness prints the share beside the ratio so
   the short case names itself;
+- a case that is **not the constraint is a ceiling, not a failure** — kept,
+  reported, and left out of the steps, exactly as in the suite. The steps it
+  would have been part of are not bounded, and the rest still are;
 - **kill the pipeline mid-run and re-assert the totals** — a guarantee is a
   claim about failure and is untested until something has failed; finding out
   after the suite discards the suite;
@@ -243,6 +247,17 @@ table is published for a build that has not passed. Put the same script in CI
 from a cold start, so it stays true after this morning's change.
 
 ## 5. Measurement discipline
+
+**Every case must run the same code, and the baseline is where that breaks.**
+§5 lists what must not differ between the baseline and the other cases — a
+shuffle, a network hop, a second JVM. Add the garbage collector: `--cpus 1`
+makes the JVM see one processor and pick the **serial** collector, while every
+case above it runs G1. Clean-room run 35 measured it. Pinning the collector
+gave the one-core case **+19%** and moved 1→2 from **2.364× to 1.997×** — the
+superlinear first step that three runs had reported was the baseline running
+different code, not the pipeline scaling. Pin it in `flinkProperties`
+(`env.java.opts.taskmanager: -XX:+UseG1GC`) and read it back off the engine's
+own metrics, the same way the job graph is read back.
 
 **Hold the machine still too.** A browser and a word processor are enough:
 clean-room run 34 read 100% of cap in all ten cases and produced no usable
@@ -437,15 +452,27 @@ the range is narrower than the shortfall, or say it cannot be settled here.
 This is the first step of investigating a short step, not an aside — it is
 cheap, and it decides whether there is anything in the pipeline to look for.
 
-**When there is no human to say yes, fix one thing and measure once more.**
-Not a loop: take the *first* item on that list, apply the single change the
-scorecard names, write down in `FIXES.md` what you changed and what you
-expected it to move, re-run, and stop — whether or not it worked. Report both
-tables, before and after. One change per measurement is the rule that makes
-the second table mean anything, and an unattended agent that keeps going is
-spending hours nobody agreed to. If the first item has no named change —
-*investigate* — then there is nothing to apply, and stopping with the finding
-is the result.
+**When there is no human to say yes, tune until you run out of levers.**
+§6a is a finite list, so this terminates. One at a time, in its order:
+
+1. Apply **one** change. Write in `FIXES.md` what you changed, which row of
+   §6a it is, and what you expect it to move — *before* measuring, so the
+   prediction can be wrong in public.
+2. Measure. One change per measurement is what makes the number mean anything.
+3. **If the step got worse, revert it.** A change that cost 0.05× is not a
+   step toward anything, and leaving it in place means the next lever is
+   measured against a pipeline you already know is worse. Clean-room run 35
+   applied its one permitted change, moved 2→4 from 1.815× to 1.769×, and
+   stopped there — worse than it started, because the rule said stop.
+4. Stop when the target is met, when §6a has no untried row whose symptom
+   matches, or after **four** changes. Four is not a measured number; it is a
+   budget, and a run that spends it without meeting the target has found
+   something worth a person's attention rather than another attempt.
+
+Report every attempt, kept or reverted, with its prediction and what actually
+happened. The ones that failed are the more useful half: run 35's memory fix
+did nothing for the case it was named for, and its subtask fix moved source
+idle exactly as predicted while the throughput went to the wrong cases.
 
 **A failed check stops the suite — when it is about the rig.** A cap that did not
 apply at one core will not apply at two; a busy cluster, a bad window anchor,

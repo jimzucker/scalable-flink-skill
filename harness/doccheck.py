@@ -183,6 +183,23 @@ def check_example_backlogs(fail):
             f"tiny {b.get('tinyCount'):,} >= {tiny_want:,}")
 
 
+def check_example_matches_interview(fail):
+    """The example config describes the pipeline the interview asks for.
+
+    Question 1's default has a price input and a market value emitted every 10
+    seconds. The example described only the positions half and mentioned
+    neither, so "take the defaults" gave two different answers depending on
+    which file you read, and clean-room run 36 reported the interview's own
+    default as a pipeline the harness could not express. It can; the example
+    just never said how.
+    """
+    ex = read(HERE, "pipeline.example.json").lower()
+    for what, needle in (("the price input", "price"), ("the market value output", "market value")):
+        if needle not in ex:
+            fail(f"pipeline.example.json does not mention {what}, which question 1's default asks for")
+    return "the example covers the interview's whole pipeline"
+
+
 def check_example_broker_memory(fail):
     """The shipped example gives Kafka at least as much page cache as the
     configurations on record that actually produced a table.
@@ -252,7 +269,8 @@ def main():
     problems = []
     lines = []
     for check in (check_spread_ceiling, check_tiny_ratio_band, check_cases_match,
-                  check_plan_discloses, check_order_is_asserted, check_example_backlogs,
+                  check_plan_discloses, check_order_is_asserted,
+                  check_example_matches_interview, check_example_backlogs,
                   check_example_broker_memory, check_example_comments):
         lines.append(check(problems.append))
     for p in problems:

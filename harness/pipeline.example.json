@@ -1,5 +1,6 @@
 {
   "project": "st11",
+  "_topics": "These are the topics the HARNESS owns, not every topic the pipeline has. The interview's default business case also has a prices input keyed by symbol and a market-values output emitted every 10 seconds — both belong to the project and are deliberately absent here. Create and fill the price topic yourself (the generator is the natural place: fill it once at build time, it is tens of records, not millions) and read it as a second source. Write market values to their own topic and keep it OUT of topics.out: its rows are per interval, not per input, so counting them would make the two vantage points disagree by construction. Set retention.bytes on both, since the harness will not (section 3).",
   "topics": {
     "in": "block-trades",
     "out": [
@@ -8,6 +9,7 @@
     ]
   },
   "partitions": 8,
+  "_marketValues": "The throttled emit the interview asks for. Configurable interval, default 10000 ms. It is not counted in outputsPerInput and its topic is not in topics.out — see _topics. The verifier should still check it: every market value equal to that key's final position x its latest published price, exactly, which is one of the assertions section 4 requires.",
   "_outputsPerInput": "Sink records per input record, summed across every output topic. Derive it, do not copy this: the two-vantage guard compares broker offsets against sink rows and a wrong value makes them disagree. One position per trade plus one per allocation at four allocations is 1 + 4 = 5, not 8.",
   "outputsPerInput": 5,
   "checkpointMs": 10000,

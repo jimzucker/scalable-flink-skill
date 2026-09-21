@@ -1591,8 +1591,13 @@ def scorecard(out):
     lowest = min((cs["cores"] for cs in t.get("cases", {}).values()), default=None)
     # Each column is what it was given, then how much of it was used, so a
     # reader sees the size and the utilisation without looking anything up.
-    L.append(f"  {'cores':>5}{'speed':>13}{'scaling':>9}   {'pipeline CPU':>13}{'pipeline memory':>17}"
-             f"{'Kafka CPU':>12}{'Kafka memory':>19}   {'blocked by':<14}what to do")
+    # One definition of the widths, used by the header and by every row, so the
+    # two cannot drift apart. They did: each hard-coded its own numbers.
+    W = dict(cores=5, speed=13, scaling=10, cpu=14, mem=18, kcpu=13, kmem=20, blocked=16)
+    L.append(f"  {'cores':>{W['cores']}}{'speed':>{W['speed']}}{'scaling':>{W['scaling']}}   "
+             f"{'pipeline CPU':>{W['cpu']}}{'pipeline memory':>{W['mem']}}"
+             f"{'Kafka CPU':>{W['kcpu']}}{'Kafka memory':>{W['kmem']}}   "
+             f"{'blocked by':<{W['blocked']}}what to do")
     # the key for those pairs goes under the table, where there is room for words
 
     notes = []
@@ -1600,9 +1605,10 @@ def scorecard(out):
         last = next((r for r in reversed(out.get("runs") or [])
                      if r.get("cores") == cs["cores"] and r.get("status") in ("OK", "CEILING")), None)
         if not last:
-            L.append(f"  {cs['cores']:>5}{cs['meanRecordsPerSec']:>12,.0f}/s{'—':>9}   "
-                     f"{'—':>13}{'—':>17}{'—':>12}{'—':>19}   "
-                     f"{'Investigating':<14}find out what it is")
+            L.append(f"  {cs['cores']:>{W['cores']}}"
+                     f"{cs['meanRecordsPerSec']:>{W['speed'] - 2},.0f}/s{'—':>{W['scaling']}}   "
+                     f"{'—':>{W['cpu']}}{'—':>{W['mem']}}{'—':>{W['kcpu']}}{'—':>{W['kmem']}}   "
+                     f"{'Investigating':<{W['blocked']}}find out what it is")
             continue
         gc = last.get("gcFracOfCapacity")
         kc = last.get("kafkaCores")
@@ -1622,9 +1628,10 @@ def scorecard(out):
         mark = "" if cs.get("reportable") else " *"
         st = step_into.get(cs["cores"])
         scale = f"{st['ratio']:.2f}x" if st and st.get("reportable") else "—"
-        L.append(f"  {str(cs['cores']) + mark:>5}{cs['meanRecordsPerSec']:>12,.0f}/s{scale:>9}   "
-                 f"{cpu:>13}{mem:>17}{kcpu:>12}{kmemcol:>19}"
-                 f"   {bottleneck_short(last):<14}"
+        L.append(f"  {str(cs['cores']) + mark:>{W['cores']}}"
+                 f"{cs['meanRecordsPerSec']:>{W['speed'] - 2},.0f}/s{scale:>{W['scaling']}}   "
+                 f"{cpu:>{W['cpu']}}{mem:>{W['mem']}}{kcpu:>{W['kcpu']}}{kmemcol:>{W['kmem']}}"
+                 f"   {bottleneck_short(last):<{W['blocked']}}"
                  f"{corrective_action(last, step_into.get(cs['cores']), cs['cores'] == lowest)}")
         detail = action_detail(last, cs["cores"], step_into.get(cs["cores"]),
                                cs["cores"] == lowest)

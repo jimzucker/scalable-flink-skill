@@ -500,9 +500,9 @@ and whether doubling the resource doubled the work.
 ```
 SCORECARD
 
-  cores        speed  scaling    pipeline CPU  pipeline memory   Kafka CPU     Kafka memory   blocked by    what to do
-      2     374,507/s        —        2 / 100%  uncapped / 2.0%   2.5 / 12%   6g, never full   Pipeline CPU  tune the pipeline
-      4     673,414/s    1.80x         4 / 97%  uncapped / 1.2%   2.5 / 25%   6g, never full   Pipeline CPU  investigate
+  cores        speed   scaling     pipeline CPU   pipeline memory    Kafka CPU        Kafka memory   blocked by      what to do
+      2    374,507/s         —         2 / 100%   uncapped / 2.0%    2.5 / 12%      6g, never full   Pipeline CPU    tune the pipeline
+      4    673,414/s     1.80x          4 / 97%   uncapped / 1.2%    2.5 / 25%      6g, never full   Pipeline CPU    investigate
 
   Each pair is what it was allowed and how much of that went:
     scaling           what the step into this case gave — nothing on the baseline
@@ -524,7 +524,7 @@ afternoon and each drift was reasonable on its own:
 - **Two or three words per cell, and every sentence under the table.** Writing
   the advice into the row took it to 175 characters, one addition at a time.
   `prove.py selftest-pure` renders the longest branch there is and fails over
-  130 — break it on purpose when adding a column, because a guard whose own
+  136 — break it on purpose when adding a column, because a guard whose own
   failure case is unchecked is weaker than it looks. Writing that one found
   two columns colliding at seven-figure values.
 - **A cell reads without the key.** `6.25g / 0` needed the legend; `6.25g,

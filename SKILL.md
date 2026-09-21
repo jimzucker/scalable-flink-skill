@@ -47,7 +47,11 @@ answer down as a stated assumption in `ASSUMPTIONS.md`, and build against that.
 A reader can then see what was assumed rather than agreed.
 
 1. **What goes into the pipeline, and what comes out?** A few sentences, in the
-   user's own words. This becomes the spec.
+   user's own words. This becomes the spec — **the topics, the generator and
+   the verifier are derived from it**, not from the example config. The example
+   shows one pipeline's answer; the harness constrains only two things, and
+   neither is a design: which topic it fills and measures, and that the
+   fan-out into `topics.out` is a constant per input.
 
    *Default: an order arrives with a unique id and symbol, order quantity and a
    list of allocations; each allocation is keyed by account / sub-account and
@@ -55,7 +59,8 @@ A reader can then see what was assumed rather than agreed.
    account+subaccount+symbol and by symbol. That input is the one scaled up to
    drive the pipeline to capacity. A second input carries prices, keyed by
    symbol and timestamp; the pipeline joins those to the positions and emits a
-   position and market value every 10 seconds.*
+   market value every 10 seconds. Positions themselves are published as they
+   change, one per input — only the market value is throttled.*
 
 2. **Does one input produce more than one output?**
 

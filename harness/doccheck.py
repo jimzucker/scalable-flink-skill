@@ -183,6 +183,24 @@ def check_example_backlogs(fail):
             f"tiny {b.get('tinyCount'):,} >= {tiny_want:,}")
 
 
+def check_only_the_throttled_thing_is_throttled(fail):
+    """Question 1 and question 2 must not disagree about what is throttled.
+
+    Q1 read "emits a position and market value every 10 seconds" while Q2 said
+    positions are one per symbol plus one per allocation -- five records per
+    input -- and only the market value is throttled. An agent reading Q1 alone
+    throttles the positions too, and outputsPerInput stops being a constant,
+    which is the one thing the two-vantage check needs it to be.
+    """
+    skill = read(ROOT, "SKILL.md")
+    if "position and market value every" in skill:
+        fail("question 1 says a position is emitted on the throttle interval; question 2 says "
+             "positions are one per input and only the market value is throttled")
+    if "only the market value is throttled" not in skill:
+        fail("question 1 does not say that only the market value is throttled")
+    return "only the market value is throttled, in both questions"
+
+
 def check_example_matches_interview(fail):
     """The example config describes the pipeline the interview asks for.
 
@@ -270,6 +288,7 @@ def main():
     lines = []
     for check in (check_spread_ceiling, check_tiny_ratio_band, check_cases_match,
                   check_plan_discloses, check_order_is_asserted,
+                  check_only_the_throttled_thing_is_throttled,
                   check_example_matches_interview, check_example_backlogs,
                   check_example_broker_memory, check_example_comments):
         lines.append(check(problems.append))

@@ -283,6 +283,35 @@ def check_example_comments(fail):
     return f"{checked} derived value(s) in pipeline.example.json"
 
 
+def check_tinyproof_reruns(fail):
+    """§6a says the tiny proof can be re-run after the fill. That is only true
+    while the disk projection credits the backlog already on the broker, so the
+    claim is checked against the function that has to make it good."""
+    import inspect
+    import lib
+    sig = inspect.signature(lib.disk_verdict)
+    if "input_on_disk_bytes" not in sig.parameters:
+        fail("disk_verdict does not credit the backlog already on disk, so the tiny proof "
+             "cannot be re-run after the fill, which SKILL.md \u00a76a says it can")
+    for where, text in (("SKILL.md", read(ROOT, "SKILL.md")),
+                        ("harness/README.md", read(HERE, "README.md"))):
+        if "re-run after the fill" not in text and "re-runs after the\nfill" not in text:
+            fail(f"{where} does not say the tiny proof can be re-run after the fill")
+    # and the credit actually changes the verdict, on run 36's own shape
+    shape = dict(in_bytes_per_rec=172.3, backlog=220_000_000, sink_bytes_per_in=284.8,
+                 partitions=8, n_out_topics=2, ckpt_bytes=151552)
+    try:
+        lib.disk_verdict(77.3e9, **shape)
+        fail("the projection no longer refuses run 36's post-fill re-run without the credit; "
+             "the self-test fixture and this check disagree")
+    except lib.Refusal:
+        pass
+    d = lib.disk_verdict(77.3e9, input_on_disk_bytes=37.9e9, **shape)
+    if not d["fits"]:
+        fail("crediting the backlog on disk still refuses run 36's post-fill re-run")
+    return "the tiny proof re-runs after the fill, and disk_verdict credits the backlog"
+
+
 def main():
     problems = []
     lines = []
@@ -290,7 +319,8 @@ def main():
                   check_plan_discloses, check_order_is_asserted,
                   check_only_the_throttled_thing_is_throttled,
                   check_example_matches_interview, check_example_backlogs,
-                  check_example_broker_memory, check_example_comments):
+                  check_example_broker_memory, check_example_comments,
+                  check_tinyproof_reruns):
         lines.append(check(problems.append))
     for p in problems:
         print(f"doccheck: {p}")

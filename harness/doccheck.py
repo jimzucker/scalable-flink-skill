@@ -549,6 +549,42 @@ def check_shape_ignores_the_plan(fail):
     return "the shape comparison ignores the plan it keeps for drawing"
 
 
+def check_run41_lessons(fail):
+    """The findings clean-room run 41 paid for, held in the prose that carries
+    them. Each cost that run real time and each is a sentence someone will
+    tidy away."""
+    skill = read(ROOT, "SKILL.md")
+    wanted = {
+        "*It moves in steps.*": "\u00a75 does not warn that a windowed progress signal moves "
+                                "one window at a time",
+        "**at the smallest case**": "\u00a75 does not say to size the step against the smallest case",
+        "last checkpoint": "\u00a75 does not warn that the two readings are taken at different moments",
+        "property of the job, not of the test data": "\u00a75 does not say a fan-out must be the job's "
+                                                     "property rather than the generator's",
+        "make the pipeline cost something per record": "\u00a76a has no lever for a pipeline that is too "
+                                                       "cheap per record to be bound by its cores",
+        "Two of these rows do not apply": "\u00a76a does not say which levers a given pipeline cannot use",
+        "assertion with nothing to compare is written down": "\u00a74 does not say what to do when an "
+                                                             "assertion has nothing to compare",
+        "panel list is for a pipeline with fan-out": "\u00a77 does not say the panels assume a fan-out",
+    }
+    for needle, why in wanted.items():
+        if why and needle not in skill:
+            fail(f"SKILL.md: {why}")
+    ex = read(HERE, "pipeline.example.windowed.json")
+    if "sum of that field" not in ex:
+        fail("the windowed example does not point at the exact progress signal (a count the pipeline "
+             "already publishes) over the coarse one")
+    if "topicsAlsoWritten" not in read(HERE, "README.md"):
+        fail("harness/README.md does not document topicsAlsoWritten at all")
+    import lib
+    import inspect
+    if "include_declared" not in inspect.signature(lib.recreate_output_topics).parameters:
+        fail("recreate_output_topics cannot clear the run's own outputs, so a verifier asked for "
+             "different assertions on the two completeness arms sees both arms' rows at once")
+    return "run 41's findings are still written down"
+
+
 def main():
     problems = []
     lines = []
@@ -565,7 +601,8 @@ def main():
                   check_design_is_diffed,
                   check_windowed_pipelines,
                   check_both_examples_load,
-                  check_shape_ignores_the_plan):
+                  check_shape_ignores_the_plan,
+                  check_run41_lessons):
         lines.append(check(problems.append))
     for p in problems:
         print(f"doccheck: {p}")

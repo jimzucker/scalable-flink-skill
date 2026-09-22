@@ -136,11 +136,15 @@ A reader can then see what was assumed rather than agreed.
    *Make sure the cardinality is realistic, as 4K symbols vs 4 will materially
    impact the application design.*
 
-   **A small key set does not spread over the cores by itself.** Flink hashes
-   each key into one of `maxParallelism` key groups and hands every subtask a
-   contiguous range of them, so four keys landing on four subtasks is luck, not
-   arithmetic. The demo's sixteen account keys land **5/3/4/4** at Flink's
-   default of 128 groups: one core does a quarter more work than an even split,
+   **A key set does not spread over the cores by itself, and a small one
+   rarely does.** Flink hashes each key into one of `maxParallelism` key groups
+   and hands every subtask a contiguous range, so an even split is luck rather
+   than arithmetic at any cardinality: 16 keys land 5/3/4/4 over four subtasks
+   at the default 128 groups, and 100 keys land 29/27/21/23. The busiest
+   subtask does proportionally more work, so its share sets a ceiling on that
+   stage — 0.80 of linear in the first case, 0.86 in the second. Preflight
+   measures yours and names the `pipeline.max-parallelism` that evens it out.
+   Taking the first of those as the worked example: one core does a quarter more work than an even split,
    that stage cannot return more than 0.80 of linear at four cores, and nothing
    in the table says "key skew" — it looks like a pipeline that did not scale.
    Preflight measures it (§3) and names the `pipeline.max-parallelism` that
@@ -262,7 +266,7 @@ bad window voids one case — so anything checkable now is checked now.
 | the JDK the engine needs resolves | print the resolved version and pin it | wrong `java` on PATH |
 | the engine can write its state directory | write a file as the runtime user | every job rejected for a directory it cannot create |
 | the metrics reporter is not duplicated | look in the plugins dir before copying a jar into `lib/` | container dies at startup |
-| disk budget on the **host**, not the container | `backlog + backlog × fan-out × undrained cases + checkpoint state` against host `df` | full disk with no shell to recover in |
+| disk budget on the **host**, not the container, as a **placeholder** — it assumes a record size until one has been measured, and the tiny proof replaces it minutes later with the bytes per record the broker actually stored. Read the tiny proof's figure, not this one | `backlog + backlog × fan-out × undrained cases + checkpoint state` against host `df` | full disk with no shell to recover in |
 | retention on every topic written but never drained | `retention.bytes` set; it is a periodic sweep, not a bound | sink log 7× its cap between sweeps |
 | the generator is deterministic | two fills with one seed are byte-identical | no expected answer can be computed |
 | CPU cap mechanism chosen once | `--cpus` throughout **or** quota/period throughout; `--cpus 0` is a no-op, `--cpu-quota=-1` sets a period the daemon then will not change | second case measured at the first case's cap |
@@ -378,6 +382,14 @@ The suite report carries the graph a second way: **a Mermaid diagram rendered
 from the plan the engine served**, not drawn. A drawing is a claim; that one
 is the job.
 
+**An assertion with nothing to compare is written down, not skipped.** The
+table above is four assertions for a pipeline with two paths over one input.
+A pipeline with one path cannot compare two, and a pipeline with no key the
+interview predicted cannot check cardinality. Say in `ASSUMPTIONS.md` which
+assertion does not apply and why. A reader can then tell a check that passed
+from one that was never made, which is the whole point of a list with no
+tolerances in it.
+
 Record the build hash beside every number, and **gate throughput on this**: no
 table is published for a build that has not passed. Put the same script in CI
 from a cold start, so it stays true after this morning's change.
@@ -468,6 +480,25 @@ the committed offsets. This is delegated for the same reason correctness is
 delegated to `verifier.cmd`: the harness cannot read progress out of an
 arbitrary output, and whoever wrote the pipeline can. A pipeline that declares
 neither is refused rather than measured once and called measured.
+
+**Two things make a delegated second reading disagree, and neither shows in
+the numbers.** *It moves in steps.* A windowed pipeline's progress jumps by a
+whole window: work out how many input records **one window holds** and compare
+it with how many a measurement window consumes **at the smallest case** — that
+case reads slowest and has the finest requirement. One hour of a thousand
+sensors at a reading a second is 3.6 million records; a one-core window that
+consumes 47 million is 7.6% per step, against a 5% tolerance, and the two
+counts then disagree at random. The fix is in the data or the job, not the
+harness. *And they are read at different moments.* The committed offset is
+where the source was at the **last checkpoint**; the outputs are where the
+pipeline is **now**. If the rate is not flat across the window they differ by
+the change in that lead — measured on one rig at 2 to 3 seconds of drain.
+
+**A fan-out is a property of the job, not of the test data.** A uniform
+generator makes any windowed pipeline *look* like it has one — 36,000 readings
+a row, so `outputsPerInput: 0.0000278` would pass. It would be a lie: change
+the data and the number changes. If the ratio is not fixed by what the job
+does, declare a command instead.
 
 **Read throughput from the transport, not the engine.** At 100% CPU the
 engine's metric service is starved with everything else; one case
@@ -778,6 +809,7 @@ the cases interleaved.** Anything else is a guess wearing a number.
 | **give the broker its page cache** | **about 13%** | a broker that cannot hold the backlog reads it off disk. `kafkaMemory` minus `kafkaHeap` is what it caches with |
 | **compress the sink writes** | **−16% raw, and the claim becomes measurable** | the top case is *waiting to write*. Run 32's 4-core case sat at 93.7% of cap uncompressed and 99.0% with lz4: slower, and the first table of the two that was worth publishing |
 | **fewer subtasks for the same cores** | **about 8%**, ~3 points of it the source idling | four subtasks where two would do |
+| **make the pipeline cost something per record** | **the difference between measuring cores and measuring the broker** | every case sits below its cap with the source idle. A pipeline that is cheap per record is bound by the transport long before its cores: run 41 read 1.6 million records a second on one core and no case was CPU-bound until the input side was fixed — fetch sizing, record size, the broker's page cache. Look at source idle, not at the rate |
 | **spread the keys evenly** | **up to 0.80 → 1.00 of linear** at four cores on the demo's own keys | the preflight row says the keyed stage's keys land unevenly. Add the `pipeline.max-parallelism` it names to `flinkProperties`. This is arithmetic, not a measurement: a subtask holding a quarter more keys than its neighbours does a quarter more work |
 
 **Measure each change with `prove.py tinyproof`, not with a suite.** It runs
@@ -789,6 +821,14 @@ projection counted the same backlog as used *and* as still to write, refused
 a suite that fitted, and made every lever cost a delete and a re-fill, about
 twelve minutes of broker I/O each (clean-room run 36). Confirm the winner with
 the suite once, at the end.
+
+**Two of these rows do not apply to every pipeline, let alone every
+laptop.** *Read the input once* needs a pipeline that reads it twice, which
+means two or more aggregations. *Compress the sink writes* needs a sink under
+load. A pipeline with one aggregation and a throttled output has neither, and
+arrives at the tuning loop with four levers rather than six — the two largest
+numbers in the table among the missing. Check which rows your pipeline can
+even use before you count how many changes you have left.
 
 **The levers transfer; the percentages do not.** Every figure above was
 measured on one pipeline on one laptop. Reading the input once is worth
@@ -859,6 +899,14 @@ that does not cover the suite is visible beside the numbers it failed to show.
 | CPU per component | which one is in the way — including the idle one |
 | backlog remaining | is this a drain, and did it run out? |
 | checkpoint duration | what does the guarantee cost? |
+
+**The panel list is for a pipeline with fan-out; yours may not have one.**
+Two of those seven ask a fan-out question — *rate per stage* and *the two
+paths overlaid* — and a pipeline with one aggregation and a throttled output
+can answer neither. Replace them with the same question in its own shape:
+records read per second against rows published per second on a log scale, and
+the parallel subtasks of the one aggregation overlaid. Keep the question, not
+the panel.
 
 On the first render check five things: the legend fits; nothing is secretly on
 a second axis; the timezone is right; every panel has data (a "No data" panel

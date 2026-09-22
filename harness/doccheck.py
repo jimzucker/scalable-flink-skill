@@ -312,6 +312,27 @@ def check_tinyproof_reruns(fail):
     return "the tiny proof re-runs after the fill, and disk_verdict credits the backlog"
 
 
+def check_broker_cpu_hook(fail):
+    """Section 7 names a file for the broker half of the CPU panel. It has to
+    be there, and it has to refuse to run without a name prefix -- an exporter
+    that publishes every container on the machine is not a hook, it is a leak."""
+    path = os.path.join(HERE, "dashboard", "docker_cpu_exporter.py")
+    if not os.path.exists(path):
+        fail("harness/dashboard/docker_cpu_exporter.py is missing, and SKILL.md \u00a77 names it")
+        return "broker CPU hook: missing"
+    body = read(HERE, "dashboard", "docker_cpu_exporter.py")
+    if "PREFIX is not set" not in body:
+        fail("the CPU exporter does not refuse to start without PREFIX, so it would export "
+             "every container on the machine")
+    if "docker_cpu_exporter.py" not in read(ROOT, "SKILL.md"):
+        fail("SKILL.md \u00a77 does not name the exporter that feeds the CPU per component panel")
+    readme = read(HERE, "README.md")
+    for needle in ("docker_cpu_exporter.py", "docker.sock", "PREFIX"):
+        if needle not in readme:
+            fail(f"harness/README.md gives no extraServices example naming {needle}")
+    return "the CPU per component panel has a broker source, and it needs a name prefix"
+
+
 def main():
     problems = []
     lines = []
@@ -320,7 +341,8 @@ def main():
                   check_only_the_throttled_thing_is_throttled,
                   check_example_matches_interview, check_example_backlogs,
                   check_example_broker_memory, check_example_comments,
-                  check_tinyproof_reruns):
+                  check_tinyproof_reruns,
+                  check_broker_cpu_hook):
         lines.append(check(problems.append))
     for p in problems:
         print(f"doccheck: {p}")

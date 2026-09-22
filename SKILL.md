@@ -678,6 +678,23 @@ sanctioned way — the harness is still not to be forked.
 
 **Five of the seven panels need engine metrics, and those need a reporter**: set one through `flinkProperties` in `pipeline.json`, which reaches the job manager and every task manager. Clean-room run 32 had no such hook, could not fork the harness, and spent about fifty minutes rebuilding the numbers from outside the engine — Kafka offsets, a tail of each sink, the REST API and the docker socket. The settings the measurement depends on are refused rather than silently overridden.
 
+**The CPU-per-component panel needs the broker, and no reporter can give it to
+you.** `flinkProperties` reaches the job manager and the workers; the panel's
+whole point is the component *beside* them — §5's broker at 0.48 cores that is
+still the ceiling. cAdvisor is the obvious answer and it does not work on
+Docker Desktop for macOS: its Docker factory registers against the socket and
+it still reports one series, because the cgroup tree it reads inside the VM
+does not contain the containers. Use
+**`harness/dashboard/docker_cpu_exporter.py`**, which ships with this skill:
+about a hundred lines that read cumulative CPU nanoseconds per container off
+the Docker API and serve them as a Prometheus counter. Copy it next to your
+provisioning files, mount that **directory** — a single-file bind mount breaks
+the moment the host file is rewritten by a tool that replaces the inode — and
+add the `extraServices` entry from `harness/README.md`. Clean-room run 36 spent
+half an hour on this, wrote the same thing, and said every run would write it
+again. Nothing off it is ever quoted as a result: the harness reads the cgroup
+counter directly for the table, and this is for looking at.
+
 Build it, provision it from a file that ships with the stack, and never take a
 reported number off it — engine meters are ~60 s moving averages and its
 metric service starves at exactly the load you care about. Render images

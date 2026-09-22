@@ -158,9 +158,12 @@ def check_run42_lessons(fail):
     windowed = read(HERE, "pipeline.example.windowed.json")
 
     # the metrics reporter has a route to the classpath at all
-    if "ENABLE_BUILT_IN_PLUGINS" not in skill or "flinkEnv" not in skill:
-        fail("SKILL.md section 7 no longer says how the reporter jar reaches the classpath; "
-             "setting flinkProperties alone does nothing on flink:1.20.1")
+    if "Do not set `ENABLE_BUILT_IN_PLUGINS` on these images" not in skill:
+        fail("SKILL.md section 7 no longer warns against ENABLE_BUILT_IN_PLUGINS on flink:1.20.x. "
+             "The reporters ship as plugins there; setting it kills the job manager at startup, "
+             "and clean-room run 43 lost its first prove.py up to this exact advice")
+    if "flinkEnv" not in skill:
+        fail("the flinkEnv hook is no longer described in SKILL.md section 7")
     if "flink_env" not in lib_src or "flinkEnv" not in readme:
         fail("the flinkEnv hook is gone from the harness or its field table, so section 7's "
              "metrics advice has no route again")

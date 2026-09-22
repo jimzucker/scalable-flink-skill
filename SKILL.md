@@ -91,6 +91,17 @@ A reader can then see what was assumed rather than agreed.
    *Make sure the cardinality is realistic, as 4K symbols vs 4 will materially
    impact the application design.*
 
+   **A small key set does not spread over the cores by itself.** Flink hashes
+   each key into one of `maxParallelism` key groups and hands every subtask a
+   contiguous range of them, so four keys landing on four subtasks is luck, not
+   arithmetic. The demo's sixteen account keys land **5/3/4/4** at Flink's
+   default of 128 groups: one core does a quarter more work than an even split,
+   that stage cannot return more than 0.80 of linear at four cores, and nothing
+   in the table says "key skew" — it looks like a pipeline that did not scale.
+   Preflight measures it (§3) and names the `pipeline.max-parallelism` that
+   makes it even; for those key names it is 1115, and the layout becomes
+   4/4/4/4. Name the key sets in `pipeline.json`'s `keySets` so it can.
+
 4. **What has to be exactly right?**
 
    *Default: positions and market values must be published in order. At the end
@@ -194,6 +205,7 @@ bad window voids one case — so anything checkable now is checked now.
 | the generator is deterministic | two fills with one seed are byte-identical | no expected answer can be computed |
 | CPU cap mechanism chosen once | `--cpus` throughout **or** quota/period throughout; `--cpus 0` is a no-op, `--cpu-quota=-1` sets a period the daemon then will not change | second case measured at the first case's cap |
 | the broker can cache the backlog | `kafkaMemory` minus `kafkaHeap` against the least any recorded configuration produced a table with | the broker reads the backlog back off disk, becomes the constraint instead of the cores, and the cases come back as ceilings — 44 minutes to find out |
+| the keys divide evenly across subtasks | Flink's own key-group assignment, run out of the image under test, for every key set named in `keySets` | four keys do not spread over four subtasks by themselves. The demo's sixteen account keys land 5/3/4/4 at the default 128 key groups, which bounds that stage at 0.80 of linear at four cores and reads as a pipeline that did not scale |
 | slots ≥ parallelism × jobs | compare before submitting | job waits for resources while the harness times an empty pipeline |
 | transactional-ID prefix and consumer group are scoped per run | include the run id | 470-second cold start after ten runs; 22 dead series on the backlog panel |
 | back-pressure counters exist on the endpoint you will read | dump the endpoint and read what is there | ten minutes on a deprecated path |
@@ -423,9 +435,10 @@ for it.
 |---|---|
 | the resource cap was not applied | read it back from the container, never the environment variable |
 | parallelism ≠ cap ≠ allocated slots | all three read back from the engine on every case |
-| the job graph differs from the other cases | vertex count and edge ship strategies read off the running plan |
+| the job graph differs from the other cases | vertex count, edge ship strategies and the key-group count read off the running plan. Flink picks `maxParallelism` from the parallelism when nothing sets it, so two cases can be given different key layouts — the same class of difference as a baseline with a different graph, one level down |
 | the component under test is not the constraint | ≥95% of cap at every case, baseline included; external-boundary back-pressure not material; the broker never hits its own memory limit inside a window (a starved page cache depresses the rate while the cores still read 96% of cap) . A case that misses is a **ceiling**: measured, reported with its rate as where scaling stops, and excluded from the ratios — never deleted |
 | the input divides evenly across subtasks | partition count divisible by every parallelism under test (8 partitions serves 1, 2, 4; 6 would leave the 4-core case reading 2/2/1/1 and never reaching its cap) |
+| the keys divide evenly across subtasks | the engine's own key-group assignment says where every key in `keySets` would land at every case. A subtask with **no keys** always refuses; an uneven one refuses when a `pipeline.max-parallelism` exists that would even it out, and is reported in the row when none does |
 | memory is not the constraint | **every case gives its subtasks the same memory**, as a base plus a per-core share. Passing nothing does not leave memory to the engine: the image ships a flat figure — `flink:1.20.1` sets 1728m — so every case runs on the same total, which is the configuration this rule exists to refuse. Clean-room run 36 measured 2→4 at 1.510 on the image default against 1.743 with memory per subtask, and the GC ceiling did **not** catch it: GC was at its lowest, 1.40%, on the case losing the most. A case whose GC exceeds 5.5% of its capacity is still a ceiling, not a result |
 | the claim itself | each step returns **1.90× or better** on a doubling, or the chain fails with the per-core, idle, GC and cap figures for both cases — a valid table that does not scale is a result about the pipeline, not a table to publish |
 | a failed case still owns the cluster | job torn down on **every** exit path |
@@ -645,6 +658,7 @@ the cases interleaved.** Anything else is a guess wearing a number.
 | **give the broker its page cache** | **about 13%** | a broker that cannot hold the backlog reads it off disk. `kafkaMemory` minus `kafkaHeap` is what it caches with |
 | **compress the sink writes** | **−16% raw, and the claim becomes measurable** | the top case is *waiting to write*. Run 32's 4-core case sat at 93.7% of cap uncompressed and 99.0% with lz4: slower, and the first table of the two that was worth publishing |
 | **fewer subtasks for the same cores** | **about 8%**, ~3 points of it the source idling | four subtasks where two would do |
+| **spread the keys evenly** | **up to 0.80 → 1.00 of linear** at four cores on the demo's own keys | the preflight row says the keyed stage's keys land unevenly. Add the `pipeline.max-parallelism` it names to `flinkProperties`. This is arithmetic, not a measurement: a subtask holding a quarter more keys than its neighbours does a quarter more work |
 
 **Measure each change with `prove.py tinyproof`, not with a suite.** It runs
 every case the suite will run, back to back on one build, and takes minutes

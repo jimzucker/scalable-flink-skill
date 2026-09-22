@@ -301,6 +301,13 @@ class Cfg:
         # Clean-room run 32 spent about 50 minutes writing a metrics exporter
         # from outside the engine to get round it, and noted every run would
         # rewrite the same thing.
+        # Which fields of the generator's manifest hold a keyed stage's key set.
+        # The manifest already lists every key (section 4 computes the expected
+        # answer from the input), so naming the fields is all it takes to find
+        # out where Flink would put them -- and a small key set does not spread
+        # over subtasks by itself. Clean-room run 36 had to write its own tool
+        # and pick key names by hand to get an even layout.
+        self.key_sets = {str(k): str(v) for k, v in (c.get("keySets") or {}).items()}
         self.flink_props = c.get("flinkProperties") or {}
         if isinstance(self.flink_props, str):
             self.flink_props = dict(
@@ -410,10 +417,11 @@ def log(*a):
         f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {line}\n")
 
 
-def sh(cmd, check=True, timeout=600):
+def sh(cmd, check=True, timeout=600, input=None):
     """Never silence a command while you are still finding out whether it works."""
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout,
+                           input=input)
     except subprocess.TimeoutExpired:
         # A timeout used to come out as a raw traceback with no idea what to do
         # about it. Clean-room run 31 lost about 25 minutes to one: Docker's
@@ -1293,6 +1301,163 @@ def cgroup_cpu(container):
     return d
 
 
+# ------------------------------------------------------------------ key layout
+
+def build_keycheck():
+    """Compile KeyCheck against the flink image's own dist jar, as the sampler is
+    compiled against the broker image's kafka-clients jar. The image has no
+    compiler, so the host JDK the rig already requires does the work."""
+    c = cfg()
+    out = os.path.join(c.stack_dir, "keycheck")
+    cls = os.path.join(out, "KeyCheck.class")
+    src = os.path.join(HERE, "keycheck", "KeyCheck.java")
+    jar = os.path.join(out, "flink-dist.jar")
+    if os.path.exists(cls) and os.path.exists(jar) and os.path.getmtime(cls) >= os.path.getmtime(src):
+        return out, jar
+    os.makedirs(out, exist_ok=True)
+    cid = sh(f"docker create {c.flink_img}").stdout.strip()
+    try:
+        libs = sh(f"docker run --rm --entrypoint sh {c.flink_img} -c 'ls /opt/flink/lib'").stdout.split()
+        dist = [l for l in libs if l.startswith("flink-dist") and l.endswith(".jar")]
+        if not dist:
+            raise Refusal("rig", f"no flink-dist jar under /opt/flink/lib in {c.flink_img}, so the "
+                                 f"engine's own key-group assignment cannot be asked where keys land")
+        sh(f"docker cp {cid}:/opt/flink/lib/{dist[0]} {jar}")
+    finally:
+        sh(f"docker rm -v {cid}", check=False)
+    sh(f"{c.jdk}/bin/javac --release 17 -cp {jar} -d {out} {src}")
+    if not os.path.exists(cls):
+        raise Refusal("rig", "KeyCheck did not compile")
+    return out, jar
+
+
+def keycheck(args, stdin_text=""):
+    """Run KeyCheck and return its lines. Its answers come from the image under
+    test, never from a copy of Flink's hash kept here."""
+    c = cfg()
+    out, jar = build_keycheck()
+    r = sh(f"{c.java} -cp '{jar}:{out}' KeyCheck {args}", input=stdin_text, timeout=300)
+    return [ln for ln in r.stdout.splitlines() if ln.strip()]
+
+
+def max_parallelism_for(cases):
+    """The maxParallelism every case will run with, and where it came from.
+
+    Flink picks it per operator from the parallelism when nothing sets it, so
+    two cases can be given different key-group counts and therefore a different
+    key layout -- the same class of problem as a baseline with a different graph
+    shape, one level down. Cases that would not share one are refused here.
+    """
+    c = cfg()
+    explicit = c.flink_props.get("pipeline.max-parallelism")
+    if explicit is not None:
+        return int(str(explicit).strip()), "pipeline.max-parallelism, set in flinkProperties"
+    got = {}
+    for ln in keycheck("default " + ",".join(str(n) for n in sorted(set(cases)))):
+        par, mp = ln.split("\t")
+        got[int(par)] = int(mp)
+    values = set(got.values())
+    if len(values) != 1:
+        raise Refusal("rig", f"the cases would not share one maxParallelism: {got}. Flink chooses it "
+                             f"from the parallelism when nothing sets it, so the key layout -- which "
+                             f"key lands on which subtask -- would differ between cases and the ratio "
+                             f"would not be about cores. Set pipeline.max-parallelism in "
+                             f"flinkProperties to one value for the whole suite.")
+    return values.pop(), "Flink's own default for these parallelisms"
+
+
+def key_layout(keys, max_par, cases):
+    """{key: {parallelism: subtask}}, from the engine's own assignment."""
+    pars = ",".join(str(n) for n in sorted(set(cases)))
+    lines = keycheck(f"layout {max_par} {pars}", "\n".join(keys) + "\n")
+    if len(lines) != len(keys):
+        raise Refusal("rig", f"KeyCheck answered for {len(lines)} of {len(keys)} keys")
+    layout = {}
+    for ln in lines:
+        f = ln.split("\t")
+        layout[f[0]] = dict(zip(sorted(set(cases)), (int(x) for x in f[2:])))
+    return layout
+
+
+def suggest_max_parallelism(sets, cases, how_many=3):
+    """maxParallelism values that divide every key set evenly at every case."""
+    rows = [f"{name}\t{k}" for name, keys in sets.items() for k in keys]
+    pars = ",".join(str(n) for n in sorted(set(cases)))
+    return [int(x) for x in keycheck(f"suggest {pars} {how_many}", "\n".join(rows) + "\n")]
+
+
+def key_spread(sets, cases, layout, max_par=None):
+    """Pure. What each case's subtasks would get, and what that bounds.
+
+    A subtask with more keys than its neighbours does proportionally more work,
+    so the busiest one sets a ceiling on the stage: a stage whose busiest
+    subtask holds a share b of the keys at parallelism p cannot return more
+    than 1/(b*p) of linear, whatever the pipeline does. Nothing here talks to
+    anything, so every threshold can be self-tested without a stack.
+    """
+    out = {"maxParallelism": max_par, "stages": {}, "idle": [], "worst": None}
+    worst = None
+    for name, keys in sets.items():
+        st = {"keys": len(keys), "cases": {}}
+        for par in sorted(set(cases)):
+            counts = [0] * par
+            for k in keys:
+                counts[layout[k][par]] += 1
+            busiest = max(counts) / len(keys) if keys else 0.0
+            ceiling = 1.0 / (busiest * par) if busiest else 0.0
+            idle = [i for i, n in enumerate(counts) if n == 0]
+            st["cases"][par] = {"keysPerSubtask": counts, "busiestShare": busiest,
+                                "evenShare": 1.0 / par, "idleSubtasks": idle,
+                                "stageCeiling": ceiling}
+            if idle:
+                out["idle"].append({"stage": name, "cores": par, "subtasks": idle})
+            if worst is None or ceiling < worst["stageCeiling"]:
+                worst = {"stage": name, "cores": par, "keysPerSubtask": counts,
+                         "busiestShare": busiest, "stageCeiling": ceiling, "idleSubtasks": idle}
+        out["stages"][name] = st
+    out["worst"] = worst
+    return out
+
+
+def key_skew_verdict(spread, floor, suggestions=()):
+    """Pure. What to do about a layout that is not even.
+
+    Refuse what can be fixed, report what cannot. A subtask with no keys at all
+    cannot reach its cap and the case is not about cores, so that always
+    refuses. Short of that, an uneven stage refuses only when a maxParallelism
+    exists that would even it out -- the fix is one line of flinkProperties and
+    costs nothing. When no value in Flink's range divides the keys, the shape
+    is a property of the key space, and it belongs in the table and in the next
+    interview rather than in a refusal nobody can satisfy.
+    """
+    w = spread["worst"]
+    if w is None:
+        return None
+    where = (f"the {w['stage']} stage at {w['cores']} cores would get "
+             f"{'/'.join(str(n) for n in w['keysPerSubtask'])} keys across its subtasks")
+    fix = (f" Set pipeline.max-parallelism to {suggestions[0]} in flinkProperties, which divides "
+           f"every key set evenly at every case." if suggestions else "")
+    if spread["idle"]:
+        i = spread["idle"][0]
+        n = len(i["subtasks"])
+        which = ", ".join(str(x) for x in i["subtasks"])
+        return Refusal("rig", f"{where}, so {'subtask ' + which + ' gets' if n == 1 else 'subtasks ' + which + ' get'}"
+                              f" no keys at all. {'That core' if n == 1 else 'Those cores'} cannot reach "
+                              f"a cap with no work to do, and the case would be measuring the key layout "
+                              f"rather than cores."
+                              + (fix or " No maxParallelism between 128 and 32,768 divides these keys "
+                                        "evenly, so the keys themselves have to change: the interview's "
+                                        "third question is where that is decided."))
+    if w["stageCeiling"] < floor and suggestions:
+        even_share = 1.0 / w["cores"]
+        return Refusal("rig", f"{where}. The busiest one holds {w['busiestShare']:.1%} of that stage's "
+                              f"keys where an even split is {even_share:.1%}, so the stage cannot "
+                              f"return more than {w['stageCeiling']:.2f} of linear at {w['cores']} "
+                              f"cores however fast the pipeline is, and the run is judged at "
+                              f"{floor:.2f}." + fix)
+    return None
+
+
 # ------------------------------------------------------------------------- job
 
 def submit_job(par, group, ckpt_ms=None):
@@ -1326,13 +1491,22 @@ def wait_running(jid, par, timeout=180):
 
 
 def graph_shape(jid):
-    """Read the shape off the RUNNING plan: vertex descriptions and edge ship strategies."""
+    """Read the shape off the RUNNING plan: vertex descriptions, edge ship
+    strategies, and the key-group count every keyed vertex was given.
+
+    maxParallelism belongs here because Flink picks it from the parallelism
+    when nothing sets it, and it decides which key lands on which subtask. Two
+    cases given different key-group counts are running different key layouts,
+    which is the same class of difference as a baseline with a different graph
+    -- one level down, and invisible in every other column."""
     plan = rest(f"/jobs/{jid}/plan")["plan"]
     sig = []
     for n in sorted(plan["nodes"], key=lambda x: x["description"]):
         ships = sorted(i.get("ship_strategy", "?") for i in n.get("inputs", []))
         sig.append([n["description"], ships])
-    return {"vertexCount": len(plan["nodes"]), "signature": sig}
+    # JobVertexDetailsInfo.FIELD_NAME_MAX_PARALLELISM, read back from the engine
+    max_par = sorted({v["maxParallelism"] for v in rest(f"/jobs/{jid}")["vertices"]})
+    return {"vertexCount": len(plan["nodes"]), "signature": sig, "maxParallelism": max_par}
 
 
 def cancel_job(jid):

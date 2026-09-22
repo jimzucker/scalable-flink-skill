@@ -766,6 +766,78 @@ def cmd_selftest(live=True, topic=None):
     expect("disk: crediting the backlog does not excuse a suite that still will not fit",
            lambda: L.disk_verdict(40e9, input_on_disk_bytes=37.9e9, **run36), "still to write")
 
+    def wording_above_target():
+        """1.93x is not short of 1.90x. Clean-room run 36's scorecard said it
+        was, on the same page as a step line that got it right."""
+        rec = {"tmCapFrac": 0.99, "tmThrottledPeriodsPct": 40, "sourceBackpressured": 0.0,
+               "gcFraction": 0.01, "brokerLimitHits": 0}
+        # both ways round: with a lower bound to name, and without one. The
+        # second is the path that still called 1.93x "short of" 1.90x, because
+        # the branch that gets it right was reached only when a lower bound
+        # existed to quote.
+        for lo in (1.896, None):
+            step = {"reportable": True, "ratio": 1.93, "idealRatio": 2.0,
+                    "ratioLowCI": lo, "meetsClaim": False}
+            line = L.action_detail(rec, 2, step=step) or ""
+            if "short of" in line:
+                raise Exception(f"1.93x called short of its target (lowCI={lo}): {line}")
+            if "1.90" not in line or "1.93" not in line:
+                raise Exception(f"the line names neither number (lowCI={lo}): {line}")
+    expect("scorecard: a ratio above its target is not called short of it (must not fire)",
+           wording_above_target, "", should_fire=False)
+
+    def wording_below_target():
+        rec = {"tmCapFrac": 0.99, "tmThrottledPeriodsPct": 40, "sourceBackpressured": 0.0,
+               "gcFraction": 0.01, "brokerLimitHits": 0}
+        step = {"reportable": True, "ratio": 1.74, "idealRatio": 2.0,
+                "ratioLowCI": 1.64, "meetsClaim": False}
+        line = L.action_detail(rec, 4, step=step) or ""
+        if "short of" not in line:
+            raise Exception(f"1.74x against a 1.90x target does not say short of: {line}")
+    expect("scorecard: a ratio below its target still says so (must not fire)",
+           wording_below_target, "", should_fire=False)
+
+    def probe_envelope_vs_middle():
+        """Run 36 was told to tighten the range by raising the repeats and read
+        9% at 3 then 15% at 9. Min to max cannot narrow; the middle half can."""
+        three = {"repeats": 3, "ofLinearRange": {"mem": {"2->4": {"spread": 0.09, "middleHalf": None}}}}
+        nine = {"repeats": 9, "ofLinearRange": {"mem": {"2->4": {
+            "spread": 0.15, "middleHalf": {"low": 0.80, "high": 0.84, "spread": 0.04}}}}}
+        a, b = L.probe_spread(three), L.probe_spread(nine)
+        if a["middleHalf"] is not None:
+            raise Exception("three repeats produced a middle half")
+        if b["middleHalf"] != 0.04 or b["envelope"] != 0.15:
+            raise Exception(f"nine repeats read {b}")
+        if any("tighten" in ln for ln in L.probe_advice(b, 0.09)):
+            raise Exception("still telling a 9-repeat probe to tighten its range")
+        if "middle half" not in " ".join(L.probe_advice(a, 0.05)):
+            raise Exception("a 3-repeat probe is not pointed at the middle half")
+        if "tighter than the shortfall" not in " ".join(L.probe_advice(b, 0.20)):
+            raise Exception("a middle half inside the shortfall is not called usable")
+    expect("probe: the range is an envelope, the middle half is the figure that tightens (must not fire)",
+           probe_envelope_vs_middle, "", should_fire=False)
+
+    def held_still_memory():
+        """suite.json records what each case was given, never Cfg.tm_mem's
+        default. Run 36's heldStill said 4096m while its own scorecard said
+        1728m / 2368m / 3648m."""
+        got = L.tm_memory_record()
+        if got == "4096m":
+            raise Exception("heldStill still records Cfg.tm_mem's default")
+        if c.tm_mem_per_core and not isinstance(got, dict):
+            raise Exception(f"memory is a base plus a per-core share and heldStill records one "
+                            f"figure, {got!r}")
+        if isinstance(got, dict):
+            per = got["perCase"]
+            for n in c.cases:
+                if per[str(n)] != L.tm_mem_of(n):
+                    raise Exception(f"heldStill says {per[str(n)]} at {n} cores, the case gets "
+                                    f"{L.tm_mem_of(n)}")
+        elif got is not None and got != L.tm_mem_of(c.cases[0]):
+            raise Exception(f"heldStill says {got}, the cases get {L.tm_mem_of(c.cases[0])}")
+    expect("suite.json records the memory each case was given (must not fire)",
+           held_still_memory, "", should_fire=False)
+
     def chain():
         # in its own directory: the first version wrote its fake chain into the
         # live results/ (phases.log, all.json and a DONE saying "FAIL at c")
@@ -1532,9 +1604,11 @@ def cmd_suite():
            "outputsPerInput": c.out_per_in,
            "heldStill": {"kafkaCap": c.kafka_cap, "jobManagerCap": c.jm_cap, "partitions": c.partitions,
                          "checkpointMs": c.ckpt_ms, "sinkRetentionBytesPerPartition": T["sinkRetentionBytes"],
-                         # null when nothing was capped: Cfg.tm_mem's default is not a
-                         # setting that was in effect, and the record says only true things
-                         "tmProcessMemory": (c.tm_mem if L.tm_memory_capped() else None),
+                         # null when nothing was capped, one figure when one was set, and
+                         # a figure per case when memory is a base plus a per-core share:
+                         # Cfg.tm_mem's default is not a setting that was in effect, and the
+                         # record says only true things
+                         "tmProcessMemory": L.tm_memory_record(),
                          # anything else that was on the machine while this was measured
                          "extraServices": sorted((c.raw.get("extraServices") or {}).keys()) or None},
            "thresholds": dict(T), "harness": harness_version(),
@@ -1738,21 +1812,17 @@ def cmd_report():
                                      + (f" [{r['low'] * ideal:.2f}-{r['high'] * ideal:.2f}x]" if r else ""))
                     print(f"  this host, {label:<13} " + "  ".join(parts))
             if h:
-                widest = max((r.get("spread", 0) for m in (h.get("ofLinearRange") or {}).values()
-                              for r in m.values()), default=0)
+                sp = L.probe_spread(h)
                 # the shortfall this is being asked to explain
                 gap = max((1 - (r["ratio"] / (r["idealRatio"] * T["scalingFloor"]))
                            for r in short), default=0)
-                print(f"  A pipeline cannot beat its machine — but the probe's own spread is "
-                      f"{widest:.0%} over {h.get('repeats', 1)} repeats, against a shortfall of "
-                      f"{gap:.0%}.")
-                if widest >= gap:
-                    print("  That is too wide to explain anything. Before looking at the pipeline,")
-                    print("  tighten it: `prove.py probe --repeats 9` takes minutes and starts no")
-                    print("  stack. If it is still wider than the shortfall, say so and stop — the")
-                    print("  machine cannot be ruled in or out here.")
-                else:
-                    print("  That is tighter than the shortfall, so it is worth comparing against.")
+                mid = (f", its middle half {sp['middleHalf']:.0%}"
+                       if sp["middleHalf"] is not None else "")
+                print(f"  A pipeline cannot beat its machine — but the probe's own range is "
+                      f"{sp['envelope']:.0%} over {sp['repeats']} repeats{mid}, against a "
+                      f"shortfall of {gap:.0%}.")
+                for line in L.probe_advice(sp, gap):
+                    print(f"  {line}")
         except Exception:
             pass
         print("  What this rig has shown: memory that does not scale per subtask costs about 14%;"
@@ -1914,13 +1984,16 @@ def cmd_probe():
             r = ((h.get("ofLinearRange") or {}).get(mode) or {}).get(step) or {}
             rng = (f"  [{r['low'] * ideal:.2f}-{r['high'] * ideal:.2f}x]" if r else "")
             print(f"  {label:<20} {step}: {v * ideal:.2f}x{rng}")
-    widest = max((r.get("spread", 0) for m in (h.get("ofLinearRange") or {}).values()
-                  for r in m.values()), default=0)
+    sp = L.probe_spread(h)
     print()
-    print(f"  the probe's own spread is {widest:.0%} over {reps} repeats.")
-    print("  Compare that with the shortfall before leaning on it: a bound that moves more")
-    print("  than the thing it is meant to explain, explains nothing. If it is still too")
-    print("  wide, run this again with more repeats, or say it cannot be settled here.")
+    print(f"  the probe's full range is {sp['envelope']:.0%} over {reps} repeats"
+          + (f", and its middle half {sp['middleHalf']:.0%}." if sp["middleHalf"] is not None
+             else f" — too few to take a middle half from."))
+    print("  Compare the middle half with the shortfall before leaning on it: a bound that")
+    print("  moves more than the thing it is meant to explain, explains nothing. The full")
+    print("  range is an envelope and gets wider with repeats, never narrower, so it is not")
+    print("  the figure to tighten. If the middle half is still too wide, say it cannot be")
+    print("  settled here — that is a complete answer.")
     return 0
 
 

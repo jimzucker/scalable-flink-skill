@@ -489,8 +489,14 @@ short is being compared against a doubling the *host* may not deliver either.
 `prove.py probe` runs the bare cores with no pipeline involved — minutes, and
 it starts nothing — and preflight's three repeats are usually too loose to
 settle it: run 31's memory-heavy 2→4 read 1.52× with a range of 1.41–1.76×,
-wider than the shortfall it was offered to explain. Raise the repeats until
-the range is narrower than the shortfall, or say it cannot be settled here.
+wider than the shortfall it was offered to explain. **More repeats do not
+narrow that range** — it runs from the lowest reading to the highest, and more
+samples can only find more of the distribution. Clean-room run 36 raised its
+repeats from three to nine, as it had been told to, and watched the range go
+from 9% to 15%. What nine repeats buy is the **middle half**, which the probe
+prints from four repeats up and which does settle. Compare that with the
+shortfall. If it is still wider, say the machine cannot be ruled in or out
+here — that is a complete answer, and it costs one line.
 This is the first step of investigating a short step, not an aside — it is
 cheap, and it decides whether there is anything in the pipeline to look for.
 
@@ -615,12 +621,12 @@ afternoon and each drift was reasonable on its own:
   arithmetically and it is not a result: something below it read low. Say that,
   beside the number.
 - **Say "target", not "needed"**, and get the plurals right — *1 core*, not
-  *1 cores*. Both are self-tested.
-
-```
-
-  2->4 cores: doubling gave 1.80x, it needed 1.90x  ->  missed
-```
+  *1 cores*. Both are self-tested, in the scorecard, the suite table and
+  `suite.md` alike — three renderings of the same figures, and the rule held
+  in one of them until clean-room run 36 read all three.
+- **A ratio above its target is never called "short of" it.** 1.93× is not
+  short of 1.90×; what is short is the lower bound the claim is judged on, and
+  the line has to say which number it means.
 
 The four measurements sit beside the answer rather than behind it, so a
 reader can see why it says what it says. Each column is what the component

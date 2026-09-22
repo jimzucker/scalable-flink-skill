@@ -34,8 +34,14 @@ command line names the project directory** — not only one naming `prove.py`.
 A plain `tail -4 <project>/results/all.log` is enough to be killed, as clean-room
 run 30 found; the author's own `pgrep -f 'prove.py all'` loop went the same way.
 Check on a run from a script whose own command line does not contain the
-project path, or from a shell whose working directory is the project so the
-path never appears as an argument.
+project path. **That is the only advice that survives an agent harness**: a
+tool that runs `bash -c "cd /path/to/project && until ...; do sleep 30; done"`
+puts the path on the command line *because* it had to `cd`, so "a shell whose
+working directory is the project" is unreachable by that route — clean-room
+run 36 lost two waiting shells to exit 144 that way, and the tiny proof's own
+self-test reported them. Copy the results path into a variable in a file the
+shell reads, or watch from a directory that is not the project and refer to it
+by a path the command line does not spell out.
 **`--quick` is a smoke run, not a result.** `prove.py all --quick` runs two
 passes per case instead of the configured number (the sentinel still follows,
 so the baseline is measured three times). It measured *one* pass until

@@ -357,6 +357,45 @@ def check_broker_cpu_hook(fail):
     return "the CPU per component panel has a broker source, and it needs a name prefix"
 
 
+def check_target_not_needed(fail):
+    """Section 6 says "target", not "needed". There are three renderings of the
+    same figures -- the scorecard, the suite table and suite.md -- and the rule
+    held in one of them until clean-room run 36 read all three. Every line that
+    prints the scaling floor is checked, so a fourth rendering cannot drift."""
+    lib_src = read(HERE, "lib.py")
+    bad = [ln.strip() for ln in lib_src.splitlines()
+           if "scalingFloor" in ln and "needed" in ln]
+    for ln in bad:
+        fail(f"a report line says 'needed' where section 6 says 'target': {ln[:90]}")
+    skill = read(ROOT, "SKILL.md")
+    if 'Say "target", not "needed"' not in skill:
+        fail("SKILL.md no longer states the target-not-needed rule the harness is checked against")
+    for ln in skill.splitlines():
+        if "doubling gave" in ln and "needed" in ln:
+            fail(f"SKILL.md's own example breaks the rule beside it: {ln.strip()[:90]}")
+    if "never called \"short of\"" not in skill:
+        fail("SKILL.md does not say a ratio above its target is never called short of it")
+    return "the scaling target is called a target in every rendering"
+
+
+def check_probe_advice(fail):
+    """The skill must not tell anyone to raise the repeats until the *range*
+    narrows. It cannot: min to max only widens with more samples, and run 36
+    did as it was told and went from 9% to 15%."""
+    import lib
+    skill = read(ROOT, "SKILL.md")
+    if "More repeats do not\nnarrow that range" not in skill:
+        fail("SKILL.md does not say that more repeats widen the range rather than narrowing it")
+    if "middle half" not in skill:
+        fail("SKILL.md does not point at the middle half, the figure that does settle")
+    nine = {"repeats": 9, "ofLinearRange": {"mem": {"2->4": {
+        "spread": 0.15, "middleHalf": {"low": 0.80, "high": 0.84, "spread": 0.04}}}}}
+    said = " ".join(lib.probe_advice(lib.probe_spread(nine), 0.09))
+    if "tighten" in said or "more repeats" in said:
+        fail(f"the harness still tells a nine-repeat probe to tighten its range: {said[:80]}")
+    return "more repeats widen the range and settle the middle half, in the prose and the harness"
+
+
 def main():
     problems = []
     lines = []
@@ -366,7 +405,8 @@ def main():
                   check_example_matches_interview, check_example_backlogs,
                   check_example_broker_memory, check_example_comments,
                   check_key_layout, check_tinyproof_reruns,
-                  check_broker_cpu_hook):
+                  check_broker_cpu_hook, check_target_not_needed,
+                  check_probe_advice):
         lines.append(check(problems.append))
     for p in problems:
         print(f"doccheck: {p}")

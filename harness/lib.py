@@ -1228,6 +1228,10 @@ def host_scaling(seconds=5.0, cases=(1, 2, 4), repeats=3):
     76.4%, 83% and 91% at 2->4 -- a spread of 15 points, used to judge a 12-point
     shortfall. It now reports the median with the range it came from, so a
     reader can see whether the bound is tight enough to explain anything.
+
+    Four repeats or more also get the middle half, which is the figure that
+    narrows as repeats are added. The full range does not: it is an envelope,
+    and more samples can only find more of the distribution.
     """
     src = os.path.join(HERE, "probe", "Spin.java")
     if not os.path.exists(src):
@@ -1260,12 +1264,57 @@ def host_scaling(seconds=5.0, cases=(1, 2, 4), repeats=3):
                     for r in runs if r.get(lo) and r.get(hi)]
             if vals:
                 steps[f"{lo}->{hi}"] = round(statistics.median(vals), 3)
+                # Min to max is an envelope, and an envelope only ever widens as
+                # repeats are added -- it cannot do otherwise, since a wider
+                # sample can only find more of the distribution. Clean-room run
+                # 36 followed the advice to "tighten it" from 3 repeats to 9 and
+                # read 9% then 15%, exactly backwards. The middle half is the
+                # figure that does tighten, so it is recorded beside the
+                # envelope and it is the one compared against a shortfall.
+                mid = None
+                if len(vals) >= 4:
+                    q = statistics.quantiles(vals, n=4, method="inclusive")
+                    mid = {"low": round(q[0], 3), "high": round(q[2], 3),
+                           "spread": round(q[2] - q[0], 3)}
                 ranges[f"{lo}->{hi}"] = {"low": min(vals), "high": max(vals),
-                                         "spread": round(max(vals) - min(vals), 3), "n": len(vals)}
+                                         "spread": round(max(vals) - min(vals), 3), "n": len(vals),
+                                         "middleHalf": mid}
         out["ofLinear"][mode] = steps
         out["ofLinearRange"][mode] = ranges
     shutil.rmtree(work, ignore_errors=True)
     return out
+
+
+def probe_spread(h):
+    """Pure. The widest envelope and the widest middle half across a probe's
+    step ratios, and how many repeats they came from. The middle half is None
+    until there are four repeats to take quartiles of."""
+    ranges = [r for m in ((h or {}).get("ofLinearRange") or {}).values() for r in m.values()]
+    if not ranges:
+        return {"envelope": 0.0, "middleHalf": None, "repeats": (h or {}).get("repeats", 0)}
+    mids = [r["middleHalf"]["spread"] for r in ranges if r.get("middleHalf")]
+    return {"envelope": max(r.get("spread", 0) for r in ranges),
+            "middleHalf": max(mids) if mids else None,
+            "repeats": (h or {}).get("repeats", 0)}
+
+
+def probe_advice(spread, gap):
+    """Pure. What to say about a probe that is being asked to explain a
+    shortfall. Never "raise the repeats until the range is narrower": the range
+    is min to max and it only widens (run 36 went 9% over 3 repeats to 15% over
+    9, doing exactly as it was told)."""
+    usable = spread["middleHalf"] if spread["middleHalf"] is not None else spread["envelope"]
+    which = "middle half" if spread["middleHalf"] is not None else "full range"
+    if usable < gap:
+        return [f"That {which} is tighter than the shortfall, so it is worth comparing against."]
+    if spread["middleHalf"] is None:
+        return [f"That is too wide to explain anything, and {spread['repeats']} repeats is too few to",
+                "take a middle half from. Run `prove.py probe --repeats 9`: the full range will get",
+                "wider, not narrower — it is an envelope — but the middle half it prints is the",
+                "figure that tightens, and it is the one to compare with the shortfall."]
+    return ["That is too wide to explain anything, and more repeats will not fix it: the middle",
+            "half has already had a chance to settle and has not. Say the machine cannot be ruled",
+            "in or out here, and stop — an honest 'not settled' costs one line."]
 
 
 def cgroup_mem(container):
@@ -1680,6 +1729,26 @@ def size_broker_memory(limit_bytes, hits):
     return int(limit_bytes * 1.6 / 268435456) * 256
 
 
+def tm_memory_record():
+    """What suite.json should say was held still about worker memory.
+
+    Nothing, when nothing was capped. One figure when one flat figure was set.
+    A figure per case when memory is a base plus a per-core share -- because
+    then there is no single number, and recording Cfg.tm_mem's 4096m default
+    is recording a setting that was never applied. Clean-room run 36's
+    heldStill said 4096m while its own scorecard, correctly, said 1728m /
+    2368m / 3648m.
+    """
+    c = cfg()
+    if not tm_memory_capped():
+        return None
+    per = {str(n): tm_mem_of(n) for n in sorted(set(c.cases))}
+    if len(set(per.values())) == 1:
+        return per[str(sorted(set(c.cases))[0])]
+    return {"perCase": per, "rule": "tmMemoryBase + tmMemoryPerCore x cores, so every "
+                                    "subtask gets the same; the container figure is not held still"}
+
+
 def tm_mem_of(cores):
     """What this case was actually given, not Cfg.tm_mem's 4096m default.
 
@@ -1820,10 +1889,18 @@ def action_detail(rec, cores, step=None, is_baseline=False):
                     f"can give, so the smaller case reads too low.")
         if not step.get("meetsClaim"):
             lo = step.get("ratioLowCI")
-            if lo and ratio >= need:
+            # 1.93x is not short of 1.90x. What is short is the lower bound the
+            # claim is judged on, and the line has to say which number it means:
+            # clean-room run 36 printed "1.93x, short of the 1.90x target" on
+            # the same page as a step line that got it right.
+            if ratio >= need:
+                if lo:
+                    return (f"{n_cores(cores)}: doubling gave {ratio:.2f}x, which clears the {need:.2f}x "
+                            f"target — but the readings are far enough apart that it could be as low as "
+                            f"{lo:.2f}x, and the lower bound is what is judged.")
                 return (f"{n_cores(cores)}: doubling gave {ratio:.2f}x, which clears the {need:.2f}x "
-                        f"target — but the readings are far enough apart that it could be as low as "
-                        f"{lo:.2f}x, and the lower bound is what is judged.")
+                        f"target, but the step was not judged met — the claim is read from the "
+                        f"lower bound across passes, not this figure.")
             return f"{n_cores(cores)}: doubling gave {ratio:.2f}x, short of the {need:.2f}x target."
         return None
     if label == "Kafka memory":
@@ -2548,7 +2625,7 @@ def render_table(out):
     for r in t["stepRatios"]:
         if r["reportable"]:
             L.append(f"STEP {r['step']} cores: {r['ratio']:.3f}x  (ideal {r['idealRatio']:.0f}x, "
-                     f"needed {r['idealRatio'] * T['scalingFloor']:.2f}x, range across passes "
+                     f"target {r['idealRatio'] * T['scalingFloor']:.2f}x, range across passes "
                      f"{r['ratioLow']:.3f}x-{r['ratioHigh']:.3f}x)")
         else:
             L.append(f"STEP {r['step']} cores: NOT REPORTED — {r['reason']}")
@@ -2601,10 +2678,10 @@ def render_markdown(out):
             # one pass per case: min and max are the same measurement, so a
             # "range across passes" here would be an invented interval.
             L.append(f"**{r['step'].replace('->', '→')} cores: {r['ratio']:.2f}× "
-                     f"(needed {r['idealRatio'] * T['scalingFloor']:.2f}×) — one pass per case, no spread measured.**")
+                     f"(target {r['idealRatio'] * T['scalingFloor']:.2f}×) — one pass per case, no spread measured.**")
         elif r["reportable"]:
             L.append(f"**{r['step'].replace('->', '→')} cores: {r['ratio']:.2f}× "
-                     f"(needed {r['idealRatio'] * T['scalingFloor']:.2f}×), "
+                     f"(target {r['idealRatio'] * T['scalingFloor']:.2f}×), "
                      f"range {r['ratioLow']:.2f}–{r['ratioHigh']:.2f}× across passes.**")
         else:
             L.append(f"**{r['step'].replace('->', '→')} cores: not reported — {r['reason']}.**")

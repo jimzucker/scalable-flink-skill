@@ -824,6 +824,19 @@ def cmd_selftest(live=True, topic=None):
             raise Exception(f"nine repeats read {b}")
         if any("tighten" in ln for ln in L.probe_advice(b, 0.09)):
             raise Exception("still telling a 9-repeat probe to tighten its range")
+        # per arm: the steady arm must not be hidden behind the unsteady one.
+        # Measured on this rig at 25 repeats: register-only middle half 0%,
+        # memory-bound 10%, and the worst-of figure made both look unusable.
+        both = {"repeats": 25, "ofLinearRange": {
+            "alu": {"2->4": {"spread": 0.03, "middleHalf": {"low": .98, "high": .985, "spread": 0.005}}},
+            "mem": {"2->4": {"spread": 0.15, "middleHalf": {"low": .73, "high": .83, "spread": 0.10}}}}}
+        if L.probe_spread(both, mode="alu")["middleHalf"] != 0.005:
+            raise Exception("the steady arm cannot be read on its own")
+        if L.probe_spread(both)["middleHalf"] != 0.10:
+            raise Exception("the across-arms figure is no longer the worst one")
+        if "tighter than the shortfall" not in " ".join(
+                L.probe_advice(L.probe_spread(both, mode="alu"), 0.05)):
+            raise Exception("a steady arm inside the shortfall is not called usable")
         if "middle half" not in " ".join(L.probe_advice(a, 0.05)):
             raise Exception("a 3-repeat probe is not pointed at the middle half")
         if "tighter than the shortfall" not in " ".join(L.probe_advice(b, 0.20)):
@@ -2161,9 +2174,16 @@ def cmd_probe():
             print(f"  {label:<20} {step}: {v * ideal:.2f}x{rng}")
     sp = L.probe_spread(h)
     print()
-    print(f"  the probe's full range is {sp['envelope']:.0%} over {reps} repeats"
-          + (f", and its middle half {sp['middleHalf']:.0%}." if sp["middleHalf"] is not None
-             else f" — too few to take a middle half from."))
+    # per arm: one arm is often steady while another is not, and a single
+    # worst-of figure makes the steady one look as useless as the unsteady one
+    for mode, label in (("alu", "simple arithmetic"), ("mem", "memory-heavy work")):
+        a = L.probe_spread(h, mode=mode)
+        if a["envelope"] or a["middleHalf"] is not None:
+            print(f"  {label:<20} full range {a['envelope']:.0%}"
+                  + (f", middle half {a['middleHalf']:.0%}" if a["middleHalf"] is not None else ""))
+    print(f"  the widest of those is {sp['envelope']:.0%} over {reps} repeats"
+          + (f", middle half {sp['middleHalf']:.0%}." if sp["middleHalf"] is not None
+             else " — too few to take a middle half from."))
     print("  Compare the middle half with the shortfall before leaning on it: a bound that")
     print("  moves more than the thing it is meant to explain, explains nothing. The full")
     print("  range is an envelope and gets wider with repeats, never narrower, so it is not")

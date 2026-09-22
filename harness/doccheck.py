@@ -400,7 +400,13 @@ def check_probe_advice(fail):
     if "More repeats do not\nnarrow that range" not in skill:
         fail("SKILL.md does not say that more repeats widen the range rather than narrowing it")
     if "middle half" not in skill:
-        fail("SKILL.md does not point at the middle half, the figure that does settle")
+        fail("SKILL.md does not point at the middle half")
+    if "It does not shrink either" not in skill:
+        fail("SKILL.md still implies the middle half narrows with repeats; measured, it went from "
+             "6% over nine repeats to 11% over twenty-five")
+    if "Read the arms separately" not in skill:
+        fail("SKILL.md does not say to read the probe's arms separately, so a steady arm stays "
+             "hidden behind an unsteady one")
     nine = {"repeats": 9, "ofLinearRange": {"mem": {"2->4": {
         "spread": 0.15, "middleHalf": {"low": 0.80, "high": 0.84, "spread": 0.04}}}}}
     said = " ".join(lib.probe_advice(lib.probe_spread(nine), 0.09))

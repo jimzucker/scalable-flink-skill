@@ -638,10 +638,18 @@ wider than the shortfall it was offered to explain. **More repeats do not
 narrow that range** — it runs from the lowest reading to the highest, and more
 samples can only find more of the distribution. Clean-room run 36 raised its
 repeats from three to nine, as it had been told to, and watched the range go
-from 9% to 15%. What nine repeats buy is the **middle half**, which the probe
-prints from four repeats up and which does settle. Compare that with the
-shortfall. If it is still wider, say the machine cannot be ruled in or out
-here — that is a complete answer, and it costs one line.
+from 9% to 15%. What more repeats buy is the **middle half**, which the probe prints
+from four repeats up. **It does not shrink either** — it converges on how
+variable the machine actually is, which may be a lot: measured on one rig, the
+memory-bound arm read 6% over nine repeats and 11% over twenty-five. An honest
+figure, not a smaller one.
+
+**Read the arms separately.** On that same run the register-only arm's middle
+half was **0%** and the memory-bound arm's was **10%**, so one arm settled the
+question and the other could not, and a single worst-of figure hid it. Compare
+the relevant arm with the shortfall; if it is still wider, say the machine
+cannot be ruled in or out here — that is a complete answer, and it costs one
+line.
 This is the first step of investigating a short step, not an aside — it is
 cheap, and it decides whether there is anything in the pipeline to look for.
 

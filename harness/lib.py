@@ -1382,24 +1382,42 @@ def host_scaling(seconds=5.0, cases=(1, 2, 4), repeats=3):
     return out
 
 
-def probe_spread(h):
-    """Pure. The widest envelope and the widest middle half across a probe's
-    step ratios, and how many repeats they came from. The middle half is None
-    until there are four repeats to take quartiles of."""
-    ranges = [r for m in ((h or {}).get("ofLinearRange") or {}).values() for r in m.values()]
+def probe_spread(h, mode=None):
+    """Pure. How steady a probe's readings are, for one arm or across all of
+    them. The middle half is None until there are four repeats to take
+    quartiles of.
+
+    mode picks one arm. Reporting only the worst across arms hides the answer:
+    measured on this rig at 25 repeats, the register-only arm's middle half was
+    0% and the memory-bound arm's was 10%, and a single "11%" made the steady
+    arm look as useless as the unsteady one.
+    """
+    per = (h or {}).get("ofLinearRange") or {}
+    if mode is not None:
+        per = {mode: per.get(mode) or {}}
+    ranges = [r for m in per.values() for r in m.values()]
     if not ranges:
-        return {"envelope": 0.0, "middleHalf": None, "repeats": (h or {}).get("repeats", 0)}
+        return {"envelope": 0.0, "middleHalf": None, "repeats": (h or {}).get("repeats", 0),
+                "mode": mode}
     mids = [r["middleHalf"]["spread"] for r in ranges if r.get("middleHalf")]
     return {"envelope": max(r.get("spread", 0) for r in ranges),
             "middleHalf": max(mids) if mids else None,
-            "repeats": (h or {}).get("repeats", 0)}
+            "repeats": (h or {}).get("repeats", 0), "mode": mode}
 
 
 def probe_advice(spread, gap):
     """Pure. What to say about a probe that is being asked to explain a
-    shortfall. Never "raise the repeats until the range is narrower": the range
-    is min to max and it only widens (run 36 went 9% over 3 repeats to 15% over
-    9, doing exactly as it was told)."""
+    shortfall.
+
+    Never "raise the repeats until the range is narrower". The full range is min
+    to max and only widens (run 36 went 9% over 3 repeats to 15% over 9, doing
+    exactly as it was told). **And the middle half does not shrink either** --
+    it converges on how variable the machine actually is, which may be a lot.
+    Measured on this rig: the memory-bound arm's middle half read 6% over 9
+    repeats and 11% over 25. More repeats buy an honest figure, not a smaller
+    one, and once it has settled a wide one is the answer rather than a reason
+    to run again.
+    """
     usable = spread["middleHalf"] if spread["middleHalf"] is not None else spread["envelope"]
     which = "middle half" if spread["middleHalf"] is not None else "full range"
     if usable < gap:
@@ -1407,11 +1425,12 @@ def probe_advice(spread, gap):
     if spread["middleHalf"] is None:
         return [f"That is too wide to explain anything, and {spread['repeats']} repeats is too few to",
                 "take a middle half from. Run `prove.py probe --repeats 9`: the full range will get",
-                "wider, not narrower — it is an envelope — but the middle half it prints is the",
-                "figure that tightens, and it is the one to compare with the shortfall."]
+                "wider, it is an envelope — but the middle half it prints is a real figure for how",
+                "steady this machine is, and that is the one to compare with the shortfall."]
     return ["That is too wide to explain anything, and more repeats will not fix it: the middle",
-            "half has already had a chance to settle and has not. Say the machine cannot be ruled",
-            "in or out here, and stop — an honest 'not settled' costs one line."]
+            "half converges on how variable this machine is, and this is that figure. Say the",
+            "machine cannot be ruled in or out here, and stop — an honest 'not settled' costs one",
+            "line. Look at the arms separately first: one of them is often steady enough to use."]
 
 
 def cgroup_mem(container):

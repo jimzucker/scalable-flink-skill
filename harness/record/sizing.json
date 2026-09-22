@@ -186,6 +186,17 @@
    "warmupS": 90.3,
    "ckptS": 10.0,
    "backlog": 200000000
+  },
+  {
+   "run": "run-42",
+   "rateAtTop": 2657223.0,
+   "cores": 4,
+   "ckptS": 10.0,
+   "warmupS": 90.2,
+   "backlog": 600000000,
+   "why": "the windowed pipeline. The tiny proof sized it at 401,149,826 from a 44.2 s warm-up measured under the tiny proof's own 20 s floor; a suite pass then consumed 422,499,766. The run ignored the number and used 600,000,000 from its own arithmetic, which is the only reason 2->4 survived.",
+   "pipeline": "windowed",
+   "recordBytes": 80
   }
  ]
 }

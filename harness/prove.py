@@ -964,6 +964,25 @@ def cmd_selftest(live=True, topic=None):
     expect("a pipeline with no constant fan-out still gets a report (must not fire)",
            report_renders_with_no_constant_fan_out, "", should_fire=False)
 
+    def sizing_does_not_trust_a_tiny_proof_warm_up():
+        # size_backlog is called from inside the tiny proof, where warmupMinS is
+        # 20 s. Clean-room run 42 measured 44.2 s there, was told 401,149,826
+        # records would do, and had a suite pass consume 422,499,766 -- its ten
+        # suite warm-ups all ran 90 s. The floor is the suite's, not the tiny
+        # proof's, whatever T says at the moment of the call.
+        saved = dict(L.T)
+        try:
+            L.T.update(warmupMinS=20.0, minWindowS=30.0)   # as the tiny proof leaves it
+            want = L.size_backlog(2_566_538.0, 4, 10.0, warmup_max_s=44.2)
+        finally:
+            L.T.clear(); L.T.update(saved)
+        consumed, headroom = 422_499_766, int(2_566_538.0 * 10)
+        if want < consumed + headroom:
+            raise Exception(f"sized {want:,}, which run 42 would have overrun: it consumed "
+                            f"{consumed:,} and needs {headroom:,} more at window close")
+    expect("the backlog is not sized on the tiny proof's own warm-up floor (must not fire)",
+           sizing_does_not_trust_a_tiny_proof_warm_up, "", should_fire=False)
+
     def graph_renders():
         m = L.graph_mermaid(RUN36_PLAN)
         for needle in ("flowchart LR", "HASH", "BROADCAST", "parse-order"):

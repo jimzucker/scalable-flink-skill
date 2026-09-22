@@ -283,6 +283,32 @@ def check_example_comments(fail):
     return f"{checked} derived value(s) in pipeline.example.json"
 
 
+def check_key_layout(fail):
+    """The 5/3/4/4 the prose quotes is what Flink's assignment actually gives,
+    and the example names its key sets so the check can run at all."""
+    import prove
+    import lib
+    layout = getattr(prove, "ACCOUNT_KEY_LAYOUT_128", None)
+    if layout is None:
+        fail("prove.py no longer publishes the recorded key layout for the demo's account keys")
+        return "key layout: not checked"
+    spread = lib.key_spread({"positions-by-account": sorted(layout)}, [1, 2, 4], layout, 128)
+    counts = spread["stages"]["positions-by-account"]["cases"][4]["keysPerSubtask"]
+    shape = "/".join(str(n) for n in counts)
+    ceiling = f"{spread['worst']['stageCeiling']:.2f}"
+    for where, text in (("SKILL.md", read(ROOT, "SKILL.md")),
+                        ("harness/README.md", read(HERE, "README.md")),
+                        ("harness/pipeline.example.json", read(HERE, "pipeline.example.json"))):
+        if shape not in text:
+            fail(f"{where} does not say the demo's account keys land {shape}")
+        if where != "harness/pipeline.example.json" and ceiling not in text:
+            fail(f"{where} does not state the {ceiling} of linear that layout bounds the stage at")
+    example = json.loads(read(HERE, "pipeline.example.json"))
+    if not example.get("keySets"):
+        fail("pipeline.example.json names no keySets, so its own preflight cannot check the key layout")
+    return f"the demo's account keys land {shape}, bounding that stage at {ceiling} of linear"
+
+
 def main():
     problems = []
     lines = []
@@ -290,7 +316,8 @@ def main():
                   check_plan_discloses, check_order_is_asserted,
                   check_only_the_throttled_thing_is_throttled,
                   check_example_matches_interview, check_example_backlogs,
-                  check_example_broker_memory, check_example_comments):
+                  check_example_broker_memory, check_example_comments,
+                  check_key_layout):
         lines.append(check(problems.append))
     for p in problems:
         print(f"doccheck: {p}")

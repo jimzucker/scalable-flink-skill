@@ -172,6 +172,22 @@ measured**, not compiling. Pause for review between steps; run without prompting
 inside one. Keep a journal: what drove the step, what was decided, how it was
 verified.
 
+**Group the calls that do not depend on each other.** An agent's turn re-reads
+the whole conversation before it does anything, so ten one-line commands cost
+ten times the context of one command that does ten things — and this build is
+mostly reading: the job, the generator, the verifier, the config, the
+dashboard, the results. Read them together. Only a call whose input comes from
+the previous answer has to wait for it. Measured on the session that wrote this
+skill: 97% of its tokens were the conversation being read again, about 410,000
+per turn, and a good share of the turns were single `cat`s that could have
+travelled with their neighbours.
+
+**The same rule decides how to watch a run.** Wait on `results/DONE`; do not
+poll on a timer. A three-hour chain checked every thirty seconds is 360 turns
+and 360 re-reads of everything said so far; checked at each of the seven step
+boundaries it is seven. `results/PROGRESS.txt` is there to be read when you
+have a reason to read it, not on a clock.
+
 **Say where the run is up to, without being asked.** The chain takes two to
 three hours and most of it is silent. The harness keeps one sentence in
 `results/PROGRESS.txt`, overwritten as it goes — which step of seven, which

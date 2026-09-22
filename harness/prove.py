@@ -1629,7 +1629,9 @@ def cmd_completeness():
     def drain(group, kill_at=None):
         jid, killed, killed_at = None, False, None
         try:
-            L.recreate_output_topics()
+            # the run's own declared outputs are cleared too: the two arms are
+            # asserted differently and their rows must not be mixed
+            L.recreate_output_topics(include_declared=True)
             L.assert_cluster_idle()
             L.delete_group(group)
             L.start_tm(cores)

@@ -1109,12 +1109,25 @@ def delete_group(g):
     kafka(f"kafka-consumer-groups.sh --bootstrap-server {cfg().boot_int} --delete --group {g}", check=False)
 
 
-def recreate_output_topics():
+def recreate_output_topics(include_declared=False):
+    """Empty the outputs before a case.
+
+    include_declared also empties the topics the run named in
+    topicsAlsoWritten. Section 4 asks the verifier for different assertions on
+    the clean drain and the killed one -- never backwards against backwards at
+    most once -- and only topics.out was ever cleared between them. A pipeline
+    whose output is per window has all of its output in topicsAlsoWritten by
+    construction, so its verifier saw both arms' rows concatenated with nothing
+    to tell them apart. Clean-room run 41 worked round it by stamping the
+    consumer group into the published business row, which is measurement
+    machinery in someone's data.
+    """
     c = cfg()
-    for t in c.topics_out:
+    topics = list(c.topics_out) + (list(c.topics_also) if include_declared else [])
+    for t in topics:
         delete_topic(t)
         create_topic(t, retention_bytes=T["sinkRetentionBytes"])
-    for t in c.topics_out:
+    for t in topics:
         tot, _ = log_end(t)
         if tot != 0:
             raise Refusal("rig", f"output topic {t} is not empty after recreate: {tot}")
@@ -2450,11 +2463,22 @@ def check_case(rec, cores, is_baseline):
     if rec.get("rateSource", "").startswith("engine"):
         raise Refusal("case", "rate came from the engine, not the transport")
     if rec["vantageDisagreement"] > T["vantageTol"]:
+        # Two causes account for nearly every case of this, and neither is
+        # obvious from the numbers. Clean-room run 41 spent about 35 minutes
+        # and one wrong fix on the second before measuring it.
+        why = ("\n  The two usual causes: the second reading moves in steps bigger than the "
+               "difference being measured -- a windowed pipeline's progress jumps by a whole "
+               "window, so work out how many input records one window holds and compare it with "
+               "how many a measurement window consumes at the SMALLEST case; or the readings are "
+               "taken at different moments -- the committed offset is where the source was at the "
+               "last checkpoint, the outputs are where the pipeline is now, so an unsteady rate "
+               "across the window makes them differ by the change in that lead."
+               if cfg().vantage_mode == "command" else "")
         raise Refusal("case", f"the two ways of counting do not agree. The source says "
-                              f"{rec['recordsConsumed']:,} records went through; the sinks say "
+                              f"{rec['recordsConsumed']:,} records went through; the outputs account for "
                               f"{rec['vantageSinkRecords']:,.0f}. That is {rec['vantageDisagreement']:.1%} apart "
                               f"and the limit is {T['vantageTol']:.0%}. One of them is wrong, so neither can "
-                              f"be used.")
+                              f"be used." + why)
     if rec["backlogRemaining"] < rec["recordsPerSec"] * c.ckpt_s:
         raise Refusal("case", f"the backlog nearly ran out: {rec['backlogRemaining']:,} records left at the "
                               f"end of the window, which is {rec['headroomS']:.1f}s of work at this rate. "

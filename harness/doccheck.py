@@ -447,6 +447,33 @@ def check_no_duplicate_keys(fail):
     return f"no key is set twice in pipeline.example.json ({counted[0]} keys)"
 
 
+def check_design_is_diffed(fail):
+    """Section 4 promises a design-versus-build diff that fails the run and is
+    corrected before anything is measured. The promise is only worth something
+    while the function behind it refuses, so both are checked."""
+    import lib
+    skill = read(ROOT, "SKILL.md")
+    for needle, what in (
+            ("diff the design against the build", "\u00a74 does not say to diff the design against the build"),
+            ("No fill, no suite, until the diff is\nclean", "\u00a74 does not say to correct it and re-run before measuring"),
+            ("```mermaid", "the interview has no diagram of the default business case")):
+        if needle not in skill:
+            fail(f"SKILL.md: {what}")
+    ex = json.loads(read(HERE, "pipeline.example.json"))
+    if not (ex.get("design") or {}).get("operators"):
+        fail("pipeline.example.json declares no design.operators, so its own build cannot be diffed")
+    if not ex.get("topicsAlsoWritten"):
+        fail("pipeline.example.json declares no topicsAlsoWritten, so the outputs outside topics.out "
+             "are not held to anything")
+    # and the diff still refuses a build missing a declared output
+    plan = {"nodes": [{"id": "a", "description": "positions<br/>+- sink-mv: Writer<br/>", "inputs": []}]}
+    _, bad = lib.design_diff({"outputs": ["market-values-by-account"]}, plan,
+                             {"market-values-by-account": 0}, {})
+    if bad is None:
+        fail("design_diff no longer refuses a declared output that nothing wrote")
+    return "the design is diffed against the build, and a missing output fails the run"
+
+
 def main():
     problems = []
     lines = []
@@ -459,7 +486,8 @@ def main():
                   check_broker_cpu_hook, check_target_not_needed,
                   check_probe_advice,
                   check_calls_are_grouped,
-                  check_no_duplicate_keys):
+                  check_no_duplicate_keys,
+                  check_design_is_diffed):
         lines.append(check(problems.append))
     for p in problems:
         print(f"doccheck: {p}")

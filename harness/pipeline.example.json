@@ -8,6 +8,25 @@
       "positions-by-account"
     ]
   },
+  "_topicsAlsoWritten": "Every topic the pipeline writes that the harness does not own. The harness cannot infer them -- that is precisely why they sit outside topics.out -- and it cannot read a diagram, so the run declares them here and the completeness drain refuses any that stayed empty. The default business case has TWO market values, by symbol and by account/sub-account/symbol; clean-room runs 36 and 37 each built one, and every guard passed because nothing knew how many there should be. Set retention.bytes on each (section 3): the harness will not.",
+  "topicsAlsoWritten": [
+    "market-values-by-symbol",
+    "market-values-by-account"
+  ],
+  "_design": "The design, as lists the harness can diff against the running job. Operators are looked for in the running plan's vertex descriptions, inputs and outputs on the broker after the completeness drain. Declared and missing fails the run; built and not declared is printed and allowed. Derive it from the interview's answers, not from this file. Outputs default to topics.out plus topicsAlsoWritten, so most runs only need to name the operators.",
+  "design": {
+    "operators": [
+      "parse",
+      "positions-by-symbol",
+      "positions-by-account",
+      "market-value-by-symbol",
+      "market-value-by-account"
+    ],
+    "inputs": [
+      "block-trades",
+      "prices"
+    ]
+  },
   "partitions": 8,
   "_marketValues": "The throttled emit the interview asks for, and there are TWO of them: question 1 joins prices to each of the two position outputs, so a market value is emitted per symbol and per account/sub-account/symbol. Prices are broadcast rather than keyed, because the account side is keyed on account/sub-account/symbol and cannot be joined to a symbol-keyed price stream by key at all. Configurable interval, default 10000 ms. Neither is counted in outputsPerInput and neither topic is in topics.out — see _topics. The verifier should still check both: every market value equal to that key's final position x its latest published price, exactly, which is one of the assertions section 4 requires.",
   "_outputsPerInput": "Sink records per input record, summed across every output topic. Derive it, do not copy this: the two-vantage guard compares broker offsets against sink rows and a wrong value makes them disagree. One position per trade plus one per allocation at four allocations is 1 + 4 = 5, not 8.",

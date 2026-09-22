@@ -117,6 +117,12 @@ core with no base, the rig read GC 17.4% at one core against 3.4% at two and
 1.1% at four, because Flink's fixed overheads are most of a small process
 size. Hence the base term.
 
+**The tiny proof is the tuning loop's measurement, and it re-runs after the
+fill.** It measures every case the suite will run on one build in minutes. Its
+disk projection credits whatever the suite's input topic already holds, so a
+backlog that is already on the broker is not projected a second time and the
+topic does not have to be deleted and re-filled between changes.
+
 **The tiny proof sizes the backlog.** It measures the largest case's rate and
 fails the chain if `backlog.count` is short of what that case needs to
 survive warm-up, the window and more than one checkpoint interval of headroom

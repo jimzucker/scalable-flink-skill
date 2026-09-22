@@ -751,6 +751,20 @@ def cmd_selftest(live=True, topic=None):
         if bad:
             raise bad
     expect("an even key layout passes (must not fire)", skew_even, "", should_fire=False)
+    # clean-room run 36's own measured shape (its results/tinyproof.json): 172.3 B
+    # per input record, a 220M backlog = 37.9 GB, sinks capped by retention at
+    # 34.4 GB, so the suite needs 92.3 GB. Re-running the tiny proof after the fill
+    # left 77.3 GB free and the projection asked for the backlog a second time,
+    # so it refused a suite that fitted and every tuning lever cost a delete and a
+    # re-fill -- about 12 minutes of broker I/O each (feedback 5).
+    run36 = dict(in_bytes_per_rec=172.3, backlog=220_000_000, sink_bytes_per_in=284.8,
+                 partitions=8, n_out_topics=2, ckpt_bytes=151552)
+    expect("disk: the backlog is projected twice after a fill",
+           lambda: L.disk_verdict(77.3e9, **run36), "of disk and only")
+    expect("disk: the tiny proof re-runs once the backlog on disk is credited (must not fire)",
+           lambda: L.disk_verdict(77.3e9, input_on_disk_bytes=37.9e9, **run36), "", should_fire=False)
+    expect("disk: crediting the backlog does not excuse a suite that still will not fit",
+           lambda: L.disk_verdict(40e9, input_on_disk_bytes=37.9e9, **run36), "still to write")
 
     def chain():
         # in its own directory: the first version wrote its fake chain into the
@@ -1259,7 +1273,9 @@ def cmd_tinyproof():
                 rc = 1
         if rc == 0:
             d = out["disk"]
-            log(f"  disk: input {d['inputBytesPerRecord']:.0f} B/record x {c.backlog:,} = {d['inputBytes']/1e9:.1f} GB; "
+            on_disk = (f" ({d['inputBytesOnDisk']/1e9:.1f} GB of it already on the broker, "
+                       f"{d['inputBytesToWrite']/1e9:.1f} GB still to write)" if d.get("inputBytesOnDisk") else "")
+            log(f"  disk: input {d['inputBytesPerRecord']:.0f} B/record x {c.backlog:,} = {d['inputBytes']/1e9:.1f} GB{on_disk}; "
                 f"sinks {d['sinkBytesPerInput']:.0f} B/input -> {d['sinkBytesUnbounded']/1e9:.1f} GB, "
                 f"retention caps them at {d['sinkRetentionCapBytes']/1e9:.1f} GB; checkpoints {d['checkpointBytes']/1e9:.2f} GB; "
                 f"need {d['neededBytes']/1e9:.1f} GB incl. the {d['floorBytes']/1e9:.0f} GB floor, "

@@ -232,6 +232,10 @@ class Cfg:
         self.boot_ext = f"localhost:{port}"
         self.rest = f"http://localhost:{self.rest_port}"
         self.topic_in = c["topics"]["in"]
+        # The same name, kept where nothing reassigns it. The tiny proof points
+        # topic_in at its own small topic while it measures, and the disk
+        # projection has to know which topic the suite will actually drain.
+        self.suite_topic_in = c["topics"]["in"]
         self.topics_out = list(c["topics"]["out"])
         self.partitions = int(c["partitions"])
         self.out_per_in = float(c["outputsPerInput"])
@@ -471,6 +475,16 @@ def topic_bytes(topics):
     return sum(int(x) for x in sizes) * 1024
 
 
+def topic_bytes_if_any(topics):
+    """topic_bytes, but a topic that has not been created yet is nought bytes
+    rather than a refusal. Used for the suite's input topic, which exists on a
+    re-run after `fill` and does not exist before one."""
+    try:
+        return topic_bytes(topics)
+    except Refusal:
+        return 0
+
+
 def volume_bytes(vol):
     r = sh(f"docker run --rm -v {vol}:/v alpine du -sk /v", check=False)
     if r.returncode != 0 or not r.stdout.split():
@@ -478,25 +492,41 @@ def volume_bytes(vol):
     return int(r.stdout.split()[0]) * 1024
 
 
-def disk_verdict(free, in_bytes_per_rec, backlog, sink_bytes_per_in, partitions, n_out_topics, ckpt_bytes):
+def disk_verdict(free, in_bytes_per_rec, backlog, sink_bytes_per_in, partitions, n_out_topics, ckpt_bytes,
+                 input_on_disk_bytes=0.0):
     """Pure. Project the suite's disk from the tiny proof's measured shape, before
     the fill. The sinks are bounded by retention, so the projection is too — run
     11 rebuilt its sink payload against a 75 GB figure that retention would have
-    capped at 34 GB, and re-ran both gates for the new build."""
+    capped at 34 GB, and re-ran both gates for the new build.
+
+    input_on_disk_bytes is what the suite's input topic already holds. Without
+    it the projection asks for the whole backlog a second time while it is
+    sitting on the very disk being measured, so the tiny proof could not be
+    re-run after the fill: clean-room run 36 refused a suite that fitted, and
+    every tuning lever then cost a delete and a re-fill, about 12 minutes of
+    broker I/O each. Crediting it is right whichever way the topic goes — kept,
+    and the fill does not write it again; deleted, and its bytes come back as
+    free space."""
     inp = in_bytes_per_rec * backlog
+    already = min(inp, max(0.0, input_on_disk_bytes))
+    to_write = inp - already
     sink_unbounded = sink_bytes_per_in * backlog
     sink_cap = partitions * n_out_topics * T["sinkRetentionBytes"]
     sink = min(sink_unbounded, sink_cap)
-    need = inp + sink + ckpt_bytes + T["diskFloorBytes"]
+    need = to_write + sink + ckpt_bytes + T["diskFloorBytes"]
     d = {"hostFreeBytes": int(free), "inputBytesPerRecord": round(in_bytes_per_rec, 1),
-         "inputBytes": int(inp), "sinkBytesPerInput": round(sink_bytes_per_in, 1),
+         "inputBytes": int(inp), "inputBytesOnDisk": int(already),
+         "inputBytesToWrite": int(to_write), "sinkBytesPerInput": round(sink_bytes_per_in, 1),
          "sinkBytesUnbounded": int(sink_unbounded), "sinkRetentionCapBytes": int(sink_cap),
          "sinkBytes": int(sink), "sinkBoundedByRetention": sink_unbounded > sink_cap,
          "checkpointBytes": int(ckpt_bytes), "floorBytes": int(T["diskFloorBytes"]),
          "neededBytes": int(need), "fits": need <= free}
     if need > free:
+        inp_note = (f"{to_write/1e9:.1f} GB of input still to write — the backlog needs "
+                    f"{inp/1e9:.1f} GB and {already/1e9:.1f} GB of it is on the broker already — "
+                    if already else f"{inp/1e9:.1f} GB of input, ")
         e = Refusal("rig", f"the suite needs {need/1e9:.1f} GB of disk and only {free/1e9:.1f} GB will be free "
-                           f"once the tiny proof's topics are deleted. That is {inp/1e9:.1f} GB of input, "
+                           f"once the tiny proof's topics are deleted. That is {inp_note}"
                            f"{sink/1e9:.1f} GB of sinks (capped at {sink_cap/1e9:.1f} GB), "
                            f"{ckpt_bytes/1e9:.1f} GB of checkpoints and {T['diskFloorBytes']/1e9:.0f} GB kept spare. "
                            f"Shrink the backlog or the record size now. After the suite is too late.")
@@ -539,10 +569,16 @@ def disk_projection(tiny_topic, tiny_count, last_case_rec):
     # first live projection counted them as used and refused a suite that fitted.
     host_free = host_free_bytes()
     reclaimable = tiny_bytes + sink_bytes
-    d = disk_verdict(host_free + reclaimable, in_bpr, c.backlog, sink_bpi, c.partitions, len(c.topics_out), ckpt)
+    # What the suite's own input topic already holds. Nought before the fill,
+    # the whole backlog on a re-run after it -- which is the case that could not
+    # be projected at all before (run 36, feedback 5).
+    on_disk = topic_bytes_if_any([c.suite_topic_in])
+    d = disk_verdict(host_free + reclaimable, in_bpr, c.backlog, sink_bpi, c.partitions, len(c.topics_out), ckpt,
+                     input_on_disk_bytes=on_disk)
     d.update(hostFreeBytesNow=int(host_free), reclaimableBytes=int(reclaimable),
              measuredOn={"tinyTopicRecords": tiny_count, "tinyTopicBytes": int(tiny_bytes),
-                         "sinkRecordsConsumed": consumed, "sinkBytesOnDisk": int(sink_bytes)})
+                         "sinkRecordsConsumed": consumed, "sinkBytesOnDisk": int(sink_bytes),
+                         "suiteInputTopic": c.suite_topic_in, "suiteInputBytesOnDisk": int(on_disk)})
     return d
 
 

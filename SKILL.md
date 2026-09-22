@@ -660,6 +660,16 @@ the cases interleaved.** Anything else is a guess wearing a number.
 | **fewer subtasks for the same cores** | **about 8%**, ~3 points of it the source idling | four subtasks where two would do |
 | **spread the keys evenly** | **up to 0.80 → 1.00 of linear** at four cores on the demo's own keys | the preflight row says the keyed stage's keys land unevenly. Add the `pipeline.max-parallelism` it names to `flinkProperties`. This is arithmetic, not a measurement: a subtask holding a quarter more keys than its neighbours does a quarter more work |
 
+**Measure each change with `prove.py tinyproof`, not with a suite.** It runs
+every case the suite will run, back to back on one build, and takes minutes
+rather than most of an hour. **It can be re-run after the fill** — the disk
+projection credits the backlog already on the broker, so the suite's input
+topic stays where it is between levers. Before that credit existed the
+projection counted the same backlog as used *and* as still to write, refused
+a suite that fitted, and made every lever cost a delete and a re-fill, about
+twelve minutes of broker I/O each (clean-room run 36). Confirm the winner with
+the suite once, at the end.
+
 **Two things were tested and changed nothing**, so do not spend a run on them:
 partition count (8 against 16 — and 16 failed every parallelism-4 case for an
 unstable warm-up) and network buffer fraction (0.15 against 0.30).

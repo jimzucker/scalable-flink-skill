@@ -263,6 +263,45 @@ self-test) and `completeness` have passed **for the same build hash**.
 | `jdk` | the host JDK home; preflight checks its major version matches the engine image |
 | `axis`, `apiLevel`, `guarantee.state`, `guarantee.sink`, `checkpointMs` | the header fields of §9, verbatim into the report |
 
+### The broker's CPU, for the dashboard
+
+`flinkProperties` reaches the job manager and the workers. Section 7's **CPU
+per component** panel is about the component beside them — the broker that can
+be the ceiling at half a core — and nothing reports that. cAdvisor does not
+work on Docker Desktop for macOS: its Docker factory registers against the
+socket and it still reports one series, because the cgroup tree it reads inside
+the VM does not contain the containers.
+
+`harness/dashboard/docker_cpu_exporter.py` reads cumulative CPU nanoseconds per
+container off the Docker API and serves them as a Prometheus counter. Copy it
+next to your provisioning files and mount **the directory**, never the single
+file — `sed -i ''` and friends replace the inode, and the container then holds
+a file that no longer exists while looking perfectly healthy.
+
+```json
+"extraServices": {
+  "statsexporter": {
+    "image": "python:3.12-alpine",
+    "container_name": "myproj-statsexporter",
+    "hostname": "myproj-statsexporter",
+    "cpus": 0.2,
+    "mem_limit": "128m",
+    "environment": {"PREFIX": "myproj-"},
+    "command": ["python3", "/app/docker_cpu_exporter.py"],
+    "volumes": [
+      "/abs/path/to/dashboard/exporter:/app:ro",
+      "/var/run/docker.sock:/var/run/docker.sock:ro"
+    ]
+  }
+}
+```
+
+Scrape `myproj-statsexporter:9110`, and plot
+`rate(docker_container_cpu_seconds_total[1m])` by `name`. `PREFIX` is required:
+without it the exporter would publish every container on the machine. Nothing
+it reports is ever quoted as a result — the harness reads the cgroup counter
+directly for the table.
+
 ## What the harness owns, and the agent does not change
 
 The thresholds in `lib.py` (`T`), each with the measurement it was set from.

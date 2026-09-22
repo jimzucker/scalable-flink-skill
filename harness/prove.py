@@ -1224,7 +1224,20 @@ def cmd_preflight():
 
     def retention():
         L.recreate_output_topics()
-        return f"retention.bytes={T['sinkRetentionBytes']} set and read back on {c.topics_out} (a periodic sweep, not a bound)"
+        # topicsAlsoWritten too. This row read back on topics.out alone, so a
+        # pipeline whose output is per window -- which has no topics.out at all
+        # -- passed it on an empty list and was told its retention was fine.
+        # That is the one shape where an undrained topic is guaranteed to exist.
+        also = [t for t in c.topics_also if L.topic_exists(t)]
+        missing = [t for t in also if not L.topic_retention_bytes(t)]
+        if missing:
+            return f"FAIL: no retention.bytes on {missing}, which nothing ever drains"
+        checked = list(c.topics_out) + also
+        if not checked:
+            return "no topic is written but never drained"
+        return (f"retention.bytes={T['sinkRetentionBytes']} set and read back on {c.topics_out}"
+                + (f", declared retention read back on {also}" if also else "")
+                + " (a periodic sweep, not a bound)")
 
     def determinism():
         if not c.manifest_cmd:

@@ -34,6 +34,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import statistics
 import tempfile
 import shutil
@@ -365,6 +366,15 @@ class Cfg:
         if self.topics_also and not self.design.get("outputs"):
             self.design["outputs"] = list(self.topics_out) + list(self.topics_also)
         self.key_sets = {str(k): str(v) for k, v in (c.get("keySets") or {}).items()}
+        # Environment for the engine's containers, job manager and task
+        # manager alike. Section 7 told runs to set a metrics reporter through
+        # flinkProperties, but on flink:1.20.1 the Prometheus reporter jar sits
+        # in /opt/flink/opt and only reaches the classpath through the image's
+        # own ENABLE_BUILT_IN_PLUGINS -- which nothing could set, because the
+        # harness passed exactly one variable and forking it is forbidden.
+        # Clean-room run 42 spent about forty minutes writing a REST exporter,
+        # which is the cost section 7 says run 32 already paid once.
+        self.flink_env = c.get("flinkEnv") or {}
         self.flink_props = c.get("flinkProperties") or {}
         if isinstance(self.flink_props, str):
             self.flink_props = dict(
@@ -448,6 +458,12 @@ class Cfg:
         for i, t in enumerate(self.topics_out):
             d[f"out{i}"] = t
         d["outs"] = ",".join(self.topics_out)
+        # The same courtesy for topicsAlsoWritten. Without it a run hand-types
+        # the topic name into the job args, the verifier and the second-vantage
+        # command, and a typo in any one of them is found at run time.
+        for i, t in enumerate(self.topics_also):
+            d[f"also{i}"] = t
+        d["alsos"] = ",".join(self.topics_also)
         d.update(kw)
         return s.format(**d)
 
@@ -536,6 +552,20 @@ def topic_exists(topic):
     """Whether the broker has this topic at all, without refusing if it does not."""
     r = kafka(f"kafka-topics.sh --bootstrap-server {cfg().boot_int} --list", check=False)
     return topic in (r.stdout or "").split()
+
+
+def topic_retention_bytes(topic):
+    """retention.bytes as the broker has it, or None.
+
+    The preflight row that asserts retention existed read back only on the
+    topics the harness owns. A run declares the rest in topicsAlsoWritten and
+    sets their retention itself, so this is how that promise gets checked
+    rather than assumed.
+    """
+    r = kafka(f"kafka-configs.sh --bootstrap-server {cfg().boot_int} --entity-type topics "
+              f"--entity-name {topic} --describe", check=False)
+    m = re.search(r"retention\.bytes=(\d+)", r.stdout or "")
+    return int(m.group(1)) if m else None
 
 
 def log_end_if_any(topic):
@@ -758,7 +788,8 @@ services:
         state.backend.type: hashmap
         parallelism.default: {c.baseline}
         heartbeat.timeout: 120000
-""" + "".join(f"        {k}: {v}\n" for k, v in c.flink_props.items()) + f"""
+""" + "".join(f"        {k}: {v}\n" for k, v in c.flink_props.items()) + "".join(
+    f"      {k}: \"{v}\"\n" for k, v in c.flink_env.items()) + f"""
     volumes:
       - ckpt:/ckpt
       - {c.jar_dir}:/jobs:ro
@@ -1274,7 +1305,8 @@ def start_tm(cores, slots=None, reporter_s=None):
     sh(f"docker run -d --name {c.tm} --hostname {c.tm} --network {c.net} --user 0:0 "
        f"--cpus {cores} " + (f"--memory {tm_mem_limit} " if tm_mem_limit else "") +
        f"-v {c.ckpt_vol}:/ckpt -v {c.jar_dir}:/jobs:ro "
-       f"-e FLINK_PROPERTIES=$'{props}' {c.flink_img} taskmanager")
+       + "".join(f"-e {k}={shlex.quote(str(v))} " for k, v in c.flink_env.items())
+       + f"-e FLINK_PROPERTIES=$'{props}' {c.flink_img} taskmanager")
     nano = assert_cap(c.tm, cores)
     for _ in range(120):
         try:

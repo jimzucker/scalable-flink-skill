@@ -97,11 +97,17 @@ failed with 30,927 hits at 562,907 rec/s and **96.4% of cap** — above the
 cap floor, so nothing else would have caught it — and 4 GiB clean with zero
 hits at 646,423 rec/s. A 264M-record backlog wanted 4 GiB here.
 
-**Pipeline memory is not capped by default.** This repository's own demo caps
-none — only CPU — and reads 1.99x from 2 to 4 units; every cap this harness
-chose starved something instead, and runs 14, 18, 21, 23 and 25 each lost time
-to it. What a scaling claim needs is that *CPU* is the constraint, so the
-harness no longer fixes memory's size: it checks memory was not the constraint.
+**Pipeline memory is set per subtask, and passing nothing is refused.** This
+paragraph used to say memory was not capped by default, which contradicted
+section 6 of the skill and the code, which refuses it: passing nothing does not
+leave memory to the engine, it leaves the image's flat 1728m, so every case runs
+on the same total and the largest one measures memory pressure rather than
+cores. Clean-room run 36 read 2→4 at 1.510 on the image default against 1.743
+with memory per subtask, and the GC ceiling did not catch it — GC was at its
+lowest on the case losing the most. Set `caps.tmMemoryBase` and
+`caps.tmMemoryPerCore` so every subtask in every case gets the same memory.
+Earlier flat caps starved things instead, and runs 14, 18, 21, 23 and 25 each
+lost time to that; what a scaling claim needs is that *CPU* is the constraint.
 A case whose garbage collection takes more than 5.5% of its capacity is a
 ceiling, not a result. That figure is measured, not chosen: across fourteen
 recorded runs every case that behaved sat at 0.35-4.8%, and every case above
@@ -283,6 +289,7 @@ self-test) and `completeness` have passed **for the same build hash**.
 | `verifier.cmd` | reads the outputs and `{manifest}`; exits 0 iff every completeness assertion holds with no tolerance. It is also given `{arm}`, which is `clean` on the clean drain and `killed` on the one killed mid-run — section 4 asks for **different** assertions on the two (never backwards, against backwards at most once per key), and until the harness said which arm it was running every pipeline had to work it out for itself. A command that does not use `{arm}` is unaffected |
 | `cases`, `baseline`, `passes` | the cases, which one is the baseline, passes per case (≥2; odd numbers alternate asc/desc/asc). The suite then measures the baseline once more as a **sentinel** — the first and last measurements of the suite are the same case, so a rig that drifts across the suite shows up as baseline spread rather than hiding inside the alternation. No threshold of its own: the 20% ceiling counts it. `suite.md` reports the first→last drift |
 | `flinkProperties` | optional. Extra Flink settings, applied to the job manager and to every task manager. This is how a metrics reporter gets in -- section 7 asks for panels that need one, and the rest of the properties are the harness's. Anything that decides what is being measured is refused: slots, parallelism, pipeline memory, the checkpoint store, and `metrics.reporter.slf4j.*`, which is where busy, idle and back-pressure are read from. Add settings, do not replace these |
+| `flinkEnv` | optional. Environment variables for the job manager and every task manager, e.g. `{"ENABLE_BUILT_IN_PLUGINS": "flink-metrics-prometheus-1.20.1.jar"}`. `flinkProperties` configures a reporter; this is what puts its jar on the classpath. Without it there is no route, and forking the harness is not one |
 | `extraServices` | optional. Services to splice into the generated stack -- a dashboard, an exporter -- as a map of name to compose service body. The container name must start with the project prefix or `down` fails for a survivor it did not create, and it must carry a CPU cap: anything sharing the cores under test changes the number being measured. Recorded in `suite.json` under `heldStill.extraServices`. Section 7 of the skill asks for a dashboard and section 6 requires it to live in the compose file; this is how both are satisfied without forking the harness |
 | `keySets` | which manifest fields hold a keyed stage's key set. **The key set must not depend on the record count**: preflight reads it from the manifest the determinism check generates at 200,000 records, so a generator whose keys grow with the backlog would be checked on the wrong set. Also, as `{"stage name": "manifest field"}`. Preflight asks Flink's own key-group assignment, out of the image under test, where each of those keys would land at every case's parallelism. A small key set does not spread over subtasks by itself: the demo's sixteen account keys land **5/3/4/4** at Flink's default of 128 key groups, which bounds that stage at 0.80 of linear at four cores. When that happens the row names the `pipeline.max-parallelism` to add to `flinkProperties` — 1115 for those key names, which makes it 4/4/4/4. Leave it out and the row fails saying it cannot check |
 | `backlog.count`, `.seed`, `.smallCount`, `.tinyCount`, `.killAtFraction` | the drain backlog; the completeness backlog (must drain to the last record); the tiny-proof backlog; where the pipeline is killed. **Size the backlogs for the largest case's rate × (warm-up ceiling + window + two checkpoint intervals)**: the suite at up to 240 + 70 + 20 s, the tiny proof at 120 + 40 + 20 s. The completeness backlog must span **several checkpoint intervals** at the baseline rate, or the kill cannot land where `killAtFraction` says (offsets commit once per interval). A backlog that drains under the job fails the run, and says so. **On a first attempt you cannot know the rate** — that is what the tiny proof measures. Guess high, run the tiny proof, and re-size from the rate it reports: a wrong guess costs one tiny proof, a too-small suite backlog costs the suite. For a fast pipeline `tinyCount` is not small — clean-room run 30 needed 150,000,000, which was 43% of its suite backlog |
@@ -347,6 +354,12 @@ case) — and `replay` builds each one and checks it still gets that verdict. It
 exists because #68 shipped a rule that failed two configurations which had
 already produced accepted runs, and run 22 spent two chains and produced no
 ratios finding out. With this in place that rule fails replay in a second.
+
+`prove.py probe` measures what this host's own cores do at each case size with
+no pipeline in the way, and prints each arm separately — a register-only arm and
+a memory-bound one. It takes `--repeats`; more repeats widen the full range and
+settle the middle half rather than shrinking either. Run it before blaming a
+pipeline for a step it missed.
 
 `prove.py replay` re-derives every recorded suite in `record/` with the current
 thresholds before any command that touches a stack, and will not run if a

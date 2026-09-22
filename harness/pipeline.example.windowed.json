@@ -1,32 +1,32 @@
 {
   "_this": "A SECOND worked example, and a deliberately different shape from pipeline.example.json. Neither is a template: read them, write your own from the field table in README.md. Two runs out of two copied a shipped example's numbers rather than deriving them, and one of them copied a backlog sized for a pipeline it was not building.",
-  "_whatItIs": "Temperature readings in, keyed by location, timestamped. One average per location per one-hour window out. Nothing about it has the other example's shape: no fan-out, no second input, no throttled extra output -- and that is the point. Its outputs are PER WINDOW. One location emits one row an hour whether it read a thousand readings that hour or a million.",
-  "_secondVantage": "Which is why this one cannot use the default way of double-checking its speed. There is no constant number of output rows per input record to divide by -- not in this job, not anywhere. So it supplies a command instead, printing how much input its own output accounts for. THE BEST SIGNAL IS A COUNT THE PIPELINE ALREADY PUBLISHES: if each row carries the number of readings it aggregated, the sum of that field over the topic is exactly the answer -- exact, monotonic, no arithmetic against the manifest, and indifferent to rows left from an earlier case. Deriving it from the latest window per key instead works but is coarser, and coarse is what breaks it. MIND THE STEP SIZE: this signal moves one window at a time. Work out how many input records one window holds and compare it with how many a measurement window consumes AT THE SMALLEST CASE -- that case reads slowest and needs the finest signal. 1,000 sensors at a reading a second is 3,600,000 records an hour; a one-core window consuming 47,000,000 moves 7.6% per step against a 5% tolerance, and the two counts then disagree at random. Clean-room run 41 fixed it by giving each location its own arrival lag so the 100 locations close their hours at 100 different points in the stream, which dropped the step to 36,000. AND MIND THE CLOCKS: the committed offset is where the source was at the last checkpoint; this command reads where the pipeline is now. An unsteady rate across the window makes them differ by the change in that lead, measured at 2 to 3 seconds of drain on one rig. The harness runs it at each end of the measurement window and compares the difference with what Kafka says was read. Two independent numbers, which is the whole point -- one measurement cannot tell a fast pipeline from a stuck consumer group.",
-  "_topicsOut": "Empty, and allowed to be empty only because secondVantage is a command. The harness owns topics.in and every topic in topics.out; this pipeline has no output that grows with its input, so it owns none of the outputs. The hourly average is declared in topicsAlsoWritten instead, which is what makes the completeness drain fail if nothing ever writes to it.",
+  "_whatItIs": "Card payments in, keyed by merchant, each carrying its own timestamp. One row per merchant per one-hour window out, carrying the total taken and the number of payments, so a reader divides for the average rather than being handed a rounded one. Nothing about it has the other example's shape: no fan-out, no second input, no throttled extra output -- and that is the point. Its outputs are PER WINDOW. One merchant emits one row an hour whether it took a thousand payments that hour or a million.",
+  "_secondVantage": "Which is why this one cannot use the default way of double-checking its speed. There is no constant number of output rows per input record to divide by -- not in this job, not anywhere. So it supplies a command instead, printing how much input its own output accounts for. THE BEST SIGNAL IS A COUNT THE PIPELINE ALREADY PUBLISHES: if each row carries the number of payments it aggregated, the sum of that field over the topic is exactly the answer -- exact, monotonic, no arithmetic against the manifest, and indifferent to rows left from an earlier case. Deriving it from the latest window per key instead works but is coarser, and coarse is what breaks it. MIND THE STEP SIZE: this signal moves one window at a time. Work out how many input records one window holds and compare it with how many a measurement window consumes AT THE SMALLEST CASE -- that case reads slowest and needs the finest signal. 1,000 terminals at a payment a second is 3,600,000 records an hour; a one-core window consuming 47,000,000 moves 7.6% per step against a 5% tolerance, and the two counts then disagree at random. Clean-room run 41 fixed it by giving each merchant its own arrival lag so the 100 merchants close their hours at 100 different points in the stream, which dropped the step to 36,000. AND MIND THE CLOCKS: the committed offset is where the source was at the last checkpoint; this command reads where the pipeline is now. An unsteady rate across the window makes them differ by the change in that lead, measured at 2 to 3 seconds of drain on one rig. The harness runs it at each end of the measurement window and compares the difference with what Kafka says was read. Two independent numbers, which is the whole point -- one measurement cannot tell a fast pipeline from a stuck consumer group.",
+  "_topicsOut": "Empty, and allowed to be empty only because secondVantage is a command. The harness owns topics.in and every topic in topics.out; this pipeline has no output that grows with its input, so it owns none of the outputs. The hourly total is declared in topicsAlsoWritten instead, which is what makes the completeness drain fail if nothing ever writes to it.",
   "project": "tmp",
   "topics": {
-    "in": "readings",
+    "in": "payments",
     "out": []
   },
   "topicsAlsoWritten": [
-    "hourly-average-by-location"
+    "hourly-total-by-merchant"
   ],
   "partitions": 8,
   "secondVantage": {
     "mode": "command",
-    "cmd": "{java} -cp {jar} t.Progress --bootstrap={bootstrapExt} --topic=hourly-average-by-location --manifest={manifest}"
+    "cmd": "{java} -cp {jar} t.Progress --bootstrap={bootstrapExt} --topic=hourly-total-by-merchant --manifest={manifest}"
   },
   "design": {
     "operators": [
-      "parse reading",
-      "hourly average by location"
+      "parse payment",
+      "hourly total by merchant"
     ],
     "inputs": [
-      "readings"
+      "payments"
     ]
   },
   "keySets": {
-    "by-location": "locationKeys"
+    "by-merchant": "merchantKeys"
   },
   "checkpointMs": 10000,
   "job": {
@@ -37,7 +37,7 @@
   "generator": {
     "cmd": "{java} -cp {jar} t.Gen --count={count} --seed={seed} --topic={topic} --manifest={manifest} --bootstrap={bootstrapExt} --partitions={partitions}",
     "manifestCmd": "{java} -cp {jar} t.Gen --mode=manifest --count={count} --seed={seed} --manifest={manifest}",
-    "manifestCountField": "readingCount"
+    "manifestCountField": "paymentCount"
   },
   "verifier": {
     "cmd": "{java} -cp {jar} t.Verify --bootstrap={bootstrapExt} --manifest={manifest}"
@@ -74,6 +74,6 @@
     "sink": "at-least-once, idempotent"
   },
   "_backlog": "These counts are NOT for you. Size them from your own pipeline's measured rate: the fastest case's rate x (warm-up ceiling + window + two checkpoint intervals). Guess high on the first attempt -- that is what the tiny proof is for, and it tells you the number it measured.",
-  "_designAndKeySets": "design is diffed against the running job after the completeness drain: every operator named here is looked for in the plan the engine serves, every input and output on the broker. keySets names which manifest fields hold each keyed stage's keys, so preflight can ask Flink where they would land at 1, 2 and 4 cores -- 64 locations spread better than 4 symbols do, but it is still worth asking rather than assuming.",
-  "_fanOutIsTheJobsProperty": "A uniform generator makes any windowed pipeline LOOK like it has a constant fan-out: 36,000 readings a row here, so outputsPerInput 0.0000278 would have passed. It would be a lie about the pipeline -- change the data and the number changes. Declare a fan-out only when the job fixes it."
+  "_designAndKeySets": "design is diffed against the running job after the completeness drain: every operator named here is looked for in the plan the engine serves, every input and output on the broker. keySets names which manifest fields hold each keyed stage's keys, so preflight can ask Flink where they would land at 1, 2 and 4 cores -- 64 merchants spread better than 4 symbols do, but it is still worth asking rather than assuming.",
+  "_fanOutIsTheJobsProperty": "A uniform generator makes any windowed pipeline LOOK like it has a constant fan-out: 36,000 payments a row here, so outputsPerInput 0.0000278 would have passed. It would be a lie about the pipeline -- change the data and the number changes. Declare a fan-out only when the job fixes it."
 }

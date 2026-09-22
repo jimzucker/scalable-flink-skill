@@ -145,6 +145,55 @@ def check_order_is_asserted(fail):
     return f"the verifier must assert {len(needed)} things about order"
 
 
+def check_broker_ceiling_observation(fail):
+    """What run 42 measured about the broker-ceiling guard stays written down.
+
+    The guard threw away the two fastest four-core passes and kept the slowest,
+    and giving the broker its page cache then moved that case's mean by 0.5%.
+    That is one run, so it is not a threshold -- but it is the kind of thing a
+    later run rediscovers expensively if nobody wrote it next to the rule.
+    """
+    skill = read(HERE, "..", "SKILL.md")
+    for needle in ("2,771-2,840 times a window", "One run is not a threshold"):
+        if needle not in skill:
+            fail(f"SKILL.md no longer records what run 42 measured about the broker "
+                 f"ceiling guard: {needle!r}")
+    return "run 42's broker-ceiling measurement is still written next to the guard"
+
+
+def check_windowed_example_backlogs(fail):
+    """The same floor, for the other shipped example.
+
+    check_example_backlogs has caught three shipped defaults by running the
+    rule rather than reading it, but it only ever looked at one of the two
+    examples. The windowed one shipped a 200,000,000-record suite backlog and a
+    120,000,000-record tiny one; clean-room run 42 drained 2,657,223 readings a
+    second, which needs 718,247,376 and 478,300,140. An example that runs dry
+    mid-window costs whoever copies it a suite.
+    """
+    import lib
+    rec = json.loads(read(HERE, "record", "sizing.json"))
+    suites = [s for s in (rec.get("suites") or []) if s.get("pipeline") == "windowed"]
+    if not suites:
+        return "no recorded rates for the windowed shape"
+    top = max(suites, key=lambda s: s["rateAtTop"])
+    ex = json.loads(read(HERE, "pipeline.example.windowed.json"))
+    b = ex.get("backlog") or {}
+    ckpt = ex.get("checkpointMs", 10000) / 1000.0
+    want = lib.size_backlog(top["rateAtTop"], top["cores"], top["ckptS"],
+                            warmup_max_s=top.get("warmupS"))
+    if (b.get("count") or 0) < want:
+        fail(f"pipeline.example.windowed.json backlog.count is {b.get('count'):,}, but the "
+             f"fastest windowed rate on record ({top['run']}, {top['rateAtTop']:,.0f}/s) needs "
+             f"{want:,}")
+    tiny_want = int(top["rateAtTop"] * (120 + 40 + 2 * ckpt))
+    if (b.get("tinyCount") or 0) < tiny_want:
+        fail(f"pipeline.example.windowed.json backlog.tinyCount is {b.get('tinyCount'):,}, but "
+             f"at {top['rateAtTop']:,.0f}/s the tiny proof needs {tiny_want:,}")
+    return (f"windowed backlogs cover {top['rateAtTop']:,.0f}/s: suite {b.get('count'):,} "
+            f">= {want:,}, tiny {b.get('tinyCount'):,} >= {tiny_want:,}")
+
+
 def check_example_backlogs(fail):
     """The example's backlogs are big enough for the rates on record.
 
@@ -162,6 +211,16 @@ def check_example_backlogs(fail):
     suites = rec.get("suites") or []
     if not suites:
         return "no recorded rates to size against"
+    # Like with like. Records/sec is not comparable across record sizes: the
+    # windowed example's reading is about 80 bytes and run 42 drained 2,657,223
+    # of them a second, while this example's order is 326 bytes and the fastest
+    # run on record managed 964,913. Sizing the 326-byte example for the 80-byte
+    # pipeline's rate demands roughly 234 GB of Kafka log -- and it is the same
+    # mistake as explaining one system's number with another system's
+    # measurement. Untagged records predate the tag and are this example's.
+    suites = [s for s in suites if s.get("pipeline", "trading") == "trading"]
+    if not suites:
+        return "no recorded rates for this example's shape"
     top = max(suites, key=lambda s: s["rateAtTop"])
     ex = json.loads(read(HERE, "pipeline.example.json"))
     b = ex.get("backlog") or {}
@@ -598,6 +657,8 @@ def main():
                   check_plan_discloses, check_order_is_asserted,
                   check_only_the_throttled_thing_is_throttled,
                   check_example_matches_interview, check_example_backlogs,
+                  check_windowed_example_backlogs,
+                  check_broker_ceiling_observation,
                   check_example_broker_memory, check_example_comments,
                   check_key_layout, check_tinyproof_reruns,
                   check_broker_cpu_hook, check_target_not_needed,

@@ -141,6 +141,11 @@ T = {
     "warmupFlatTol": 0.10,
     "warmupScatterTol": 0.20,
     "warmupMinS": 90.0,        # run 10: the ramp ran 46-136 s; outlast it
+    # The same figure, under a name the tiny proof does not override. The tiny
+    # proof lowers warmupMinS to 20 s so it stays cheap, and sizing runs inside
+    # it -- so the backlog was sized on a warm-up that only had to reach 20 s
+    # while the suite it sizes for will not start measuring before 90 s.
+    "suiteWarmupMinS": 90.0,
     "warmupMaxS": 240.0,
     # window: >=3 commit boundaries is the rule; six 10 s boundaries average the
     # checkpoint jitter (run 10). Windows of 20 s, 45 s and 60 s were tried in
@@ -617,7 +622,17 @@ def size_backlog(rate_at_top, cores_top, ckpt_s, warmup_max_s=None, window_s=Non
     # the measured warm-up, not the ceiling: warmupMaxS is 240 s and real
     # warm-ups run 100-150 s, so the ceiling would demand a backlog three times
     # what any run has needed and fail the disk projection instead.
-    warmup = warmup_max_s if warmup_max_s is not None else T["warmupMinS"]
+    # Floored at the SUITE's warm-up minimum, not the tiny proof's. This call
+    # happens inside the tiny proof, where warmupMinS is 20 s; clean-room run 42
+    # measured a 44.2 s warm-up there, was told 401,149,826 records would do,
+    # and then had a suite pass consume 422,499,766 -- every one of its ten
+    # suite warm-ups ran 90 s. It survived only because it ignored the number
+    # and used its own worst-case arithmetic. Replayed against all 23 recorded
+    # suites: every one already warmed up for 90 s or more, so none of them
+    # moves. Sizing on the suite's 60 s window as well would have refused three
+    # of them (run-11, run-17, phase3), which is why only this term changes.
+    warmup = max(warmup_max_s if warmup_max_s is not None else T["warmupMinS"],
+                 T.get("suiteWarmupMinS", 0.0))
     window = window_s if window_s is not None else T["minWindowS"]
     seconds = warmup + window + ckpt_s * 3          # headroom guard wants > 1 interval
     return int(rate_at_top * seconds * margin)

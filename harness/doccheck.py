@@ -215,7 +215,19 @@ def check_example_matches_interview(fail):
     for what, needle in (("the price input", "price"), ("the market value output", "market value")):
         if needle not in ex:
             fail(f"pipeline.example.json does not mention {what}, which question 1's default asks for")
-    return "the example covers the interview's whole pipeline"
+    # ...and both of them. Run 37 read "joins those to the positions" as the
+    # symbol side only and built half the pipeline the default describes.
+    skill = read(ROOT, "SKILL.md")
+    if '"The positions" is both of them' not in skill:
+        fail("SKILL.md question 1 does not say the price join applies to both position outputs")
+    if "at both of those key levels" not in skill:
+        fail("SKILL.md question 4 does not require market values at both key levels")
+    if "two of them" not in ex.replace("TWO", "two"):
+        fail("pipeline.example.json does not say there are two market-value outputs")
+    if "broadcast" not in ex:
+        fail("pipeline.example.json does not say prices are broadcast, which is what lets the "
+             "account side join at all")
+    return "the example covers the interview's whole pipeline, both market values included"
 
 
 def check_example_broker_memory(fail):
@@ -411,6 +423,57 @@ def check_calls_are_grouped(fail):
     return "independent calls travel together, and a run is waited on rather than polled"
 
 
+def check_no_duplicate_keys(fail):
+    """A JSON object with the same key twice keeps the last one, so the other
+    is dead text nobody sees. pipeline.example.json carried two
+    _flinkProperties for long enough that the first -- the one with the metrics
+    reporter example -- was invisible to every reader and every parser."""
+    dupes, counted = [], [0]
+
+    def watch(pairs):
+        # per object, not across the file: "cmd" appears once under generator
+        # and once under verifier, and that is two different keys
+        keys = [k for k, _ in pairs]
+        counted[0] += len(keys)
+        for k in keys:
+            if keys.count(k) > 1 and k not in dupes:
+                dupes.append(k)
+        return dict(pairs)
+
+    json.loads(read(HERE, "pipeline.example.json"), object_pairs_hook=watch)
+    for k in sorted(dupes):
+        fail(f"pipeline.example.json sets {k!r} twice in one object; only the last one is "
+             f"read, and the other is text nobody will ever see")
+    return f"no key is set twice in pipeline.example.json ({counted[0]} keys)"
+
+
+def check_design_is_diffed(fail):
+    """Section 4 promises a design-versus-build diff that fails the run and is
+    corrected before anything is measured. The promise is only worth something
+    while the function behind it refuses, so both are checked."""
+    import lib
+    skill = read(ROOT, "SKILL.md")
+    for needle, what in (
+            ("diff the design against the build", "\u00a74 does not say to diff the design against the build"),
+            ("No fill, no suite, until the diff is\nclean", "\u00a74 does not say to correct it and re-run before measuring"),
+            ("```mermaid", "the interview has no diagram of the default business case")):
+        if needle not in skill:
+            fail(f"SKILL.md: {what}")
+    ex = json.loads(read(HERE, "pipeline.example.json"))
+    if not (ex.get("design") or {}).get("operators"):
+        fail("pipeline.example.json declares no design.operators, so its own build cannot be diffed")
+    if not ex.get("topicsAlsoWritten"):
+        fail("pipeline.example.json declares no topicsAlsoWritten, so the outputs outside topics.out "
+             "are not held to anything")
+    # and the diff still refuses a build missing a declared output
+    plan = {"nodes": [{"id": "a", "description": "positions<br/>+- sink-mv: Writer<br/>", "inputs": []}]}
+    _, bad = lib.design_diff({"outputs": ["market-values-by-account"]}, plan,
+                             {"market-values-by-account": 0}, {})
+    if bad is None:
+        fail("design_diff no longer refuses a declared output that nothing wrote")
+    return "the design is diffed against the build, and a missing output fails the run"
+
+
 def main():
     problems = []
     lines = []
@@ -422,7 +485,9 @@ def main():
                   check_key_layout, check_tinyproof_reruns,
                   check_broker_cpu_hook, check_target_not_needed,
                   check_probe_advice,
-                  check_calls_are_grouped):
+                  check_calls_are_grouped,
+                  check_no_duplicate_keys,
+                  check_design_is_diffed):
         lines.append(check(problems.append))
     for p in problems:
         print(f"doccheck: {p}")

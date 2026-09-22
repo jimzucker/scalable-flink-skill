@@ -838,6 +838,66 @@ def cmd_selftest(live=True, topic=None):
     expect("suite.json records the memory each case was given (must not fire)",
            held_still_memory, "", should_fire=False)
 
+    # A plan shaped like the one clean-room run 36 actually recorded (the vertex
+    # descriptions and ship strategies are verbatim from its suite.json; the
+    # node ids are made up, because the plan itself was not kept -- which is
+    # why graph_shape keeps it now). Its third vertex chains ONE sink-mv where
+    # the business case asks for two.
+    RUN36_PLAN = {"nodes": [
+        {"id": "a1", "description": "Source: kafka-source-trades<br/>+- parse-order<br/>", "inputs": []},
+        {"id": "a2", "description": "Source: price-ticks<br/>+- parse-price<br/>", "inputs": []},
+        {"id": "a3", "description": "positions<br/>:- sink-positions-by-symbol: Writer<br/>"
+                                    ":  +- sink-positions-by-symbol: Committer<br/>"
+                                    "+- sink-mv: Writer<br/>   +- sink-mv: Committer<br/>",
+         "inputs": [{"id": "a1", "ship_strategy": "HASH"},
+                    {"id": "a2", "ship_strategy": "BROADCAST"}]}]}
+
+    def design_catches_the_missing_output():
+        design = {"operators": ["parse-order", "sink-mv-by-account"],
+                  "inputs": ["orders"],
+                  "outputs": ["market-values-by-symbol", "market-values-by-account"]}
+        records = {"orders": 20_000_000, "market-values-by-symbol": 812,
+                   "market-values-by-account": 0}
+        rows, bad = L.design_diff(design, RUN36_PLAN, records, {"outputsPerInput": (5, 5)})
+        if not rows:
+            raise Exception("the diff produced no rows")
+        if bad:
+            raise bad
+    expect("the build is missing an output the business case asks for",
+           design_catches_the_missing_output, "market-values-by-account")
+
+    def design_allows_extra_vertices():
+        # everything declared is there; the build has more, which is allowed
+        design = {"operators": ["parse-order"], "inputs": ["orders"], "outputs": ["positions"]}
+        rows, bad = L.design_diff(design, RUN36_PLAN, {"orders": 20_000_000, "positions": 99},
+                                  {"outputsPerInput": (5, 5)})
+        if bad:
+            raise bad
+        if not any(r["area"] == "in the build only" for r in rows):
+            raise Exception("the vertices the design did not name are not reported")
+    expect("a build with more operators than the design names passes, and says so (must not fire)",
+           design_allows_extra_vertices, "", should_fire=False)
+
+    def design_catches_a_constraint():
+        rows, bad = L.design_diff({"operators": ["parse-order"]}, RUN36_PLAN, {},
+                                  {"outputsPerInput": (5, 8)})
+        if bad:
+            raise bad
+    expect("the measured fan-out is not the declared one",
+           design_catches_a_constraint, "outputsPerInput = 5, read back 8")
+
+    def graph_renders():
+        m = L.graph_mermaid(RUN36_PLAN)
+        for needle in ("flowchart LR", "HASH", "BROADCAST", "parse-order"):
+            if needle not in m:
+                raise Exception(f"the rendered graph has no {needle}: {m}")
+        if "<br/>:-" in m or "+-" in m:
+            raise Exception(f"the ASCII tree survived into the diagram: {m}")
+        if L.graph_mermaid(None) or L.graph_mermaid({"nodes": []}):
+            raise Exception("an empty plan rendered something")
+    expect("the job graph draws from the plan the engine served (must not fire)",
+           graph_renders, "", should_fire=False)
+
     def chain():
         # in its own directory: the first version wrote its fake chain into the
         # live results/ (phases.log, all.json and a DONE saying "FAIL at c")
@@ -1521,7 +1581,10 @@ def cmd_completeness():
                     time.sleep(c.ckpt_s + 2)
                     log(f"processed the full test data set in {time.time()-t0:.1f}s" + (" (killed and restarted mid-run)" if killed else ""))
                     return {"group": group, "killed": killed, "drainS": round(time.time() - t0, 1),
-                            "killedAtCommitted": killed_at}
+                            "killedAtCommitted": killed_at,
+                            # read while it is still RUNNING: the finally below
+                            # cancels the job, and the plan goes with it
+                            "shape": L.graph_shape(jid)}
                 if time.time() - t0 > 1800:
                     raise Refusal("rig", f"it did not process all of the input: {cm:,} of {c.small:,} records")
                 time.sleep(0.5)
@@ -1542,6 +1605,30 @@ def cmd_completeness():
 
     try:
         a = drain(f"{c.project}-complete-clean"); a["verify"] = verify("clean drain"); out["arms"].append(a)
+        # GUARD: the job matches the design the run wrote down. The verifier
+        # checks the numbers in the topics the harness owns; this checks that
+        # the operators, the inputs and the outputs the interview asked for
+        # are all there -- including the ones outside topics.out, which is
+        # where both market values live and where nothing else looks.
+        records = {t: L.log_end(t)[0] for t in
+                   dict.fromkeys([c.suite_topic_in, topic] + list(c.topics_out) + list(c.topics_also)
+                                 + list((c.design.get("inputs") or []) + (c.design.get("outputs") or [])))}
+        sink_rows = sum(records.get(t, 0) for t in c.topics_out)
+        measured_fanout = round(sink_rows / c.small, 3) if c.small else 0
+        constraints = {"outputsPerInput": (c.out_per_in, measured_fanout)}
+        shape = (a.get("shape") or {})
+        if shape.get("maxParallelism"):
+            constraints["maxParallelism"] = (L.max_parallelism_for(c.cases)[0],
+                                             shape["maxParallelism"][0])
+        rows, bad = L.design_diff(c.design, shape.get("plan"), records, constraints)
+        out["designDiff"] = rows
+        log("  design against build:")
+        for line in L.design_table(rows):
+            log(line)
+        if bad:
+            log("  the build does not match the design. Section 4 says to correct it and run "
+                "completeness again — no fill, no suite, until it matches.")
+            raise bad
         b = drain(f"{c.project}-complete-kill", kill_at=c.kill_frac); b["verify"] = verify("killed mid-run"); out["arms"].append(b)
         out["result"] = "PASS"
     except Refusal as e:

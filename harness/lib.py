@@ -307,6 +307,21 @@ class Cfg:
         # out where Flink would put them -- and a small key set does not spread
         # over subtasks by itself. Clean-room run 36 had to write its own tool
         # and pick key names by hand to get an even layout.
+        # Every topic the pipeline writes that the harness does not own -- the
+        # throttled outputs, anything per interval rather than per input. The
+        # harness cannot infer them (that is why they are outside topics.out)
+        # and it cannot read a diagram, so the run declares them and the
+        # completeness drain holds the job to the list. Clean-room runs 36 and
+        # 37 both built ONE market-value sink where the business case asks for
+        # two -- by symbol and by account/sub-account/symbol -- and every guard
+        # passed, because nothing knew how many there should be.
+        self.topics_also = list(c.get("topicsAlsoWritten") or [])
+        # The design, as lists that can be diffed against the running job: the
+        # operators the interview's answers imply, the topics read, the topics
+        # written. Outputs default to every topic the pipeline writes.
+        self.design = dict(c.get("design") or {})
+        if self.topics_also and not self.design.get("outputs"):
+            self.design["outputs"] = list(self.topics_out) + list(self.topics_also)
         self.key_sets = {str(k): str(v) for k, v in (c.get("keySets") or {}).items()}
         self.flink_props = c.get("flinkProperties") or {}
         if isinstance(self.flink_props, str):
@@ -1555,7 +1570,152 @@ def graph_shape(jid):
         sig.append([n["description"], ships])
     # JobVertexDetailsInfo.FIELD_NAME_MAX_PARALLELISM, read back from the engine
     max_par = sorted({v["maxParallelism"] for v in rest(f"/jobs/{jid}")["vertices"]})
-    return {"vertexCount": len(plan["nodes"]), "signature": sig, "maxParallelism": max_par}
+    # The plan itself, kept. The signature is what cases are compared on, and it
+    # deliberately drops the edges -- which left nothing in the record to draw
+    # the graph from afterwards. A drawn diagram is a claim; this one is read
+    # off the job that ran.
+    return {"vertexCount": len(plan["nodes"]), "signature": sig, "maxParallelism": max_par,
+            "plan": plan}
+
+
+MERMAID_SAFE = re.compile(r'[^A-Za-z0-9 ()/,.:+_<>-]')
+
+
+def vertex_label(description):
+    """Pure. A running plan's vertex description, fit to print.
+
+    Flink describes a vertex as its chained operators in an ASCII tree --
+    "positions<br/>:- sink-by-symbol: Writer<br/>:  +- ...: Committer<br/>" --
+    which is unreadable in a box. The tree drawing goes, the operator names
+    stay, one per line."""
+    parts = [p for p in re.split(r"<br\s*/?>", description or "") if p.strip()]
+    out = []
+    for part in parts:
+        name = re.sub(r"^[:+\-\s|]+", "", part).strip()
+        if name:
+            out.append(MERMAID_SAFE.sub("", name))
+    return "<br/>".join(out) or "?"
+
+
+def graph_mermaid(plan):
+    """Pure. The job graph as Mermaid, from the plan the engine served.
+
+    Every other picture of the pipeline is drawn by hand and is therefore a
+    claim about what was built. Clean-room runs 36 and 37 both built one
+    market-value sink where the business case asks for two, and both drew
+    diagrams; nothing compared either drawing with the job. This one is the
+    job.
+    """
+    nodes = (plan or {}).get("nodes") or []
+    if not nodes:
+        return ""
+    name = {n["id"]: f"v{i}" for i, n in enumerate(nodes)}
+    lines = ["flowchart LR"]
+    for n in nodes:
+        lines.append(f'  {name[n["id"]]}["{vertex_label(n.get("description"))}"]')
+    for n in nodes:
+        for i in n.get("inputs") or []:
+            src = name.get(i.get("id"))
+            if not src:
+                continue
+            ship = MERMAID_SAFE.sub("", (i.get("ship_strategy") or "").strip())
+            arrow = f'-- {ship} -->' if ship and ship.upper() != "FORWARD" else "-->"
+            lines.append(f'  {src} {arrow} {name[n["id"]]}')
+    return "\n".join(lines)
+
+
+def design_diff(design, plan, topic_records, built_constraints):
+    """Pure. What the run wrote down, against the job that ran.
+
+    A diagram cannot be checked and a sentence cannot be diffed, so the design
+    is declared as lists -- operators, inputs, outputs -- and each line is
+    looked for in the running plan and on the broker. Clean-room runs 36 and
+    37 both built one market-value sink where the business case asks for two;
+    both drew a picture of what they meant; nothing ever held the job to it.
+
+    Returns rows and a refusal, or None. Declared-and-missing refuses. Built
+    -and-not-declared is reported, never refused: a build is allowed more
+    operators than the design names -- Flink adds its own -- and the row is
+    there so a reader can see what else is in the graph.
+    """
+    design = design or {}
+    labels = [vertex_label(n.get("description")) for n in ((plan or {}).get("nodes") or [])]
+    flat = " | ".join(labels).lower()
+    rows, missing = [], []
+
+    def look(area, declared, found, detail):
+        rows.append({"area": area, "declared": declared, "built": found, "detail": detail})
+        if not found:
+            missing.append(f"{area} {declared}")
+
+    for op in design.get("operators") or []:
+        look("operator", op, op.lower() in flat, "in the running plan" if op.lower() in flat
+             else "no vertex in the running plan mentions it")
+    for topic in design.get("inputs") or []:
+        n = topic_records.get(topic)
+        look("input", topic, bool(n), f"{n:,} records on the broker" if n
+             else ("empty" if n == 0 else "no such topic"))
+    for topic in design.get("outputs") or []:
+        n = topic_records.get(topic)
+        look("output", topic, bool(n), f"{n:,} records after the drain" if n
+             else ("written by nothing -- the topic is empty" if n == 0 else "no such topic"))
+    for what, (want, got) in (built_constraints or {}).items():
+        ok = str(want) == str(got)
+        rows.append({"area": "constraint", "declared": f"{what} = {want}", "built": ok,
+                     "detail": f"read back {got}"})
+        if not ok:
+            missing.append(f"constraint {what} = {want}, read back {got}")
+
+    extra = [l for l in labels if not any((op or "").lower() in l.lower()
+                                          for op in (design.get("operators") or []))]
+    for l in extra:
+        rows.append({"area": "in the build only", "declared": l, "built": True,
+                     "detail": "not named in the design, which is allowed"})
+
+    if not missing:
+        return rows, None
+    return rows, Refusal("build", "the job does not match the design the run wrote down: "
+                                  + "; ".join(missing)
+                                  + ". The interview's answers are the spec, and a picture of them "
+                                    "is not a check -- this is.")
+
+
+def design_table(rows):
+    """Pure. The diff, as lines to print."""
+    if not rows:
+        return []
+    rows = [dict(r, declared=re.sub(r"<br\s*/?>", " + ", r["declared"])) for r in rows]
+    w = max(len(r["declared"]) for r in rows)
+    w = min(max(w, 9), 60)
+    out = [f"  {'area':<18} {'declared':<{w}} {'built':<5}  what was found",
+           "  " + "-" * (18 + w + 7 + 30)]
+    for r in rows:
+        out.append(f"  {r['area']:<18} {r['declared'][:w]:<{w}} {'yes' if r['built'] else 'NO':<5}  {r['detail']}")
+    return out
+
+
+def declared_outputs_verdict(counts):
+    """Pure. Every topic the run said its pipeline writes got records.
+
+    counts is {topic: records after a drain that ran to the last record}. A
+    topic the business case asks for and the build never writes is the defect
+    that survived two clean-room runs: the picture in the report showed what
+    was meant, the job did something smaller, and nothing compared them.
+    """
+    empty = sorted(t for t, n in counts.items() if not n)
+    if not empty:
+        return None
+    return Refusal("build", f"the pipeline was declared to write {', '.join(sorted(counts))}, and after "
+                            f"a drain that ran to the last record "
+                            f"{'topic ' + empty[0] + ' is' if len(empty) == 1 else 'topics ' + ', '.join(empty) + ' are'}"
+                            f" empty. Either the build is missing an output the business case asks for, "
+                            f"or topicsAlsoWritten names a topic the design does not have. The interview's "
+                            f"answers are the spec; the job has to match them.")
+
+
+def declared_output_counts():
+    """Records in each topic the run declared its pipeline writes."""
+    return {t: log_end(t)[0] for t in cfg().topics_also}
 
 
 def cancel_job(jid):
@@ -2641,13 +2801,28 @@ def render_table(out):
     return "\n".join(L)
 
 
+# Fields of the manifest the harness reads for itself, so the workload line can
+# report everything else the generator chose to record without knowing what any
+# of it means.
+MANIFEST_OWN = ("seed", "count", "records", "tradecount", "outputsperinput")
+
+
 def workload_line(out):
-    """The generator's own key counts, so two runs of "the same" workload can be
-    told apart. Runs 27 and 28 differed by 32 symbol keys against 8, and runs 21
-    and 26 by 32,768 against 64, with nothing in the table saying so."""
+    """The generator's own shape figures, so two runs of "the same" workload can
+    be told apart. Runs 27 and 28 differed by 32 symbol keys against 8, and runs
+    21 and 26 by 32,768 against 64, with nothing in the table saying so.
+
+    Whatever the generator put in its manifest is what gets reported. An earlier
+    version looked for fields whose names contained "symbol", "account" or
+    "key", which is the default business case written into a harness that is
+    supposed to be indifferent to what you build: a pipeline about sensors or
+    invoices got a line with nothing on it.
+    """
     w = out.get("workload") or {}
+    count_field = (cfg().count_field or "").lower()
     keys = [f"{k} {v:,}" for k, v in w.items()
-            if isinstance(v, int) and any(t in k.lower() for t in ("symbol", "account", "key"))]
+            if isinstance(v, int) and not isinstance(v, bool)
+            and k.lower() not in MANIFEST_OWN and k.lower() != count_field]
     return (f"{out.get('backlogRecords', 0):,} records"
             + (", " + ", ".join(keys) if keys else "")
             + f", {out.get('outputsPerInput', 0):g} outputs per input")
@@ -2745,4 +2920,13 @@ def render_markdown(out):
         L += ["", f"Sentinel: the {sd['cores']}-core case first ({sd['firstRecordsPerSec']:,.0f} rec/s) and last "
                   f"({sd['lastRecordsPerSec']:,.0f} rec/s), drift {sd['drift']:+.1%} across the suite; "
                   f"counted in that case's spread."]
+    # The graph that ran, drawn from the plan the engine served rather than by
+    # hand. Compare it with the picture in the interview: two runs in a row
+    # built one market-value sink where the business case asks for two, and
+    # neither drawing was ever held against the job.
+    graph = graph_mermaid(((out.get("runs") or [{}])[0].get("shape") or {}).get("plan"))
+    if graph:
+        L += ["", "### The job graph that ran", "",
+              "Read off the running plan, not drawn. Every case ran this shape — a row whose "
+              "shape differed would have been refused.", "", "```mermaid", graph, "```"]
     return "\n".join(L) + "\n"

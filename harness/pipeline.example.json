@@ -8,8 +8,27 @@
       "positions-by-account"
     ]
   },
+  "_topicsAlsoWritten": "Every topic the pipeline writes that the harness does not own. The harness cannot infer them -- that is precisely why they sit outside topics.out -- and it cannot read a diagram, so the run declares them here and the completeness drain refuses any that stayed empty. The default business case has TWO market values, by symbol and by account/sub-account/symbol; clean-room runs 36 and 37 each built one, and every guard passed because nothing knew how many there should be. Set retention.bytes on each (section 3): the harness will not.",
+  "topicsAlsoWritten": [
+    "market-values-by-symbol",
+    "market-values-by-account"
+  ],
+  "_design": "The design, as lists the harness can diff against the running job. Operators are looked for in the running plan's vertex descriptions, inputs and outputs on the broker after the completeness drain. Declared and missing fails the run; built and not declared is printed and allowed. Derive it from the interview's answers, not from this file. Outputs default to topics.out plus topicsAlsoWritten, so most runs only need to name the operators.",
+  "design": {
+    "operators": [
+      "parse",
+      "positions-by-symbol",
+      "positions-by-account",
+      "market-value-by-symbol",
+      "market-value-by-account"
+    ],
+    "inputs": [
+      "block-trades",
+      "prices"
+    ]
+  },
   "partitions": 8,
-  "_marketValues": "The throttled emit the interview asks for. Configurable interval, default 10000 ms. It is not counted in outputsPerInput and its topic is not in topics.out — see _topics. The verifier should still check it: every market value equal to that key's final position x its latest published price, exactly, which is one of the assertions section 4 requires.",
+  "_marketValues": "The throttled emit the interview asks for, and there are TWO of them: question 1 joins prices to each of the two position outputs, so a market value is emitted per symbol and per account/sub-account/symbol. Prices are broadcast rather than keyed, because the account side is keyed on account/sub-account/symbol and cannot be joined to a symbol-keyed price stream by key at all. Configurable interval, default 10000 ms. Neither is counted in outputsPerInput and neither topic is in topics.out — see _topics. The verifier should still check both: every market value equal to that key's final position x its latest published price, exactly, which is one of the assertions section 4 requires.",
   "_outputsPerInput": "Sink records per input record, summed across every output topic. Derive it, do not copy this: the two-vantage guard compares broker offsets against sink rows and a wrong value makes them disagree. One position per trade plus one per allocation at four allocations is 1 + 4 = 5, not 8.",
   "outputsPerInput": 5,
   "checkpointMs": 10000,
@@ -59,8 +78,7 @@
     "kafka": "apache/kafka:3.9.0",
     "kafkaLibs": "/opt/kafka/libs"
   },
-  "_flinkProperties": "Extra Flink settings for the job manager and every task manager. A metrics reporter goes here -- section 7 wants panels that need one. Example: {\"metrics.reporter.prom.factory.class\": \"org.apache.flink.metrics.prometheus.PrometheusReporterFactory\", \"metrics.reporter.prom.port\": \"9249\"} with the prometheus jar in the image's plugins directory. Slots, parallelism, worker memory, the checkpoint store and metrics.reporter.slf4j.* are refused: they decide what is being measured.",
-  "_flinkProperties": "Extra Flink settings for the job manager and every task manager. env.java.opts.taskmanager pins the garbage collector, and it is not optional: --cpus 1 makes the JVM see one processor and choose the serial collector, while every other case gets G1. Clean-room run 35 measured it -- pinning G1 gave the one-core case +19% and moved 1->2 from 2.364x to 1.997x, so the whole superlinear first step had been the baseline running different code. A metrics reporter goes here too. Slots, parallelism, memory, the checkpoint store and metrics.reporter.slf4j.* are refused: they decide what is being measured.",
+  "_flinkProperties": "Extra Flink settings for the job manager and every task manager. env.java.opts.taskmanager pins the garbage collector, and it is not optional: --cpus 1 makes the JVM see one processor and choose the serial collector, while every other case gets G1. Clean-room run 35 measured it -- pinning G1 gave the one-core case +19% and moved 1->2 from 2.364x to 1.997x, so the whole superlinear first step had been the baseline running different code. A metrics reporter goes here too -- section 7 wants panels that need one. Example: {\"metrics.reporter.prom.factory.class\": \"org.apache.flink.metrics.prometheus.PrometheusReporterFactory\", \"metrics.reporter.prom.port\": \"9249\"} with the prometheus jar in the image's plugins directory. pipeline.max-parallelism goes here when the key-layout preflight row names one. Slots, parallelism, worker memory, the checkpoint store and metrics.reporter.slf4j.* are refused: they decide what is being measured.",
   "_keySets": [
     "Which manifest fields hold a keyed stage's key set. Preflight asks Flink's own",
     "key-group assignment, out of the image under test, where each key would land at",

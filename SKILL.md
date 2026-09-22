@@ -58,9 +58,45 @@ A reader can then see what was assumed rather than agreed.
    carries a quantity. The pipeline maintains positions by
    account+subaccount+symbol and by symbol. That input is the one scaled up to
    drive the pipeline to capacity. A second input carries prices, keyed by
-   symbol and timestamp; the pipeline joins those to the positions and emits a
-   market value every 10 seconds. Positions themselves are published as they
+   symbol and timestamp; the pipeline joins those to **each** of the position
+   outputs and emits a market value every 10 seconds for both — symbol /
+   position / price / market value, and account / sub-account / symbol /
+   position / price / market value. Positions themselves are published as they
    change, one per input — only the market value is throttled.*
+
+   The default business case, drawn. **Two position outputs and two market
+   values**, and the prices reaching both aggregations by broadcast:
+
+   ```mermaid
+   flowchart LR
+     O([orders]) --> P[parse once]
+     P -->|main| KS[keyBy symbol]
+     P -->|side output| KA[keyBy account/sub/symbol]
+     KS --> RS[running position] --> SS([positions-by-symbol])
+     KA --> RA[running position] --> SA([positions-by-account])
+     PR([prices]) -. broadcast .-> MS
+     PR -. broadcast .-> MA
+     RS --> MS[market value<br/>every 10 s] --> MVS([market-values-by-symbol])
+     RA --> MA[market value<br/>every 10 s] --> MVA([market-values-by-account])
+   ```
+
+   Only `orders`, `positions-by-symbol` and `positions-by-account` belong to
+   the harness. `prices` and the two market-value topics are the pipeline's
+   own — see question 2. **Name the two market-value topics in
+   `topicsAlsoWritten`**: a picture cannot be checked, but a list of topics
+   that must receive records can, and the completeness drain refuses any that
+   stayed empty. That is what turns this diagram from a drawing into
+   something the run is held to.
+
+   **"The positions" is both of them.** Question 1 asks for two aggregations
+   and the price join applies to each, so there are two market-value outputs,
+   not one. Saying it once was not enough: clean-room run 37 read "joins those
+   to the positions" as the symbol side only, wrote the narrowing down as a
+   decision of its own, and built a pipeline missing half of what was asked
+   for. **The account side is what makes this a design decision** — it is keyed
+   on account / sub-account / symbol, so it cannot be joined to a symbol-keyed
+   price stream by key at all. Broadcast the prices to both aggregations
+   instead.
 
 2. **Does one input produce more than one output?**
 
@@ -106,8 +142,9 @@ A reader can then see what was assumed rather than agreed.
 
    *Default: positions and market values must be published in order. At the end
    the positions, at both symbol and account / sub-account / symbol, must match
-   the input, and market values must be final position × latest price.
-   Duplicates have to be handled and not double counted, in all cases.*
+   the input, and market values — **at both of those key levels** — must be
+   final position × latest price. Duplicates have to be handled and not double
+   counted, in all cases.*
 
    Ordering holds **per key** within a keyed stream — not across keys, and not
    across a rebalance. Say so if the user's answer assumes otherwise. It is
@@ -299,6 +336,39 @@ exactly right (§1 q4); which settings deliver it is a build decision made here:
 The usual answer is *exactly-once checkpointing, at-least-once sink*. Name both
 in the report (§9), and expect the kill test above to be what proves them.
 
+**Then diff the design against the build, and correct it before going on.**
+Completeness proves the numbers in the topics the harness owns. It says
+nothing about whether the job is the pipeline the interview asked for — and
+that is a real gap, not a theoretical one: **two clean-room runs in a row
+built one market value where the default business case asks for two**, by
+symbol and by account / sub-account / symbol. Both drew a diagram of what they
+meant. Every guard passed. Nobody held the job to the picture.
+
+So the design is declared as lists that can be diffed, in `pipeline.json`'s
+`design` block — the operators, the topics read, the topics written — and the
+completeness run looks for each one in the running plan and on the broker:
+
+| area | declared | built | what was found |
+|---|---|---|---|
+| operator | `sink-mv-by-account` | **NO** | no vertex in the running plan mentions it |
+| output | `market-values-by-account` | **NO** | written by nothing — the topic is empty |
+
+Anything declared and missing **fails the run**. Anything built and not
+declared is printed and allowed — Flink adds vertices of its own, and the row
+is there so a reader can see what else is in the graph.
+
+**Then fix it and run completeness again. No fill, no suite, until the diff is
+clean.** Usually the build is missing something the business case asked for, so
+the build is what changes. If instead the design named something the interview
+never asked for, change the design — and write in `ASSUMPTIONS.md` that you
+did, and why. Either way the loop ends the same way: the two agree, and only
+then is anything measured. Measuring first costs two to three hours to produce
+a table for the wrong pipeline.
+
+The suite report carries the graph a second way: **a Mermaid diagram rendered
+from the plan the engine served**, not drawn. A drawing is a claim; that one
+is the job.
+
 Record the build hash beside every number, and **gate throughput on this**: no
 table is published for a build that has not passed. Put the same script in CI
 from a cold start, so it stays true after this morning's change.
@@ -454,6 +524,7 @@ for it.
 | the job graph differs from the other cases | vertex count, edge ship strategies and the key-group count read off the running plan. Flink picks `maxParallelism` from the parallelism when nothing sets it, so two cases can be given different key layouts — the same class of difference as a baseline with a different graph, one level down |
 | the component under test is not the constraint | ≥95% of cap at every case, baseline included; external-boundary back-pressure not material; the broker never hits its own memory limit inside a window (a starved page cache depresses the rate while the cores still read 96% of cap) . A case that misses is a **ceiling**: measured, reported with its rate as where scaling stops, and excluded from the ratios — never deleted |
 | the input divides evenly across subtasks | partition count divisible by every parallelism under test (8 partitions serves 1, 2, 4; 6 would leave the 4-core case reading 2/2/1/1 and never reaching its cap) |
+| an output the business case asks for was never written | after the completeness drain, every topic named in `topicsAlsoWritten` has records. These are the pipeline's own outputs — the throttled ones, outside `topics.out` — and nothing else looks at them. Two clean-room runs in a row built **one** market value where the default asks for two, and passed every other guard |
 | the keys divide evenly across subtasks | the engine's own key-group assignment says where every key in `keySets` would land at every case. A subtask with **no keys** always refuses; an uneven one refuses when a `pipeline.max-parallelism` exists that would even it out, and is reported in the row when none does |
 | memory is not the constraint | **every case gives its subtasks the same memory**, as a base plus a per-core share. Passing nothing does not leave memory to the engine: the image ships a flat figure — `flink:1.20.1` sets 1728m — so every case runs on the same total, which is the configuration this rule exists to refuse. Clean-room run 36 measured 2→4 at 1.510 on the image default against 1.743 with memory per subtask, and the GC ceiling did **not** catch it: GC was at its lowest, 1.40%, on the case losing the most. A case whose GC exceeds 5.5% of its capacity is still a ceiling, not a result |
 | the claim itself | each step returns **1.90× or better** on a doubling, or the chain fails with the per-core, idle, GC and cap figures for both cases — a valid table that does not scale is a result about the pipeline, not a table to publish |

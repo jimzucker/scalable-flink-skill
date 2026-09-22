@@ -2021,10 +2021,16 @@ def cmd_report():
     # clean-room run 42 ended with a 0-byte suite.txt: two separate losses from
     # one bug.
     text, markdown = render_table(out) + "\n", render_markdown(out)
-    with open(os.path.join(c.results, "suite.txt"), "w") as f:
-        f.write(text)
-    with open(os.path.join(c.results, "suite.md"), "w") as f:
-        f.write(markdown)
+    for name, body in (("suite.txt", text), ("suite.md", markdown)):
+        # Written whole, then moved into place. Rendering first already stops a
+        # renderer crash from destroying the previous run's table; this also
+        # covers dying part-way through the write, which would leave half a
+        # table looking like a whole one.
+        final = os.path.join(c.results, name)
+        tmp = final + ".partial"
+        with open(tmp, "w") as f:
+            f.write(body)
+        os.replace(tmp, final)
     save_json("suite.json", out)
     print("wrote results/suite.txt and results/suite.md")
     if short:

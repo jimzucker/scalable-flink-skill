@@ -58,9 +58,21 @@ A reader can then see what was assumed rather than agreed.
    carries a quantity. The pipeline maintains positions by
    account+subaccount+symbol and by symbol. That input is the one scaled up to
    drive the pipeline to capacity. A second input carries prices, keyed by
-   symbol and timestamp; the pipeline joins those to the positions and emits a
-   market value every 10 seconds. Positions themselves are published as they
+   symbol and timestamp; the pipeline joins those to **each** of the position
+   outputs and emits a market value every 10 seconds for both — symbol /
+   position / price / market value, and account / sub-account / symbol /
+   position / price / market value. Positions themselves are published as they
    change, one per input — only the market value is throttled.*
+
+   **"The positions" is both of them.** Question 1 asks for two aggregations
+   and the price join applies to each, so there are two market-value outputs,
+   not one. Saying it once was not enough: clean-room run 37 read "joins those
+   to the positions" as the symbol side only, wrote the narrowing down as a
+   decision of its own, and built a pipeline missing half of what was asked
+   for. **The account side is what makes this a design decision** — it is keyed
+   on account / sub-account / symbol, so it cannot be joined to a symbol-keyed
+   price stream by key at all. Broadcast the prices to both aggregations
+   instead.
 
 2. **Does one input produce more than one output?**
 
@@ -106,8 +118,9 @@ A reader can then see what was assumed rather than agreed.
 
    *Default: positions and market values must be published in order. At the end
    the positions, at both symbol and account / sub-account / symbol, must match
-   the input, and market values must be final position × latest price.
-   Duplicates have to be handled and not double counted, in all cases.*
+   the input, and market values — **at both of those key levels** — must be
+   final position × latest price. Duplicates have to be handled and not double
+   counted, in all cases.*
 
    Ordering holds **per key** within a keyed stream — not across keys, and not
    across a rebalance. Say so if the user's answer assumes otherwise. It is

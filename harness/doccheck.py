@@ -527,6 +527,28 @@ def check_both_examples_load(fail):
     return f"two worked examples, both load, different shapes ({', '.join(sorted(shapes.values()))})"
 
 
+def check_shape_ignores_the_plan(fail):
+    """The plan is kept so the report can draw the graph. It must never be
+    compared: it carries a fresh job id per submission and the parallelism
+    being varied, so comparing it refuses every case after the first, for every
+    pipeline. Clean-room run 41 lost its chain to exactly that."""
+    import lib
+    same = {"vertexCount": 1, "signature": [["x", []]], "maxParallelism": [128]}
+    a = dict(same, plan={"jid": "aaaa", "nodes": [{"id": "n", "parallelism": 1}]})
+    b = dict(same, plan={"jid": "bbbb", "nodes": [{"id": "n", "parallelism": 4}]})
+    try:
+        lib.check_shape(a, b)
+    except lib.Refusal:
+        fail("check_shape refuses the same graph at a new job id and size; it is comparing "
+             "the running plan, which differs on every case by design")
+    try:
+        lib.check_shape(dict(a, vertexCount=2), b)
+        fail("check_shape no longer notices a graph that really is different")
+    except lib.Refusal:
+        pass
+    return "the shape comparison ignores the plan it keeps for drawing"
+
+
 def main():
     problems = []
     lines = []
@@ -542,7 +564,8 @@ def main():
                   check_no_duplicate_keys,
                   check_design_is_diffed,
                   check_windowed_pipelines,
-                  check_both_examples_load):
+                  check_both_examples_load,
+                  check_shape_ignores_the_plan):
         lines.append(check(problems.append))
     for p in problems:
         print(f"doccheck: {p}")

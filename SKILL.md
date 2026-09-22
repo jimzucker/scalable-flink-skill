@@ -12,6 +12,15 @@ fails a run on, or a **rule of judgment** kept short enough to read. The
 validation record behind each rule lives with the project that wrote it, not
 here.
 
+**Two worked configurations ship with it, and neither is a template.**
+`harness/pipeline.example.json` configures a pipeline whose outputs grow
+with its input; `harness/pipeline.example.windowed.json` one whose outputs
+are per window and grow with the clock instead. Read whichever is the
+shape of yours, then write your own from the field table in
+`harness/README.md`. Copying is how one pipeline's numbers end up in
+another's run — two clean-room runs out of two took a shipped backlog count
+verbatim, one of them before it had measured anything.
+
 **The measurement harness ships with this skill. Use it; do not write one.**
 `harness/prove.py` (next to this file) is the preflight, the tiny proof, the
 completeness run, the suite, the guards and the report table, with a self-test

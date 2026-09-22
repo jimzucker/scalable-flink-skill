@@ -14,6 +14,7 @@ Run it directly, or as part of CI.
 import json
 import os
 import re
+import shutil
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -490,6 +491,42 @@ def check_windowed_pipelines(fail):
     return "a pipeline whose outputs are per window can be measured"
 
 
+def check_both_examples_load(fail):
+    """Both shipped examples are complete and valid, and they are different
+    shapes. One example is a template people copy; two are a choice people have
+    to read. The windowed one is also the only proof in the repository that a
+    pipeline with no constant fan-out can be configured at all."""
+    import tempfile
+    import lib
+    shapes = {}
+    for name in ("pipeline.example.json", "pipeline.example.windowed.json"):
+        path = os.path.join(HERE, name)
+        if not os.path.exists(path):
+            fail(f"{name} is missing; README.md offers it as one of two worked examples")
+            continue
+        tmp = tempfile.mkdtemp(prefix="example-doccheck-")
+        try:
+            with open(os.path.join(tmp, "pipeline.json"), "w") as f:
+                f.write(read(HERE, name))
+            saved = lib._CFG
+            try:
+                lib._CFG = None
+                c = lib.Cfg(os.path.join(tmp, "pipeline.json"))
+                shapes[name] = c.vantage_mode
+            finally:
+                lib._CFG = saved
+        except lib.Refusal as e:
+            fail(f"{name} does not load: {e.msg[:120]}")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+    if len(set(shapes.values())) < 2:
+        fail(f"both examples measure themselves the same way ({shapes}); the second one exists "
+             f"to show the other shape")
+    if "Do not copy an" not in read(HERE, "README.md"):
+        fail("harness/README.md no longer says to write pipeline.json rather than copy an example")
+    return f"two worked examples, both load, different shapes ({', '.join(sorted(shapes.values()))})"
+
+
 def main():
     problems = []
     lines = []
@@ -504,7 +541,8 @@ def main():
                   check_calls_are_grouped,
                   check_no_duplicate_keys,
                   check_design_is_diffed,
-                  check_windowed_pipelines):
+                  check_windowed_pipelines,
+                  check_both_examples_load):
         lines.append(check(problems.append))
     for p in problems:
         print(f"doccheck: {p}")

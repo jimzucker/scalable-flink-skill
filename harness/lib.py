@@ -1725,7 +1725,7 @@ def graph_mermaid(plan):
     return "\n".join(lines)
 
 
-def design_diff(design, plan, topic_records, built_constraints):
+def design_diff(design, plan, topic_records, built_constraints, before_fill=False):
     """Pure. What the run wrote down, against the job that ran.
 
     A diagram cannot be checked and a sentence cannot be diffed, so the design
@@ -1761,6 +1761,18 @@ def design_diff(design, plan, topic_records, built_constraints):
         # the running plan is where that shows, and the operator rows cover it.
         there = topic_records.get(topic) is not None
         n = topic_records.get(topic) or 0
+        if not there and before_fill:
+            # Not merely empty -- not created. The diff runs inside the
+            # completeness step, which is before the fill, so the suite's own
+            # input topic does not exist yet on a cold stack. That is a fact
+            # about the order the harness does its work in, not a build that
+            # missed an input. Both shipped examples declare that topic and so
+            # would refuse on their own first run; clean-room run 42 lost about
+            # 25 minutes pre-creating it by hand and writing the workaround down
+            # as an assumption.
+            rows.append({"area": "input", "declared": topic, "built": True,
+                         "detail": "not created yet -- the fill has not run"})
+            continue
         look("input", topic, there,
              (f"{n:,} records on the broker" if n else "exists, not filled yet") if there
              else "no such topic")
@@ -2938,7 +2950,16 @@ def render_table(out):
         if r.get("status") in ("OK", "CEILING"):
             # A ceiling was measured: it keeps its rate and its resource columns,
             # and is excluded from the ratios rather than from the table.
-            L.append(f"{r['cores']:>5} {r['pass']:>8} {r['recordsPerSec']:>11,.0f} {r['outputRecsPerSec']:>11,.0f} "
+            # A pipeline whose outputs are per window, not per input, leaves
+            # outputsPerInput unset, and then this key is never written at all
+            # (see where recordsPerSec is set). The MEAN row below has always
+            # known that; this row did not, so every windowed pipeline lost its
+            # entire report to a KeyError here -- including the skill's own
+            # second shipped example. Clean-room run 42 finished with a 0-byte
+            # suite.txt, no suite.md and no DONE.
+            out_col = (f"{r['outputRecsPerSec']:>11,.0f}"
+                       if r.get("outputRecsPerSec") is not None else f"{'-':>11}")
+            L.append(f"{r['cores']:>5} {r['pass']:>8} {r['recordsPerSec']:>11,.0f} {out_col} "
                      f"{r['tmCores']:>6.2f}/{r['cores']:<3} {r['tmCapFrac']:>5.1%} {r['tmThrottledPeriodsPct']:>5.0f} "
                      f"{r['kafkaCores']:>6.2f}/{c.kafka_cap:<3g} {r['sourceIdle']:>7.1%} {r['sourceBackpressured']:>6.1%} "
                      f"{r['headroomS']:>5.0f}s {r['vantageDisagreement']:>5.1%} {r.get('status', 'OK'):>8}")

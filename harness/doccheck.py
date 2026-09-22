@@ -145,6 +145,22 @@ def check_order_is_asserted(fail):
     return f"the verifier must assert {len(needed)} things about order"
 
 
+def check_broker_ceiling_observation(fail):
+    """What run 42 measured about the broker-ceiling guard stays written down.
+
+    The guard threw away the two fastest four-core passes and kept the slowest,
+    and giving the broker its page cache then moved that case's mean by 0.5%.
+    That is one run, so it is not a threshold -- but it is the kind of thing a
+    later run rediscovers expensively if nobody wrote it next to the rule.
+    """
+    skill = read(HERE, "..", "SKILL.md")
+    for needle in ("2,771-2,840 times a window", "One run is not a threshold"):
+        if needle not in skill:
+            fail(f"SKILL.md no longer records what run 42 measured about the broker "
+                 f"ceiling guard: {needle!r}")
+    return "run 42's broker-ceiling measurement is still written next to the guard"
+
+
 def check_windowed_example_backlogs(fail):
     """The same floor, for the other shipped example.
 
@@ -642,6 +658,7 @@ def main():
                   check_only_the_throttled_thing_is_throttled,
                   check_example_matches_interview, check_example_backlogs,
                   check_windowed_example_backlogs,
+                  check_broker_ceiling_observation,
                   check_example_broker_memory, check_example_comments,
                   check_key_layout, check_tinyproof_reruns,
                   check_broker_cpu_hook, check_target_not_needed,

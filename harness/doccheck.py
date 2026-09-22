@@ -396,6 +396,21 @@ def check_probe_advice(fail):
     return "more repeats widen the range and settle the middle half, in the prose and the harness"
 
 
+def check_calls_are_grouped(fail):
+    """The skill is written for agents, and an agent pays for every turn by
+    re-reading the conversation. Both places that tell one how to wait have to
+    say so, or the advice drifts back to polling on a timer."""
+    skill = read(ROOT, "SKILL.md")
+    readme = read(HERE, "README.md")
+    if "do not\npoll on a timer" not in skill:
+        fail("SKILL.md \u00a72 does not say to wait on results/DONE rather than poll on a timer")
+    if "Group the calls that do not depend on each other" not in skill:
+        fail("SKILL.md \u00a72 does not say to group independent calls")
+    if "not on a timer" not in readme:
+        fail("harness/README.md still invites polling PROGRESS.txt on a timer")
+    return "independent calls travel together, and a run is waited on rather than polled"
+
+
 def main():
     problems = []
     lines = []
@@ -406,7 +421,8 @@ def main():
                   check_example_broker_memory, check_example_comments,
                   check_key_layout, check_tinyproof_reruns,
                   check_broker_cpu_hook, check_target_not_needed,
-                  check_probe_advice):
+                  check_probe_advice,
+                  check_calls_are_grouped):
         lines.append(check(problems.append))
     for p in problems:
         print(f"doccheck: {p}")

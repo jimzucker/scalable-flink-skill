@@ -27,8 +27,12 @@ step of seven, which case of ten, a bar and an estimate of what is left:
 16:12:44  [######..............]  30%  suite: case 4 of 10 (1 cores, pass p2-desc)  about 29m left
 ```
 
-`cat` it whenever you want to know where the run is up to; `harness.log` has
-everything but is written for whoever is debugging it.
+`cat` it when you have a reason to — a step boundary, a case that finished —
+and not on a timer. Every check is a whole turn for an agent, and a turn
+re-reads the conversation before it does anything: a three-hour chain polled
+every thirty seconds is 360 of them against seven for the seven steps. Wait on
+`results/DONE` and read `PROGRESS.txt` when something has happened.
+`harness.log` has everything but is written for whoever is debugging it.
 **During `tinyproof` and `down` the reaper kills any host process whose
 command line names the project directory** — not only one naming `prove.py`.
 A plain `tail -4 <project>/results/all.log` is enough to be killed, as clean-room

@@ -442,6 +442,24 @@ interval and backlog constant across cases; nothing varies but the one thing
 under test. Do not shorten the interval to save time once cases have run — it
 changes the number.
 
+**Measure how much went through two independent ways.** The first is always
+the committed offsets on the input topic. The second must not come from the
+same place, or a stuck consumer group reads as a fast pipeline. The obvious
+second reading is the outputs — their rows divided by a constant fan-out —
+and it works for any pipeline whose outputs grow with its input.
+
+**It does not work for a pipeline whose outputs are per window.** An hourly
+average per location emits the same number of rows whether it read a thousand
+readings an hour or a million; there is no fan-out to divide by, anywhere in
+the job. Such a pipeline declares `secondVantage: {"mode": "command", "cmd":
+…}` instead, and supplies a small program that prints
+`{"inputRecordsProcessed": N}` — how much input its own outputs account for.
+The harness runs it at each end of the window and compares the difference with
+the committed offsets. This is delegated for the same reason correctness is
+delegated to `verifier.cmd`: the harness cannot read progress out of an
+arbitrary output, and whoever wrote the pipeline can. A pipeline that declares
+neither is refused rather than measured once and called measured.
+
 **Read throughput from the transport, not the engine.** At 100% CPU the
 engine's metric service is starved with everything else; one case
 under-reported itself by 3×. Use committed broker offsets (committed only under
@@ -762,6 +780,12 @@ projection counted the same backlog as used *and* as still to write, refused
 a suite that fitted, and made every lever cost a delete and a re-fill, about
 twelve minutes of broker I/O each (clean-room run 36). Confirm the winner with
 the suite once, at the end.
+
+**The levers transfer; the percentages do not.** Every figure above was
+measured on one pipeline on one laptop. Reading the input once is worth
+something to any pipeline that reads it twice; whether it is worth 22% to
+yours is a question your own two arms answer. Quote your number, not this
+one.
 
 **Two things were tested and changed nothing**, so do not spend a run on them:
 partition count (8 against 16 — and 16 failed every parallelism-4 case for an

@@ -206,7 +206,7 @@ class Cfg:
         with open(self.path) as f:
             c = json.load(f)
         self.raw = c
-        req = ["project", "topics", "partitions", "outputsPerInput", "checkpointMs",
+        req = ["project", "topics", "partitions", "checkpointMs",
                "job", "generator", "verifier", "cases", "baseline", "passes", "backlog",
                "caps", "images", "jdk", "axis", "apiLevel", "guarantee"]
         missing = [k for k in req if k not in c]
@@ -238,7 +238,44 @@ class Cfg:
         self.suite_topic_in = c["topics"]["in"]
         self.topics_out = list(c["topics"]["out"])
         self.partitions = int(c["partitions"])
-        self.out_per_in = float(c["outputsPerInput"])
+        # How the harness gets its SECOND measurement of how much input the
+        # pipeline has swallowed. The first is always the committed offsets on
+        # the input topic; the second has to be independent of it, or a stuck
+        # consumer group reads as a fast pipeline.
+        #
+        # The default derives it from the outputs -- their rows divided by a
+        # constant fan-out. That works for a pipeline whose outputs grow with
+        # the input, and not at all for one whose outputs are per window: an
+        # hourly average per location emits the same number of rows whether it
+        # read a thousand readings an hour or a million. Such a pipeline has no
+        # constant fan-out anywhere, and until this existed the harness simply
+        # could not measure one.
+        #
+        # So the second vantage is delegated, exactly as correctness already is
+        # to verifier.cmd: the harness does not know how to read progress out
+        # of an arbitrary output, and the person who wrote the pipeline does.
+        self.out_per_in = float(c["outputsPerInput"]) if c.get("outputsPerInput") is not None else None
+        sv = dict(c.get("secondVantage") or {})
+        self.vantage_mode = sv.get("mode") or ("constantFanOut" if self.out_per_in is not None else None)
+        self.vantage_cmd = sv.get("cmd")
+        if self.vantage_mode not in ("constantFanOut", "command"):
+            raise Refusal("rig", "pipeline.json says nothing about how to measure the pipeline a second "
+                                 "way. Either set outputsPerInput, for a pipeline whose outputs grow by "
+                                 "a constant multiple of the input, or set secondVantage to "
+                                 '{"mode": "command", "cmd": "..."} for one whose outputs do not -- a '
+                                 "windowed aggregate, say. One measurement is not a measurement: the "
+                                 "committed offsets alone cannot tell a fast pipeline from a stuck "
+                                 "consumer group.")
+        if self.vantage_mode == "constantFanOut":
+            if self.out_per_in is None:
+                raise Refusal("rig", "secondVantage mode constantFanOut needs outputsPerInput")
+            if not c["topics"]["out"]:
+                raise Refusal("rig", "secondVantage mode constantFanOut needs at least one topic in "
+                                     "topics.out to count. A pipeline with no output that grows with "
+                                     'its input wants {"mode": "command"} instead.')
+        elif not self.vantage_cmd:
+            raise Refusal("rig", 'secondVantage mode command needs a cmd that prints '
+                                 '{"inputRecordsProcessed": N}')
         self.ckpt_ms = int(c["checkpointMs"])
         self.ckpt_s = self.ckpt_ms / 1000.0
         self.jar = os.path.join(self.root, c["job"]["jar"])
@@ -575,7 +612,10 @@ def disk_projection(tiny_topic, tiny_count, last_case_rec):
     tiny_bytes = topic_bytes([tiny_topic])
     in_bpr = tiny_bytes / tiny_count
     consumed = int(last_case_rec["close"]["committed"])
-    sink_bytes = topic_bytes(c.topics_out)
+    # everything the pipeline writes, not only the topics with constant fan-out:
+    # a windowed pipeline has none of those and was projecting no sink disk at all
+    written = list(c.topics_out) + list(c.topics_also)
+    sink_bytes = topic_bytes_if_any(written) if written else 0
     sink_bpi = sink_bytes / consumed if consumed else 0.0
     ckpt = volume_bytes(c.ckpt_vol)
     # The tiny topic and the tiny cases' sinks are still on disk when this runs and are
@@ -588,8 +628,8 @@ def disk_projection(tiny_topic, tiny_count, last_case_rec):
     # the whole backlog on a re-run after it -- which is the case that could not
     # be projected at all before (run 36, feedback 5).
     on_disk = topic_bytes_if_any([c.suite_topic_in])
-    d = disk_verdict(host_free + reclaimable, in_bpr, c.backlog, sink_bpi, c.partitions, len(c.topics_out), ckpt,
-                     input_on_disk_bytes=on_disk)
+    d = disk_verdict(host_free + reclaimable, in_bpr, c.backlog, sink_bpi, c.partitions,
+                     max(1, len(written)), ckpt, input_on_disk_bytes=on_disk)
     d.update(hostFreeBytesNow=int(host_free), reclaimableBytes=int(reclaimable),
              measuredOn={"tinyTopicRecords": tiny_count, "tinyTopicBytes": int(tiny_bytes),
                          "sinkRecordsConsumed": consumed, "sinkBytesOnDisk": int(sink_bytes),
@@ -1075,6 +1115,16 @@ def verify_backlog(manifest, topic=None):
     return tot
 
 
+# Where each manifest this process loaded came from. The manifest is passed
+# around as the parsed object -- putting the path inside it would put a user's
+# home directory into every results file, which is redacted on the way out.
+MANIFEST_PATHS = {}
+
+
+def manifest_path_of(manifest):
+    return MANIFEST_PATHS.get(id(manifest))
+
+
 def fill(topic, count, seed, manifest_name):
     """Fill a backlog, write its manifest, read the log end back against it."""
     c = cfg()
@@ -1087,6 +1137,7 @@ def fill(topic, count, seed, manifest_name):
     tail = r.stdout.strip().splitlines()[-1:] 
     log("fill done:", tail[0] if tail else "")
     m = json.load(open(man))
+    MANIFEST_PATHS[id(m)] = man
     if int(m[c.count_field]) != count:
         raise Refusal("rig", f"manifest says {m[c.count_field]} records, asked for {count}")
     verify_backlog(m, topic)
@@ -1692,6 +1743,40 @@ def design_table(rows):
     for r in rows:
         out.append(f"  {r['area']:<18} {r['declared'][:w]:<{w}} {'yes' if r['built'] else 'NO':<5}  {r['detail']}")
     return out
+
+
+def progress_from_outputs(manifest_path=None):
+    """How much input the pipeline's own outputs account for, asked of the
+    pipeline. The second vantage point for a job whose outputs are not a
+    constant multiple of its input.
+
+    The harness cannot read progress out of an arbitrary output -- an hourly
+    average per location emits one row an hour whatever the input rate -- and
+    the person who wrote the pipeline can. So this is supplied, exactly as
+    verifier.cmd is. It prints one JSON object with inputRecordsProcessed.
+    """
+    c = cfg()
+    cmd = c.fmt(c.vantage_cmd, manifest=manifest_path or "")
+    r = sh(cmd, check=False, timeout=180)
+    if r.returncode != 0:
+        raise Refusal("rig", f"the secondVantage command failed (exit {r.returncode}): "
+                             f"{(r.stderr or r.stdout or '')[-300:]}")
+    try:
+        n = json.loads(r.stdout.strip().splitlines()[-1])["inputRecordsProcessed"]
+    except Exception as e:
+        raise Refusal("rig", f"the secondVantage command did not print "
+                             f'{{"inputRecordsProcessed": N}}: {r.stdout[-200:]!r} ({e})')
+    return int(n)
+
+
+def vantage_delta(open_tick, close_tick, open_progress, close_progress):
+    """Pure. The second vantage's reading of how much input was consumed in the
+    window, whichever way it was measured."""
+    c = cfg()
+    if c.vantage_mode == "command":
+        return float(close_progress - open_progress), "the pipeline's own progress command"
+    d_out = sum(close_tick[f"end_{t}"] - open_tick[f"end_{t}"] for t in c.topics_out)
+    return d_out / c.out_per_in, f"sink rows / {c.out_per_in:g} outputs per input"
 
 
 def declared_outputs_verdict(counts):
@@ -2396,7 +2481,7 @@ def check_shape(shape, shape_ref):
 
 def run_case(cores, pass_id, run_id, shape_ref, is_baseline, manifest,
              min_boundaries=None, min_window_s=None, ckpt_ms=None, warmup_max_s=None, reporter_s=None,
-             kafka_cap=None, parallelism=None):
+             kafka_cap=None, parallelism=None, manifest_path=None):
     """One measured case. The job is torn down on every exit path.
     kafka_cap: the broker's cap *during this case* — the ceiling run steps it
     below the configured one, and the fraction must be read against the step.
@@ -2452,6 +2537,9 @@ def run_case(cores, pass_id, run_id, shape_ref, is_baseline, manifest,
         mem0_k = cgroup_mem(c.kafka)
         rec["tOpen"] = time.time()
         rec["open"] = open_tick
+        want_progress = c.vantage_mode == "command"
+        mpath = manifest_path or manifest_path_of(manifest)
+        open_progress = progress_from_outputs(mpath) if want_progress else None
         # What else the machine was doing. A cgroup cap is a share, not a
         # guarantee of cycles: on a busy host a case reads 100% of its cap and
         # does less work for it, which is invisible in every other column.
@@ -2479,6 +2567,7 @@ def run_case(cores, pass_id, run_id, shape_ref, is_baseline, manifest,
         rec["brokerLimitBytes"] = mem1_k.get("limitBytes") or 0
         rec["tClose"] = time.time()
         rec["close"] = close_tick
+        close_progress = progress_from_outputs(mpath) if want_progress else None
         try:
             rec["hostLoadClose"] = round(os.getloadavg()[0], 2)
         except Exception:
@@ -2494,10 +2583,11 @@ def run_case(cores, pass_id, run_id, shape_ref, is_baseline, manifest,
         rate = d_committed / elapsed if elapsed > 0 else 0.0
         rec["rateSource"] = "kafka committed offsets on " + c.topic_in
         rec["recordsPerSec"] = round(rate, 1)
-        rec["outputRecsPerSec"] = round(rate * c.out_per_in, 1)
+        if c.out_per_in is not None:
+            rec["outputRecsPerSec"] = round(rate * c.out_per_in, 1)
 
-        d_out = sum(close_tick[f"end_{t}"] - open_tick[f"end_{t}"] for t in c.topics_out)
-        implied = d_out / c.out_per_in
+        implied, how = vantage_delta(open_tick, close_tick, open_progress, close_progress)
+        rec["vantageSource"] = how
         rec["vantageSinkRecords"] = round(implied, 1)
         rec["vantageDisagreement"] = round(abs(implied - d_committed) / d_committed, 4) if d_committed else 1.0
 
@@ -2747,8 +2837,9 @@ def render_table(out):
     L.append(f"passes per case      : {out['passesPerCase']}")
     L.append(f"study                : {out.get('study', 'scaling: every case configured identically')}")
     L.append(f"workload             : {workload_line(out)}")
-    L.append(f"backlog              : {out['backlogRecords']:,} records, {out['partitions']} partitions, "
-             f"{c.out_per_in:g} outputs per input")
+    L.append(f"backlog              : {out['backlogRecords']:,} records, {out['partitions']} partitions"
+             + (f", {c.out_per_in:g} outputs per input" if c.out_per_in is not None
+                else "; outputs are not a constant multiple of the input"))
     sl = span_line(out)
     if sl:
         L.append(f"suite span           : {sl}")
@@ -2774,8 +2865,10 @@ def render_table(out):
     L.append("-" * len(hdr))
     for cs in t["cases"].values():
         mark = "" if cs["reportable"] else f"   UNREPORTABLE ({cs['unreportableReason']})"
+        out_col = (f"{cs['meanRecordsPerSec'] * c.out_per_in:>11,.0f}" if c.out_per_in is not None
+                   else f"{'-':>11}")
         L.append(f"{cs['cores']:>5} {'MEAN':>8} {cs['meanRecordsPerSec']:>11,.0f} "
-                 f"{cs['meanRecordsPerSec']*c.out_per_in:>11,.0f} "
+                 f"{out_col} "
                  f"{cs.get('tmCores',0):>6.2f}/{cs['cores']:<3} {cs.get('tmCapFrac',0):>5.1%} "
                  f"{cs.get('tmThrottledPeriodsPct',0):>5.0f} {cs.get('kafkaCores',0):>6.2f}/{c.kafka_cap:<3g} "
                  f"{cs.get('sourceIdle',0):>7.1%} {cs.get('sourceBackpressured',0):>6.1%} "
@@ -2823,9 +2916,10 @@ def workload_line(out):
     keys = [f"{k} {v:,}" for k, v in w.items()
             if isinstance(v, int) and not isinstance(v, bool)
             and k.lower() not in MANIFEST_OWN and k.lower() != count_field]
+    fan = out.get("outputsPerInput")
     return (f"{out.get('backlogRecords', 0):,} records"
             + (", " + ", ".join(keys) if keys else "")
-            + f", {out.get('outputsPerInput', 0):g} outputs per input")
+            + (f", {fan:g} outputs per input" if fan is not None else ""))
 
 
 def render_markdown(out):

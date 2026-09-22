@@ -474,6 +474,22 @@ def check_design_is_diffed(fail):
     return "the design is diffed against the build, and a missing output fails the run"
 
 
+def check_windowed_pipelines(fail):
+    """The harness must be able to measure a pipeline with no constant fan-out
+    anywhere. Both halves are checked: the prose says how, and Cfg refuses a
+    pipeline that declares no second way to be measured at all."""
+    import lib
+    skill = read(ROOT, "SKILL.md")
+    if "secondVantage" not in skill:
+        fail("SKILL.md \u00a75 does not say how a pipeline with no constant fan-out is measured")
+    if "inputRecordsProcessed" not in read(HERE, "README.md"):
+        fail("harness/README.md does not document what the secondVantage command must print")
+    if "outputsPerInput" in [k for k in json.loads(read(HERE, "pipeline.example.json"))] and \
+            "optional" not in read(HERE, "README.md").lower():
+        fail("harness/README.md does not say outputsPerInput is optional")
+    return "a pipeline whose outputs are per window can be measured"
+
+
 def main():
     problems = []
     lines = []
@@ -487,7 +503,8 @@ def main():
                   check_probe_advice,
                   check_calls_are_grouped,
                   check_no_duplicate_keys,
-                  check_design_is_diffed):
+                  check_design_is_diffed,
+                  check_windowed_pipelines):
         lines.append(check(problems.append))
     for p in problems:
         print(f"doccheck: {p}")

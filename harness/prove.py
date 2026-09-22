@@ -898,6 +898,65 @@ def cmd_selftest(live=True, topic=None):
     expect("the job graph draws from the plan the engine served (must not fire)",
            graph_renders, "", should_fire=False)
 
+    def vantage_two_ways():
+        """The second measurement of how much input was swallowed, both ways.
+
+        A pipeline whose every output is per window -- an hourly average per
+        location -- has no constant fan-out anywhere, so there is nothing to
+        divide. Until the second vantage could be delegated, the harness could
+        not measure such a pipeline at all.
+        """
+        open_tick = {f"end_{t}": 0 for t in c.topics_out}
+        close_tick = {f"end_{t}": 500_000 for t in c.topics_out}
+        got, how = L.vantage_delta(open_tick, close_tick, None, None)
+        want = 500_000 * len(c.topics_out) / c.out_per_in
+        if abs(got - want) > 0.5 or "outputs per input" not in how:
+            raise Exception(f"constant fan-out read {got} ({how}), expected {want}")
+        saved = c.vantage_mode
+        try:
+            c.vantage_mode = "command"
+            got, how = L.vantage_delta(open_tick, close_tick, 1_000, 401_000)
+            if got != 400_000 or "progress command" not in how:
+                raise Exception(f"delegated vantage read {got} ({how})")
+        finally:
+            c.vantage_mode = saved
+    expect("the second vantage reads the same either way (must not fire)",
+           vantage_two_ways, "", should_fire=False)
+
+    def no_vantage_at_all():
+        """A pipeline that declares neither is refused, rather than measured
+        once and called measured."""
+        import copy
+        raw = copy.deepcopy(c.raw)
+        raw.pop("outputsPerInput", None)
+        raw.pop("secondVantage", None)
+        raw["topics"] = dict(raw["topics"], out=[])
+        tmp = tempfile.mkdtemp(prefix="vantage-selftest-")
+        try:
+            path = os.path.join(tmp, "pipeline.json")
+            with open(path, "w") as f:
+                json.dump(raw, f)
+            L.Cfg(path)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+    expect("a pipeline with no second way to measure it",
+           no_vantage_at_all, "nothing about how to measure the pipeline a second way")
+
+    def fanout_without_anything_to_count():
+        import copy
+        raw = copy.deepcopy(c.raw)
+        raw["topics"] = dict(raw["topics"], out=[])
+        tmp = tempfile.mkdtemp(prefix="vantage-selftest-")
+        try:
+            path = os.path.join(tmp, "pipeline.json")
+            with open(path, "w") as f:
+                json.dump(raw, f)
+            L.Cfg(path)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+    expect("outputsPerInput with no output to count it in",
+           fanout_without_anything_to_count, "needs at least one topic in topics.out")
+
     def chain():
         # in its own directory: the first version wrote its fake chain into the
         # live results/ (phases.log, all.json and a DONE saying "FAIL at c")
@@ -1615,7 +1674,8 @@ def cmd_completeness():
                                  + list((c.design.get("inputs") or []) + (c.design.get("outputs") or [])))}
         sink_rows = sum(records.get(t, 0) for t in c.topics_out)
         measured_fanout = round(sink_rows / c.small, 3) if c.small else 0
-        constraints = {"outputsPerInput": (c.out_per_in, measured_fanout)}
+        constraints = ({"outputsPerInput": (c.out_per_in, measured_fanout)}
+                       if c.out_per_in is not None else {})
         shape = (a.get("shape") or {})
         if shape.get("maxParallelism"):
             constraints["maxParallelism"] = (L.max_parallelism_for(c.cases)[0],

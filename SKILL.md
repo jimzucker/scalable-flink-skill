@@ -442,6 +442,24 @@ interval and backlog constant across cases; nothing varies but the one thing
 under test. Do not shorten the interval to save time once cases have run — it
 changes the number.
 
+**Measure how much went through two independent ways.** The first is always
+the committed offsets on the input topic. The second must not come from the
+same place, or a stuck consumer group reads as a fast pipeline. The obvious
+second reading is the outputs — their rows divided by a constant fan-out —
+and it works for any pipeline whose outputs grow with its input.
+
+**It does not work for a pipeline whose outputs are per window.** An hourly
+average per location emits the same number of rows whether it read a thousand
+readings an hour or a million; there is no fan-out to divide by, anywhere in
+the job. Such a pipeline declares `secondVantage: {"mode": "command", "cmd":
+…}` instead, and supplies a small program that prints
+`{"inputRecordsProcessed": N}` — how much input its own outputs account for.
+The harness runs it at each end of the window and compares the difference with
+the committed offsets. This is delegated for the same reason correctness is
+delegated to `verifier.cmd`: the harness cannot read progress out of an
+arbitrary output, and whoever wrote the pipeline can. A pipeline that declares
+neither is refused rather than measured once and called measured.
+
 **Read throughput from the transport, not the engine.** At 100% CPU the
 engine's metric service is starved with everything else; one case
 under-reported itself by 3×. Use committed broker offsets (committed only under

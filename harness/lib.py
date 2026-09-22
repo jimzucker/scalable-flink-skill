@@ -2801,13 +2801,28 @@ def render_table(out):
     return "\n".join(L)
 
 
+# Fields of the manifest the harness reads for itself, so the workload line can
+# report everything else the generator chose to record without knowing what any
+# of it means.
+MANIFEST_OWN = ("seed", "count", "records", "tradecount", "outputsperinput")
+
+
 def workload_line(out):
-    """The generator's own key counts, so two runs of "the same" workload can be
-    told apart. Runs 27 and 28 differed by 32 symbol keys against 8, and runs 21
-    and 26 by 32,768 against 64, with nothing in the table saying so."""
+    """The generator's own shape figures, so two runs of "the same" workload can
+    be told apart. Runs 27 and 28 differed by 32 symbol keys against 8, and runs
+    21 and 26 by 32,768 against 64, with nothing in the table saying so.
+
+    Whatever the generator put in its manifest is what gets reported. An earlier
+    version looked for fields whose names contained "symbol", "account" or
+    "key", which is the default business case written into a harness that is
+    supposed to be indifferent to what you build: a pipeline about sensors or
+    invoices got a line with nothing on it.
+    """
     w = out.get("workload") or {}
+    count_field = (cfg().count_field or "").lower()
     keys = [f"{k} {v:,}" for k, v in w.items()
-            if isinstance(v, int) and any(t in k.lower() for t in ("symbol", "account", "key"))]
+            if isinstance(v, int) and not isinstance(v, bool)
+            and k.lower() not in MANIFEST_OWN and k.lower() != count_field]
     return (f"{out.get('backlogRecords', 0):,} records"
             + (", " + ", ".join(keys) if keys else "")
             + f", {out.get('outputsPerInput', 0):g} outputs per input")

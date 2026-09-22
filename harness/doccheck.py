@@ -145,6 +145,45 @@ def check_order_is_asserted(fail):
     return f"the verifier must assert {len(needed)} things about order"
 
 
+def check_run42_lessons(fail):
+    """The rest of what clean-room run 42 found stays fixed.
+
+    Four separate things, each of which cost that run time and each of which is
+    a sentence or a config key that a later edit could quietly undo.
+    """
+    skill = read(HERE, "..", "SKILL.md")
+    readme = read(HERE, "README.md")
+    lib_src = read(HERE, "lib.py")
+    prove_src = read(HERE, "prove.py")
+    windowed = read(HERE, "pipeline.example.windowed.json")
+
+    # the metrics reporter has a route to the classpath at all
+    if "ENABLE_BUILT_IN_PLUGINS" not in skill or "flinkEnv" not in skill:
+        fail("SKILL.md section 7 no longer says how the reporter jar reaches the classpath; "
+             "setting flinkProperties alone does nothing on flink:1.20.1")
+    if "flink_env" not in lib_src or "flinkEnv" not in readme:
+        fail("the flinkEnv hook is gone from the harness or its field table, so section 7's "
+             "metrics advice has no route again")
+
+    # the example is not the clean-room interview's answer key
+    for word in ("temperature", "Celsius", "sensor"):
+        if word.lower() in windowed.lower():
+            fail(f"pipeline.example.windowed.json is back to the temperature interview "
+                 f"({word!r}); an example that IS the interview hands over the one design "
+                 f"decision its second vantage depends on")
+
+    # polling the stack is polling the thing under test
+    if "Do not poll the stack while it is measuring" not in skill:
+        fail("SKILL.md no longer warns that polling the stack is work inside the measurement; "
+             "run 42 opened two passes at load 8.2 and 13.5 on eight cores doing it")
+
+    # the retention row is not vacuous for the shape that needs it
+    if "topic_retention_bytes" not in lib_src or "topic_retention_bytes" not in prove_src:
+        fail("the retention preflight row no longer reads back on topicsAlsoWritten, so a "
+             "pipeline with no topics.out passes it on an empty list")
+    return "run 42's other four findings are still fixed"
+
+
 def check_broker_ceiling_observation(fail):
     """What run 42 measured about the broker-ceiling guard stays written down.
 
@@ -659,6 +698,7 @@ def main():
                   check_example_matches_interview, check_example_backlogs,
                   check_windowed_example_backlogs,
                   check_broker_ceiling_observation,
+                  check_run42_lessons,
                   check_example_broker_memory, check_example_comments,
                   check_key_layout, check_tinyproof_reruns,
                   check_broker_cpu_hook, check_target_not_needed,

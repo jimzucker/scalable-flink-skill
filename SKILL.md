@@ -560,6 +560,13 @@ so the suite's first and last measurements are the same case and a rig that
 drifted across it is visible as baseline spread (one rig read its four-core
 case 12% higher ten minutes after the suite than in it). Budget one extra case.
 
+**Do not poll the stack while it is measuring.** Anything that asks the engine,
+the broker or Prometheus for a number is work on the same machine and inside
+the same measurement. Clean-room run 42 opened two of its passes at load
+averages of 8.2 and 13.5 on eight cores because it was querying Prometheus
+mid-suite to watch progress. Read `results/PROGRESS.txt`, which the harness
+writes anyway, and wait for `results/DONE`.
+
 **Start the fill the moment the tiny proof passes** and build the dashboard's
 panels while it runs. Nothing but the cases depends on them. The dashboard's
 *service* is not so free: `extraServices` is read when the stack comes up, so
@@ -864,7 +871,7 @@ test changes the number being measured. Whatever you add is recorded in the
 results header, so a reader knows what else was on the machine. That is the only
 sanctioned way — the harness is still not to be forked.
 
-**Five of the seven panels need engine metrics, and those need a reporter**: set one through `flinkProperties` in `pipeline.json`, which reaches the job manager and every task manager. Clean-room run 32 had no such hook, could not fork the harness, and spent about fifty minutes rebuilding the numbers from outside the engine — Kafka offsets, a tail of each sink, the REST API and the docker socket. The settings the measurement depends on are refused rather than silently overridden.
+**Five of the seven panels need engine metrics, and those need a reporter**: set one through `flinkProperties` in `pipeline.json`, which reaches the job manager and every task manager. **Setting the properties is not enough on its own**: on `flink:1.20.1` the Prometheus reporter's jar sits in `/opt/flink/opt` and only reaches the classpath through the image's `ENABLE_BUILT_IN_PLUGINS`, so put that in `flinkEnv`, which reaches both containers the same way. Until it existed there was no route at all, and clean-room run 42 spent about forty minutes rebuilding the numbers from outside the engine — the same forty minutes this hook exists to prevent. Clean-room run 32 had no such hook, could not fork the harness, and spent about fifty minutes rebuilding the numbers from outside the engine — Kafka offsets, a tail of each sink, the REST API and the docker socket. The settings the measurement depends on are refused rather than silently overridden.
 
 **The CPU-per-component panel needs the broker, and no reporter can give it to
 you.** `flinkProperties` reaches the job manager and the workers; the panel's

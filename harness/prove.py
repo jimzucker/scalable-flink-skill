@@ -229,6 +229,24 @@ def cmd_replay():
 
 # -------------------------------------------------------------------- selftest
 
+# Where Flink 1.20.1 actually puts the demo's sixteen account keys at the
+# default maxParallelism of 128, read out of the image with KeyCheck. The
+# four symbol keys land 1/1/1/1; these land 5/3/4/4, so one core would do
+# a quarter more work than an even split and that stage could not return
+# more than 0.80 of linear at four cores. Clean-room run 36 hit this, wrote
+# its own tool to find it, and chose key names by hand to get round it.
+ACCOUNT_KEY_LAYOUT_128 = {
+    "ACC1/SUB1/AAPL": {1: 0, 2: 0, 4: 0}, "ACC1/SUB1/MSFT": {1: 0, 2: 1, 4: 3},
+    "ACC1/SUB1/GOOG": {1: 0, 2: 0, 4: 0}, "ACC1/SUB1/AMZN": {1: 0, 2: 0, 4: 0},
+    "ACC2/SUB1/AAPL": {1: 0, 2: 0, 4: 0}, "ACC2/SUB1/MSFT": {1: 0, 2: 1, 4: 3},
+    "ACC2/SUB1/GOOG": {1: 0, 2: 0, 4: 1}, "ACC2/SUB1/AMZN": {1: 0, 2: 1, 4: 2},
+    "ACC3/SUB1/AAPL": {1: 0, 2: 1, 4: 2}, "ACC3/SUB1/MSFT": {1: 0, 2: 0, 4: 1},
+    "ACC3/SUB1/GOOG": {1: 0, 2: 1, 4: 2}, "ACC3/SUB1/AMZN": {1: 0, 2: 0, 4: 1},
+    "ACC4/SUB1/AAPL": {1: 0, 2: 1, 4: 3}, "ACC4/SUB1/MSFT": {1: 0, 2: 1, 4: 2},
+    "ACC4/SUB1/GOOG": {1: 0, 2: 0, 4: 0}, "ACC4/SUB1/AMZN": {1: 0, 2: 1, 4: 3},
+}
+
+
 def cmd_selftest(live=True, topic=None):
     """A guard that has never fired is a guess. Each guard is broken on purpose
     through the same code path the suite uses."""
@@ -679,6 +697,60 @@ def cmd_selftest(live=True, topic=None):
            lambda: L.disk_verdict(103e9, **run11), "", should_fire=False)
     expect("disk: the suite would not fit", lambda: L.disk_verdict(60e9, **run11), "of disk and only")
 
+    acct128 = ACCOUNT_KEY_LAYOUT_128
+    acct_sets = {"positions-by-account": sorted(acct128)}
+    floor = L.T["scalingFloor"]
+
+    def skew_counts():
+        sp = L.key_spread(acct_sets, [1, 2, 4], acct128, 128)
+        got = sp["stages"]["positions-by-account"]["cases"][4]["keysPerSubtask"]
+        if got != [5, 3, 4, 4]:
+            raise Exception(f"Flink 1.20.1 put the demo's account keys {got}, the record says [5, 3, 4, 4]")
+        if abs(sp["worst"]["stageCeiling"] - 0.8) > 0.001:
+            raise Exception(f"ceiling {sp['worst']['stageCeiling']}")
+    expect("key layout: the demo's own 5/3/4/4 is measured, not assumed (must not fire)",
+           skew_counts, "", should_fire=False)
+
+    def skew_refuses():
+        sp = L.key_spread(acct_sets, [1, 2, 4], acct128, 128)
+        bad = L.key_skew_verdict(sp, floor, [1115])
+        if bad:
+            raise bad
+    expect("keys do not divide evenly and a maxParallelism would fix it",
+           skew_refuses, "cannot return more than 0.80 of linear")
+
+    def skew_reports():
+        # the same layout with nothing that would fix it: a property of the key
+        # space, reported in the row rather than refused in a message nobody
+        # can act on
+        sp = L.key_spread(acct_sets, [1, 2, 4], acct128, 128)
+        bad = L.key_skew_verdict(sp, floor, [])
+        if bad:
+            raise bad
+    expect("an uneven layout with no fix available is reported, not refused (must not fire)",
+           skew_reports, "", should_fire=False)
+
+    def skew_idle():
+        lay = {}
+        for k, where in acct128.items():
+            lay[k] = dict(where)
+            lay[k][4] = min(where[4], 2)                      # nothing lands on subtask 3
+        sp = L.key_spread(acct_sets, [1, 2, 4], lay, 128)
+        bad = L.key_skew_verdict(sp, floor, [1115])
+        if bad:
+            raise bad
+    expect("a subtask would get no keys at all", skew_idle, "no keys at all")
+
+    def skew_even():
+        # 4/4/4/4: what pipeline.max-parallelism 1115 gives the same keys
+        lay = {k: {1: 0, 2: i % 2, 4: i % 4} for i, k in enumerate(sorted(acct128))}
+        sp = L.key_spread(acct_sets, [1, 2, 4], lay, 1115)
+        if sp["worst"]["stageCeiling"] != 1.0 or sp["idle"]:
+            raise Exception(f"even layout judged {sp['worst']}")
+        bad = L.key_skew_verdict(sp, floor, [1115])
+        if bad:
+            raise bad
+    expect("an even key layout passes (must not fire)", skew_even, "", should_fire=False)
     # clean-room run 36's own measured shape (its results/tinyproof.json): 172.3 B
     # per input record, a 220M backlog = 37.9 GB, sinks capped by retention at
     # 34.4 GB, so the suite needs 92.3 GB. Re-running the tiny proof after the fill
@@ -1016,6 +1088,51 @@ def cmd_preflight():
         return (f"{c.partitions} partitions / parallelism {sorted(c.cases)} = "
                 + ", ".join(f"{c.partitions // n} per subtask at {n}" for n in sorted(c.cases)))
 
+    def keys_per_subtask():
+        """Partitions dividing evenly is only half of it: the keyed stages have
+        to divide too. Flink hashes a key into one of maxParallelism key groups
+        and gives each subtask a contiguous range, so four keys do not spread
+        over four subtasks by themselves. The engine's own assignment is asked
+        where they would land, out of the image under test."""
+        if not c.key_sets:
+            raise Exception("pipeline.json does not say which manifest fields hold the key sets "
+                            "(keySets). A small key set does not spread over subtasks by itself, "
+                            "and nothing here can check it without knowing the keys.")
+        man = os.path.join(c.results, "det-a.json")
+        if not os.path.exists(man):
+            raise Exception(f"{man} not written: the determinism check writes the manifest this "
+                            f"reads the keys from, so it has to pass first")
+        m = json.load(open(man))
+        sets = {}
+        for stage, field in c.key_sets.items():
+            if field not in m:
+                raise Exception(f"the manifest has no field {field!r} for the {stage} stage; "
+                                f"it has {sorted(k for k, v in m.items() if isinstance(v, dict))}")
+            sets[stage] = sorted(m[field])
+        max_par, whence = L.max_parallelism_for(c.cases)
+        layout = L.key_layout(sorted({k for ks in sets.values() for k in ks}), max_par, c.cases)
+        spread = L.key_spread(sets, c.cases, layout, max_par)
+        extra["keySpread"] = spread
+        floor = L.T["scalingFloor"]
+        # only searched for when there is something to fix: the search is cheap
+        # but a suggestion nobody needs is noise in a PASS row
+        w = spread["worst"]
+        suggest = []
+        if spread["idle"] or w["stageCeiling"] < floor:
+            suggest = L.suggest_max_parallelism(sets, c.cases)
+            spread["suggestedMaxParallelism"] = suggest
+        bad = L.key_skew_verdict(spread, floor, suggest)
+        if bad:
+            raise Exception(bad.msg)
+        shape = "; ".join(f"{stage} {'/'.join(str(n) for n in st['cases'][max(c.cases)]['keysPerSubtask'])}"
+                          for stage, st in spread["stages"].items())
+        note = "" if w["stageCeiling"] >= floor else (
+            f" — the busiest holds {w['busiestShare']:.1%} against {1.0 / w['cores']:.1%} even, "
+            f"which bounds that stage at {w['stageCeiling']:.2f} of linear and no maxParallelism "
+            f"between 128 and 32,768 divides these keys; the keys themselves are the fix")
+        return (f"maxParallelism {max_par} ({whence}); keys per subtask at {max(c.cases)} cores: "
+                f"{shape}{note}")
+
     def slots():
         m = max(c.cases)
         L.start_tm(m)
@@ -1054,6 +1171,7 @@ def cmd_preflight():
     check("slots >= parallelism x jobs", slots)
     check("partitions divide evenly by every parallelism", partitions_per_subtask)
     check("memory is per subtask, not per container", memory_per_subtask)
+    check("keys divide evenly across subtasks", keys_per_subtask)
 
     def host_ceiling():
         """No pipeline beats its machine. Measured here so a missed claim can be

@@ -61,6 +61,20 @@
   },
   "_flinkProperties": "Extra Flink settings for the job manager and every task manager. A metrics reporter goes here -- section 7 wants panels that need one. Example: {\"metrics.reporter.prom.factory.class\": \"org.apache.flink.metrics.prometheus.PrometheusReporterFactory\", \"metrics.reporter.prom.port\": \"9249\"} with the prometheus jar in the image's plugins directory. Slots, parallelism, worker memory, the checkpoint store and metrics.reporter.slf4j.* are refused: they decide what is being measured.",
   "_flinkProperties": "Extra Flink settings for the job manager and every task manager. env.java.opts.taskmanager pins the garbage collector, and it is not optional: --cpus 1 makes the JVM see one processor and choose the serial collector, while every other case gets G1. Clean-room run 35 measured it -- pinning G1 gave the one-core case +19% and moved 1->2 from 2.364x to 1.997x, so the whole superlinear first step had been the baseline running different code. A metrics reporter goes here too. Slots, parallelism, memory, the checkpoint store and metrics.reporter.slf4j.* are refused: they decide what is being measured.",
+  "_keySets": [
+    "Which manifest fields hold a keyed stage's key set. Preflight asks Flink's own",
+    "key-group assignment, out of the image under test, where each key would land at",
+    "every case's parallelism. Four keys do not spread over four subtasks by",
+    "themselves: the demo's sixteen account keys land 5/3/4/4 at Flink's default",
+    "maxParallelism of 128, so one core would do a quarter more work than an even",
+    "split and that stage could not return more than 0.80 of linear at four cores.",
+    "When that happens the preflight row names the pipeline.max-parallelism to add",
+    "below -- for these key names it is 1115 -- and the layout becomes 4/4/4/4."
+  ],
+  "keySets": {
+    "positions-by-symbol": "totalBySymbol",
+    "positions-by-account": "totalByAccount"
+  },
   "flinkProperties": {
     "env.java.opts.taskmanager": "-XX:+UseG1GC"
   },

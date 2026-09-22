@@ -527,6 +527,24 @@ def topic_bytes(topics):
     return sum(int(x) for x in sizes) * 1024
 
 
+def topic_exists(topic):
+    """Whether the broker has this topic at all, without refusing if it does not."""
+    r = kafka(f"kafka-topics.sh --bootstrap-server {cfg().boot_int} --list", check=False)
+    return topic in (r.stdout or "").split()
+
+
+def log_end_if_any(topic):
+    """log_end, but a topic that does not exist yet is nought rather than a
+    failure. kafka-get-offsets.sh exits non-zero on a missing topic, which took
+    the completeness step down on a cold stack before the fill had run."""
+    try:
+        return log_end(topic)[0]
+    except Refusal:
+        return 0
+    except Exception:
+        return 0
+
+
 def topic_bytes_if_any(topics):
     """topic_bytes, but a topic that has not been created yet is nought bytes
     rather than a refusal. Used for the suite's input topic, which exists on a
@@ -1703,9 +1721,17 @@ def design_diff(design, plan, topic_records, built_constraints):
         look("operator", op, op.lower() in flat, "in the running plan" if op.lower() in flat
              else "no vertex in the running plan mentions it")
     for topic in design.get("inputs") or []:
-        n = topic_records.get(topic)
-        look("input", topic, bool(n), f"{n:,} records on the broker" if n
-             else ("empty" if n == 0 else "no such topic"))
+        # An input is checked for EXISTING, not for holding records. The diff
+        # runs during the completeness step, which is before the fill, so the
+        # suite's own input topic is legitimately empty then -- and the shipped
+        # example names it, so the example would have failed its own check.
+        # Whether the job reads a topic is not visible from the broker at all;
+        # the running plan is where that shows, and the operator rows cover it.
+        there = topic_records.get(topic) is not None
+        n = topic_records.get(topic) or 0
+        look("input", topic, there,
+             (f"{n:,} records on the broker" if n else "exists, not filled yet") if there
+             else "no such topic")
     for topic in design.get("outputs") or []:
         n = topic_records.get(topic)
         look("output", topic, bool(n), f"{n:,} records after the drain" if n
@@ -2473,10 +2499,27 @@ def check_case(rec, cores, is_baseline):
                       f"the pipeline is the bottleneck, not the cores.", rec)
 
 
+def comparable_shape(shape):
+    """The part of a shape that is the same job at a different size.
+
+    graph_shape also keeps the running plan, so the report can draw the graph
+    the engine served. The plan carries the job id and each vertex's
+    parallelism, both of which differ on every case by design -- a new job id
+    per submission, and the parallelism IS what is being varied. Comparing the
+    whole dict therefore refused every case after the first, for any pipeline,
+    as a rig-scope failure that stopped the chain. Clean-room run 41 found it,
+    and found the reason nothing else had: its first case was always a ceiling,
+    so shape_ref stayed None and the guard never ran. The fitter its pipeline
+    got, the sooner the harness refused it.
+    """
+    return {k: v for k, v in (shape or {}).items() if k != "plan"}
+
+
 def check_shape(shape, shape_ref):
     """GUARD: the job graph differs from the other cases — a RIG refusal."""
-    if shape_ref is not None and shape != shape_ref:
-        raise Refusal("rig", f"job graph shape differs from the other cases:\n{shape}\nvs\n{shape_ref}")
+    a, b = comparable_shape(shape), comparable_shape(shape_ref)
+    if shape_ref is not None and a != b:
+        raise Refusal("rig", f"job graph shape differs from the other cases:\n{a}\nvs\n{b}")
 
 
 def run_case(cores, pass_id, run_id, shape_ref, is_baseline, manifest,

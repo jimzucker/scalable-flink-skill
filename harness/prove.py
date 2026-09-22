@@ -527,6 +527,20 @@ def cmd_selftest(live=True, topic=None):
            case(brokerLimitHits=9437, brokerRefaults=572000, tmCapFrac=0.996), "", should_fire=False)
     expect("a broker that never hit its limit (must not fire)",
            case(brokerLimitHits=0, brokerRefaults=1200), "", should_fire=False)
+    def shape_same_job_new_id():
+        """The same graph at a different size, which is every case after the
+        first. The plan carries a fresh job id per submission and the
+        parallelism being varied, so comparing it refused every pipeline."""
+        a = {"vertexCount": 2, "signature": [["x", []]], "maxParallelism": [128],
+             "plan": {"jid": "aaaaaaaa", "nodes": [{"id": "n", "description": "x",
+                                                    "parallelism": 1, "inputs": []}]}}
+        b = {"vertexCount": 2, "signature": [["x", []]], "maxParallelism": [128],
+             "plan": {"jid": "bbbbbbbb", "nodes": [{"id": "n", "description": "x",
+                                                    "parallelism": 4, "inputs": []}]}}
+        L.check_shape(a, b)
+    expect("the same graph at a new job id and size passes (must not fire)",
+           shape_same_job_new_id, "", should_fire=False)
+
     expect("job graph differs across cases",
            lambda: L.check_shape({"vertexCount": 3, "signature": [["a", ["HASH"]]]},
                                  {"vertexCount": 3, "signature": [["a", ["REBALANCE"]]]}), "shape")
@@ -905,21 +919,25 @@ def cmd_selftest(live=True, topic=None):
         location -- has no constant fan-out anywhere, so there is nothing to
         divide. Until the second vantage could be delegated, the harness could
         not measure such a pipeline at all.
+
+        Fixed literals, not the live pipeline.json: read from the config, this
+        test exercised whichever mode the config happened to use and threw a
+        TypeError on the other. Clean-room run 41's own pipeline could not pass
+        the self-test that gates its suite, for that reason.
         """
-        open_tick = {f"end_{t}": 0 for t in c.topics_out}
-        close_tick = {f"end_{t}": 500_000 for t in c.topics_out}
-        got, how = L.vantage_delta(open_tick, close_tick, None, None)
-        want = 500_000 * len(c.topics_out) / c.out_per_in
-        if abs(got - want) > 0.5 or "outputs per input" not in how:
-            raise Exception(f"constant fan-out read {got} ({how}), expected {want}")
-        saved = c.vantage_mode
+        saved_mode, saved_outs, saved_fan = c.vantage_mode, c.topics_out, c.out_per_in
         try:
+            c.vantage_mode, c.topics_out, c.out_per_in = "constantFanOut", ["a", "b"], 5.0
+            ticks = ({"end_a": 0, "end_b": 0}, {"end_a": 300_000, "end_b": 200_000})
+            got, how = L.vantage_delta(*ticks, None, None)
+            if got != 100_000.0 or "outputs per input" not in how:
+                raise Exception(f"constant fan-out read {got} ({how}), expected 100000")
             c.vantage_mode = "command"
-            got, how = L.vantage_delta(open_tick, close_tick, 1_000, 401_000)
+            got, how = L.vantage_delta(*ticks, 1_000, 401_000)
             if got != 400_000 or "progress command" not in how:
                 raise Exception(f"delegated vantage read {got} ({how})")
         finally:
-            c.vantage_mode = saved
+            c.vantage_mode, c.topics_out, c.out_per_in = saved_mode, saved_outs, saved_fan
     expect("the second vantage reads the same either way (must not fire)",
            vantage_two_ways, "", should_fire=False)
 
@@ -945,6 +963,8 @@ def cmd_selftest(live=True, topic=None):
     def fanout_without_anything_to_count():
         import copy
         raw = copy.deepcopy(c.raw)
+        raw.pop("secondVantage", None)
+        raw["outputsPerInput"] = 5          # fixed, not the live file's
         raw["topics"] = dict(raw["topics"], out=[])
         tmp = tempfile.mkdtemp(prefix="vantage-selftest-")
         try:
@@ -1669,9 +1689,15 @@ def cmd_completeness():
         # the operators, the inputs and the outputs the interview asked for
         # are all there -- including the ones outside topics.out, which is
         # where both market values live and where nothing else looks.
-        records = {t: L.log_end(t)[0] for t in
-                   dict.fromkeys([c.suite_topic_in, topic] + list(c.topics_out) + list(c.topics_also)
-                                 + list((c.design.get("inputs") or []) + (c.design.get("outputs") or [])))}
+        # tolerant: this runs before the fill, so the suite's own input topic
+        # may not exist yet, and kafka-get-offsets.sh exits non-zero on a topic
+        # that is not there -- which took the whole step down on a cold stack
+        wanted = dict.fromkeys([c.suite_topic_in, topic] + list(c.topics_out) + list(c.topics_also)
+                               + list((c.design.get("inputs") or []) + (c.design.get("outputs") or [])))
+        records = {}
+        for t in wanted:
+            n = L.log_end_if_any(t)
+            records[t] = n if n else (0 if L.topic_exists(t) else None)
         sink_rows = sum(records.get(t, 0) for t in c.topics_out)
         measured_fanout = round(sink_rows / c.small, 3) if c.small else 0
         constraints = ({"outputsPerInput": (c.out_per_in, measured_fanout)}

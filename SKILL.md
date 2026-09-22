@@ -781,6 +781,12 @@ a suite that fitted, and made every lever cost a delete and a re-fill, about
 twelve minutes of broker I/O each (clean-room run 36). Confirm the winner with
 the suite once, at the end.
 
+**The levers transfer; the percentages do not.** Every figure above was
+measured on one pipeline on one laptop. Reading the input once is worth
+something to any pipeline that reads it twice; whether it is worth 22% to
+yours is a question your own two arms answer. Quote your number, not this
+one.
+
 **Two things were tested and changed nothing**, so do not spend a run on them:
 partition count (8 against 16 — and 16 failed every parallelism-4 case for an
 unstable warm-up) and network buffer fraction (0.15 against 0.30).

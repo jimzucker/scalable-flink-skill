@@ -2896,8 +2896,10 @@ def render_table(out):
 
 # Fields of the manifest the harness reads for itself, so the workload line can
 # report everything else the generator chose to record without knowing what any
-# of it means.
-MANIFEST_OWN = ("seed", "count", "records", "tradecount", "outputsperinput")
+# of it means. The record count is excluded separately, by whatever name
+# manifestCountField gives it -- naming the demo's "tradeCount" here would put
+# the default business case back into a harness that should not know it.
+MANIFEST_OWN = ("seed", "count", "records", "outputsperinput")
 
 
 def workload_line(out):

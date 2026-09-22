@@ -1,0 +1,415 @@
+{
+ "axis": "one machine, more cores",
+ "apiLevel": "DataStream",
+ "guarantee": {
+  "state": "exactly-once checkpointing",
+  "sink": "at-least-once, made idempotent by publishing the absolute total and count per location and hour"
+ },
+ "checkpointIntervalMs": 10000,
+ "buildHash": "3d4feb59b977c893",
+ "completenessBuild": "3d4feb59b977c893",
+ "passesPerCase": 3,
+ "quickLook": false,
+ "publishable": true,
+ "study": "scaling: every case configured identically",
+ "perCase": null,
+ "cases": [
+  2,
+  4
+ ],
+ "baseline": 1,
+ "workload": {
+  "readingCount": 600000000,
+  "seed": 1,
+  "locationCount": 100,
+  "sensorsPerLocation": 10,
+  "sensorCount": 1000,
+  "lagSecondsPerLocation": 36,
+  "baseHour": 490896,
+  "closedHours": 16617,
+  "openHours": 100
+ },
+ "backlogRecords": 600000000,
+ "partitions": 8,
+ "outputsPerInput": null,
+ "heldStill": {
+  "kafkaCap": 2.5,
+  "jobManagerCap": 0.5,
+  "partitions": 8,
+  "checkpointMs": 10000,
+  "sinkRetentionBytesPerPartition": 2147483648,
+  "tmProcessMemory": {
+   "perCase": {
+    "1": "1664m",
+    "2": "2112m",
+    "4": "3008m"
+   },
+   "rule": "tmMemoryBase + tmMemoryPerCore x cores, so every subtask gets the same; the container figure is not held still"
+  },
+  "extraServices": [
+   "grafana",
+   "pipeexporter",
+   "prometheus",
+   "statsexporter"
+  ]
+ },
+ "thresholds": {
+  "capFloorBaseline": 0.95,
+  "capFloorOther": 0.95,
+  "brokerLimitHits": 0,
+  "brokerHitsCapExempt": 0.99,
+  "sourceIdleCeil": 0.2,
+  "vantageTol": 0.05,
+  "spreadCeil": 0.2,
+  "minPasses": 2,
+  "scalingFloor": 0.95,
+  "gcCeil": 0.055,
+  "ratioSdFallback": 0.028,
+  "quickPasses": 2,
+  "warmupIntervals": 4,
+  "warmupFlatTol": 0.1,
+  "warmupScatterTol": 0.2,
+  "warmupMinS": 90.0,
+  "warmupMaxS": 240.0,
+  "minBoundaries": 6,
+  "minWindowS": 60.0,
+  "windowMaxS": 300.0,
+  "reporterS": 10,
+  "minBpSamples": 3,
+  "tinyRatioLo": 1.5,
+  "tinyRatioHi": 2.5,
+  "diskFloorBytes": 20000000000.0,
+  "sinkRetentionBytes": 2147483648
+ },
+ "harness": {
+  "lib.py": "83de8b7e3b6da8f9",
+  "prove.py": "6e3faf5108690dcb"
+ },
+ "startedAt": "2026-09-22 09:57:56 EDT",
+ "startedAtEpoch": 1790085476.730575,
+ "runs": [
+  {
+   "cores": 2,
+   "pass": "p1-asc",
+   "group": "st42-09220957-c2-p1-asc",
+   "hostFreeGB": 122.3,
+   "nanoCpus": 2000000000,
+   "reporterS": 10,
+   "parallelism": 2,
+   "slotsTotal": 2,
+   "tSubmit": 1790085711.584961,
+   "jobId": "357c5f75cfbd5029b6bd37f5d211e259",
+   "shape": {
+    "vertexCount": 2,
+    "signature": [
+     [
+      "Source: read readings<br/>+- parse reading<br/>",
+      []
+     ],
+     [
+      "hourly average by location<br/>+- publish hourly average: Writer<br/>   +- publish hourly average: Committer<br/>",
+      [
+       "HASH"
+      ]
+     ]
+    ],
+    "maxParallelism": [
+     369
+    ],
+    "plan": {
+     "jid": "357c5f75cfbd5029b6bd37f5d211e259",
+     "name": "st42 hourly average by location",
+     "type": "STREAMING",
+     "nodes": [
+      {
+       "id": "ce67902ecbd1f72c9ea827a780d093c9",
+       "parallelism": 2,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "hourly average by location<br/>+- publish hourly average: Writer<br/>   +- publish hourly average: Committer<br/>",
+       "inputs": [
+        {
+         "num": 0,
+         "id": "27c8e226f3b1a03974b3e8351d64de83",
+         "ship_strategy": "HASH",
+         "exchange": "pipelined_bounded"
+        }
+       ],
+       "optimizer_properties": {}
+      },
+      {
+       "id": "27c8e226f3b1a03974b3e8351d64de83",
+       "parallelism": 2,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "Source: read readings<br/>+- parse reading<br/>",
+       "optimizer_properties": {}
+      }
+     ]
+    }
+   },
+   "warmup": {
+    "rates": [
+     1388651.4365522747,
+     1392541.1882176735,
+     1400705.9704472844,
+     1389149.5905731977
+    ],
+    "mean": 1392762.0464476077,
+    "drift": 0.0021,
+    "scatter": 0.0087,
+    "warmupS": 90.5
+   },
+   "tSteady": 1790085813.8339,
+   "tOpen": 1790085818.101835,
+   "open": {
+    "ts": 1790085816044,
+    "committed": 126144671,
+    "committedParts": [
+     15686000,
+     15571940,
+     15232404,
+     16036369,
+     16126330,
+     16256280,
+     16075870,
+     15159478
+    ],
+    "endIn": 600000000
+   },
+   "hostLoadOpen": 4.22,
+   "hostCores": 8,
+   "brokerLimitHits": 0,
+   "brokerRefaults": 376302,
+   "brokerFileCacheBytes": 1577943040,
+   "brokerLimitBytes": 6710886400,
+   "tClose": 1790085878.308095,
+   "close": {
+    "ts": 1790085876192,
+    "committed": 208216628,
+    "committedParts": [
+     25824052,
+     25739547,
+     25584850,
+     26310520,
+     26460790,
+     26724500,
+     26363389,
+     25208980
+    ],
+    "endIn": 600000000
+   },
+   "hostLoadClose": 6.37,
+   "boundaries": 6,
+   "gcNames": [
+    "All",
+    "G1 Old Generation",
+    "G1 Young Generation"
+   ],
+   "elapsedS": 60.15,
+   "recordsConsumed": 82071957,
+   "rateSource": "kafka committed offsets on st42-readings",
+   "recordsPerSec": 1364500.2,
+   "vantageSource": "the pipeline's own progress command",
+   "vantageSinkRecords": 82296000.0,
+   "vantageDisagreement": 0.0027,
+   "backlogRemaining": 391783372,
+   "headroomS": 287.1,
+   "tmCores": 2.0,
+   "tmCapFrac": 0.9999,
+   "tmThrottledPeriodsPct": 100.0,
+   "kafkaCores": 0.056,
+   "kafkaCap": 2.5,
+   "kafkaCapFrac": 0.0223,
+   "gcMsInWindow": 728.0,
+   "gcFracOfCapacity": 0.0061,
+   "sourceIdle": 0.0745,
+   "sourceBusy": 0.9255,
+   "sourceBackpressured": 0.0,
+   "bpSamples": 12,
+   "backpressure": {
+    "Source: read readings -> parse reading": {
+     "idle": 0.0745,
+     "busy": 0.9255,
+     "backPressured": 0.0,
+     "samples": 12
+    },
+    "hourly average by location -> publish hourly average: Writer -> publish hourly average: Committer": {
+     "busy": 0.2016,
+     "backPressured": 0.0,
+     "idle": 0.7984,
+     "samples": 12
+    },
+    "_gcNames": [
+     "All",
+     "G1 Old Generation",
+     "G1 Young Generation"
+    ]
+   },
+   "status": "OK"
+  },
+  {
+   "cores": 4,
+   "pass": "p1-asc",
+   "group": "st42-09220957-c4-p1-asc",
+   "hostFreeGB": 122.3,
+   "nanoCpus": 4000000000,
+   "reporterS": 10,
+   "parallelism": 4,
+   "slotsTotal": 4,
+   "tSubmit": 1790085948.752626,
+   "jobId": "ce99434f4b8a7d8fb8a463b3e7cf2ccb",
+   "shape": {
+    "vertexCount": 2,
+    "signature": [
+     [
+      "Source: read readings<br/>+- parse reading<br/>",
+      []
+     ],
+     [
+      "hourly average by location<br/>+- publish hourly average: Writer<br/>   +- publish hourly average: Committer<br/>",
+      [
+       "HASH"
+      ]
+     ]
+    ],
+    "maxParallelism": [
+     369
+    ],
+    "plan": {
+     "jid": "ce99434f4b8a7d8fb8a463b3e7cf2ccb",
+     "name": "st42 hourly average by location",
+     "type": "STREAMING",
+     "nodes": [
+      {
+       "id": "ce67902ecbd1f72c9ea827a780d093c9",
+       "parallelism": 4,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "hourly average by location<br/>+- publish hourly average: Writer<br/>   +- publish hourly average: Committer<br/>",
+       "inputs": [
+        {
+         "num": 0,
+         "id": "27c8e226f3b1a03974b3e8351d64de83",
+         "ship_strategy": "HASH",
+         "exchange": "pipelined_bounded"
+        }
+       ],
+       "optimizer_properties": {}
+      },
+      {
+       "id": "27c8e226f3b1a03974b3e8351d64de83",
+       "parallelism": 4,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "Source: read readings<br/>+- parse reading<br/>",
+       "optimizer_properties": {}
+      }
+     ]
+    }
+   },
+   "warmup": {
+    "rates": [
+     2419761.067252923,
+     2604717.267552182,
+     2614930.7830603276,
+     2515500.4992012777
+    ],
+    "mean": 2538727.404266678,
+    "drift": 0.0351,
+    "scatter": 0.0769,
+    "warmupS": 90.2
+   },
+   "tSteady": 1790086051.545121,
+   "tOpen": 1790086058.759841,
+   "open": {
+    "ts": 1790086056280,
+    "committed": 235976098,
+    "committedParts": [
+     29211200,
+     29703912,
+     29819633,
+     28956315,
+     29550328,
+     30328680,
+     29564250,
+     28841780
+    ],
+    "endIn": 600000000
+   },
+   "hostLoadOpen": 5.73,
+   "hostCores": 8,
+   "brokerLimitHits": 0,
+   "brokerRefaults": 281284,
+   "brokerFileCacheBytes": 3188187136,
+   "brokerLimitBytes": 6710886400,
+   "tClose": 1790086118.311573,
+   "close": {
+    "ts": 1790086116404,
+    "committed": 380260106,
+    "committedParts": [
+     48013673,
+     49049965,
+     42022140,
+     47330768,
+     48342250,
+     47999640,
+     49930950,
+     47570720
+    ],
+    "endIn": 600000000
+   },
+   "hostLoadClose": 10.76,
+   "boundaries": 6,
+   "gcNames": [
+    "All",
+    "G1 Old Generation",
+    "G1 Young Generation"
+   ],
+   "elapsedS": 60.12,
+   "recordsConsumed": 144284008,
+   "rateSource": "kafka committed offsets on st42-readings",
+   "recordsPerSec": 2399773.9,
+   "vantageSource": "the pipeline's own progress command",
+   "vantageSinkRecords": 143028000.0,
+   "vantageDisagreement": 0.0087,
+   "backlogRemaining": 219739894,
+   "headroomS": 91.6,
+   "tmCores": 3.937,
+   "tmCapFrac": 0.9843,
+   "tmThrottledPeriodsPct": 94.1,
+   "kafkaCores": 0.079,
+   "kafkaCap": 2.5,
+   "kafkaCapFrac": 0.0318,
+   "gcMsInWindow": 924.0,
+   "gcFracOfCapacity": 0.0038,
+   "sourceIdle": 0.1263,
+   "sourceBusy": 0.8737,
+   "sourceBackpressured": 0.0,
+   "bpSamples": 24,
+   "backpressure": {
+    "Source: read readings -> parse reading": {
+     "idle": 0.1263,
+     "busy": 0.8737,
+     "backPressured": 0.0,
+     "samples": 24
+    },
+    "hourly average by location -> publish hourly average: Writer -> publish hourly average: Committer": {
+     "busy": 0.3025,
+     "idle": 0.6975,
+     "backPressured": 0.0,
+     "samples": 24
+    },
+    "_gcNames": [
+     "All",
+     "G1 Old Generation",
+     "G1 Young Generation"
+    ]
+   },
+   "status": "OK"
+  }
+ ],
+ "refusals": [],
+ "savedAt": "2026-09-22 10:36:43 EDT",
+ "savedAtEpoch": 1790087803.7415302
+}

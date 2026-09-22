@@ -913,6 +913,57 @@ def cmd_selftest(live=True, topic=None):
     expect("the measured fan-out is not the declared one",
            design_catches_a_constraint, "outputsPerInput = 5, read back 8")
 
+    def design_tolerates_an_input_the_fill_has_not_created():
+        # The diff runs inside completeness, which is BEFORE the fill, so on a
+        # cold stack the suite's own input topic does not exist yet. Both
+        # shipped examples declare it, so both would refuse on their own first
+        # run. Clean-room run 42 lost about 25 minutes pre-creating it by hand.
+        rows, bad = L.design_diff({"inputs": ["st-readings"], "operators": ["parse-order"]},
+                                  RUN36_PLAN, {}, {}, before_fill=True)
+        if bad:
+            raise bad
+        if not any(r["area"] == "input" and "not created yet" in r["detail"] for r in rows):
+            raise Exception("the row does not say the fill has not run")
+    expect("a declared input the fill has not created yet (must not fire)",
+           design_tolerates_an_input_the_fill_has_not_created, "", should_fire=False)
+
+    def design_still_catches_a_missing_input_after_the_fill():
+        # The tolerance above is scoped to the pre-fill phase and nothing else:
+        # after the fill, a declared input that is not on the broker is still a
+        # design the build did not meet.
+        rows, bad = L.design_diff({"inputs": ["st-readings"]}, RUN36_PLAN, {}, {})
+        if bad:
+            raise bad
+    expect("a declared input missing after the fill",
+           design_still_catches_a_missing_input_after_the_fill, "input st-readings")
+
+    def report_renders_with_no_constant_fan_out():
+        # Clean-room run 42 lost its ENTIRE report here: a pipeline whose
+        # outputs are per window leaves outputsPerInput unset, so
+        # outputRecsPerSec is never written -- and the per-pass row read it
+        # unconditionally while the MEAN row thirteen lines below guarded it
+        # correctly. The fixture is that run's own suite.json, trimmed; it
+        # carries no outputRecsPerSec key at all, which is the point of it.
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "fixtures", "suite-no-fanout.json")
+        with open(path) as f:
+            out = json.load(f)
+        if any("outputRecsPerSec" in r for r in out["runs"]):
+            raise Exception("the fixture carries the key, so it tests nothing")
+        out["table"] = L.build_table(out["runs"], quick=out.get("quickLook", False))
+        # The ambient pipeline.json may declare a fan-out; this pipeline does
+        # not, which is the condition under test.
+        saved = L._CFG.out_per_in
+        L._CFG.out_per_in = None
+        try:
+            text = L.render_table(out)
+        finally:
+            L._CFG.out_per_in = saved
+        if "nan" in text.lower():
+            raise Exception("the table rendered a nan")
+    expect("a pipeline with no constant fan-out still gets a report (must not fire)",
+           report_renders_with_no_constant_fan_out, "", should_fire=False)
+
     def graph_renders():
         m = L.graph_mermaid(RUN36_PLAN)
         for needle in ("flowchart LR", "HASH", "BROADCAST", "parse-order"):
@@ -1688,8 +1739,14 @@ def cmd_completeness():
             finally:
                 L.stop_sampler(); L.stop_tm()
 
-    def verify(label):
-        cmd = c.fmt(c.verify_cmd, manifest=man_path, topic=topic)
+    def verify(label, arm):
+        # Section 4 asks for DIFFERENT assertions on the two arms -- never
+        # backwards, against backwards at most once per key -- but the harness
+        # never said which arm it was running, so every run had to infer it.
+        # Run 41 stamped the consumer group into its published business rows to
+        # tell them apart; run 42 inferred it from the presence of duplicates.
+        # A verifier that does not use {arm} is unaffected.
+        cmd = c.fmt(c.verify_cmd, manifest=man_path, topic=topic, arm=arm)
         r = sh(cmd, check=False, timeout=3600)
         print(r.stdout)
         if r.returncode != 0:
@@ -1698,7 +1755,7 @@ def cmd_completeness():
         return r.stdout
 
     try:
-        a = drain(f"{c.project}-complete-clean"); a["verify"] = verify("clean drain"); out["arms"].append(a)
+        a = drain(f"{c.project}-complete-clean"); a["verify"] = verify("clean drain", "clean"); out["arms"].append(a)
         # GUARD: the job matches the design the run wrote down. The verifier
         # checks the numbers in the topics the harness owns; this checks that
         # the operators, the inputs and the outputs the interview asked for
@@ -1721,7 +1778,8 @@ def cmd_completeness():
         if shape.get("maxParallelism"):
             constraints["maxParallelism"] = (L.max_parallelism_for(c.cases)[0],
                                              shape["maxParallelism"][0])
-        rows, bad = L.design_diff(c.design, shape.get("plan"), records, constraints)
+        rows, bad = L.design_diff(c.design, shape.get("plan"), records, constraints,
+                                  before_fill=True)
         out["designDiff"] = rows
         log("  design against build:")
         for line in L.design_table(rows):
@@ -1730,7 +1788,7 @@ def cmd_completeness():
             log("  the build does not match the design. Section 4 says to correct it and run "
                 "completeness again — no fill, no suite, until it matches.")
             raise bad
-        b = drain(f"{c.project}-complete-kill", kill_at=c.kill_frac); b["verify"] = verify("killed mid-run"); out["arms"].append(b)
+        b = drain(f"{c.project}-complete-kill", kill_at=c.kill_frac); b["verify"] = verify("killed mid-run", "killed"); out["arms"].append(b)
         out["result"] = "PASS"
     except Refusal as e:
         out["result"] = "FAIL"; out["error"] = e.msg
@@ -1925,10 +1983,16 @@ def cmd_report():
     # impossible on one bad pass.
     impossible = [r for r in steps if r.get("reportable")
                   and (r.get("ratioLowCI") or 0) > r["idealRatio"]]
+    # Render both BEFORE opening anything for writing. open(..., "w") empties
+    # the file before the renderer runs, so a renderer that raises destroys the
+    # previous run's table as well as failing to write this one. That is how
+    # clean-room run 42 ended with a 0-byte suite.txt: two separate losses from
+    # one bug.
+    text, markdown = render_table(out) + "\n", render_markdown(out)
     with open(os.path.join(c.results, "suite.txt"), "w") as f:
-        f.write(render_table(out) + "\n")
+        f.write(text)
     with open(os.path.join(c.results, "suite.md"), "w") as f:
-        f.write(render_markdown(out))
+        f.write(markdown)
     save_json("suite.json", out)
     print("wrote results/suite.txt and results/suite.md")
     if short:

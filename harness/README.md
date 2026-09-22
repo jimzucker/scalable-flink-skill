@@ -7,8 +7,24 @@ table. Ten clean-room runs each rewrote those from prose, and every one
 re-decided something the rule had already decided — what a failed check does, what
 the window is anchored on, what counts as flat — and paid for it in hours.
 
+**Write `pipeline.json` yourself, from the field table below. Do not copy an
+example.** Two shipped examples exist to be *read* — one complete, valid
+configuration of each shape — and every value in them belongs to the pipeline
+they describe:
+
+| file | the pipeline it configures |
+|---|---|
+| `pipeline.example.json` | outputs that grow with the input: positions per order, a constant five rows in, five rows out. Its second measurement divides sink rows by that constant |
+| `pipeline.example.windowed.json` | outputs that are **per window**: one average per location per hour, however many readings arrived. No constant fan-out anywhere, so it supplies a command for the second measurement instead |
+
+Copying is how one pipeline's numbers end up in another's run. Two clean-room
+runs out of two took a shipped backlog count verbatim rather than deriving it
+from their own measured rate, and one of them had not measured anything yet.
+`outputsPerInput` is worse: its own comment says *derive it, do not copy this*,
+and a wrong one makes the two measurements disagree by construction, which
+reads as a broken rig rather than a wrong number.
+
 ```
-cp ~/.claude/skills/scalable-flink-skill/harness/pipeline.example.json pipeline.json   # edit
 H=~/.claude/skills/scalable-flink-skill/harness/prove.py
 nohup python3 $H all > results/all.log 2>&1 &        # the whole chain below, one stack session;
                                                      # wait on results/DONE, read results/phases.log

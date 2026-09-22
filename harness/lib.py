@@ -86,7 +86,21 @@ T = {
     # the seven cases measured at 4 GiB the limit was hit zero times inside a
     # window, so any hit at all is outside the measured noise.
     "brokerLimitHits": 0,
-    # a worker this close to its cap is the constraint regardless of the broker
+    # a worker this close to its cap is the constraint regardless of the broker.
+    # UNSETTLED, and the record now holds the evidence: everywhere else in this
+    # harness 0.95 of cap IS the component being the constraint (capFloorBaseline
+    # and capFloorOther, both 0.95). This one rule asks for 0.99, and nothing says
+    # why. Clean-room run 42 lost its two FASTEST four-core passes in that
+    # four-point gap, at 96.4% and 98.9%, one of them by a tenth of a point --
+    # while the slowest pass of the same case was kept at 99.1% with the same
+    # ~2,800 limit hits. Sweeping both knobs against every recorded verdict, a
+    # hit tolerance of 5,000 with an exemption of 0.97 satisfies all of them AND
+    # keeps run 42's passes -- but that pair was fitted to the record, not
+    # measured, so it is not being shipped on one run. What IS measured, one rig
+    # and kafkaMemory the only variable: ~2,800 hits gave 2,545,923-2,622,527/s
+    # and zero hits gave 2,399,774-2,657,223/s. The ranges overlap almost
+    # entirely, so at this broker size those hits cost nothing detectable.
+    # Three passes either way is not a threshold. The next windowed run settles it.
     "brokerHitsCapExempt": 0.99,
     # external boundary: a starved source idles (run 5: the broker was the ceiling
     # at 43% back-pressure with the TM under cap). Measured 2026-09-04: at-cap

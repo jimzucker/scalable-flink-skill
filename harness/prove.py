@@ -477,12 +477,15 @@ def cmd_selftest(live=True, topic=None):
            steps(dict(tmCapFrac=0.99), None, True, "check it matches"), "", should_fire=False)
     expect("action: a step that doubled needs nothing (must not fire)",
            steps(dict(tmCapFrac=0.99), met, False, "add cores"), "", should_fire=False)
-    expect("action: a short step says investigate (must not fire)",
-           steps(dict(tmCapFrac=0.99), short, False, "investigate"), "", should_fire=False)
-    expect("action: a step above 2x says the smaller case reads low (must not fire)",
-           steps(dict(tmCapFrac=0.99), over, False, "investigate"), "", should_fire=False)
-    expect("action: nothing to do when CPU is the block (must not fire)",
-           acts(dict(tmCapFrac=0.99), "investigate"), "", should_fire=False)
+    # "investigate" said nothing: clean-room run 44 was told it twice while
+    # every column beside it said the pipeline was the constraint, the broker
+    # was idle and the GC was at 0.3%. Each of the three now names what it is.
+    expect("action: a step short of the target points at the host (must not fire)",
+           steps(dict(tmCapFrac=0.99), short, False, "check the host"), "", should_fire=False)
+    expect("action: a step above 2x says the baseline reads low (must not fire)",
+           steps(dict(tmCapFrac=0.99), over, False, "baseline reads low"), "", should_fire=False)
+    expect("action: says so when there is no usable step (must not fire)",
+           acts(dict(tmCapFrac=0.99), "no usable step"), "", should_fire=False)
     expect("action: names the Kafka memory to try, in gigabytes (must not fire)",
            acts(dict(tmCapFrac=0.96, brokerLimitHits=12780, brokerLimitBytes=4096 * 1048576),
                 "raise kafkaMemory"), "", should_fire=False)

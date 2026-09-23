@@ -510,7 +510,8 @@ def cmd_selftest(live=True, topic=None):
     expect("measured rate is zero", case(recordsConsumed=0), "not positive")
     expect("rate came from the engine", case(rateSource="engine numRecordsIn"), "engine")
     expect("two vantage points disagree", case(vantageDisagreement=0.12), "do not agree")
-    expect("backlog lacks headroom at close", case(backlogRemaining=1000, headroomS=0.006), "nearly ran out")
+    expect("the data ran out before the window closed",
+           case(backlogRemaining=1000, headroomS=0.006), "the data ran out before the measurement finished")
     expect("external-boundary samples missing", case(sourceIdle=None), "no back-pressure reading")
     expect("too few reporter samples in the window", case(bpSamples=2), "readings landed inside")
     expect("cores are not the constraint (baseline, run 5\'s 94%)", case(tmCapFrac=0.94, _baseline=True), "only used", ceiling=True)
@@ -1213,14 +1214,31 @@ def cmd_preflight():
         return "no reporter jar copied into lib/; slf4j reporter used from plugins/"
 
     def disk():
-        in_bytes = c.backlog * 120                                     # generous bytes/record until the manifest says
+        # How big a record is on disk, measured off the broker when anything is
+        # already there, and only guessed when nothing is. The guess used to be
+        # 120 bytes for every run: clean-room run 43 measured 30 bytes a record
+        # (30,000,000 records in 0.90 GB, compressed on the way in), so the guess
+        # asked for four times the space the run needed and stopped a
+        # configuration that would have fitted three times over. The run then
+        # shrank its data to get under a limit that was never real.
+        per_rec, how = L.measured_bytes_per_record(), "measured on the broker"
+        if per_rec is None:
+            per_rec, how = 120.0, "an assumption, since nothing is on the broker yet"
+        in_bytes = c.backlog * per_rec
         per_case_out = T["sinkRetentionBytes"] * c.partitions * len(c.topics_out)
         need = in_bytes + per_case_out + 2 * 1024 ** 3 + 10 * 1024 ** 3
         free = L.host_free_bytes()
+        shape = (f"{c.backlog:,} records at {per_rec:.0f} bytes each ({how}) "
+                 f"= {in_bytes/1e9:.1f} GB, plus {per_case_out/1e9:.1f} GB of outputs, "
+                 f"2 GB of checkpoints and 10 GB spare")
         if free < need:
-            raise Exception(f"host free {free/1e9:.1f} GB < budget {need/1e9:.1f} GB")
-        return (f"host free {free/1e9:.1f} GB >= budget {need/1e9:.1f} GB "
-                f"(backlog {in_bytes/1e9:.1f} + sinks at retention {per_case_out/1e9:.1f} + ckpt 2 + slack 10)")
+            raise Exception(f"there is not enough disk space. This run needs about "
+                            f"{need/1e9:.0f} GB and only {free/1e9:.0f} GB is free: {shape}. "
+                            f"Either free up space or lower backlog.count in pipeline.json"
+                            + ("" if how.startswith("measured") else
+                               ". Note the record size above is a guess; if your records are "
+                               "smaller, or compressed on the way in, the real need is lower"))
+        return f"{free/1e9:.1f} GB free, about {need/1e9:.1f} GB needed: {shape}"
 
     def retention():
         L.recreate_output_topics()

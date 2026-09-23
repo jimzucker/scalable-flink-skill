@@ -280,7 +280,7 @@ bad window voids one case — so anything checkable now is checked now.
 | nothing else is using the cores | load average against the core count, and what is busiest | a cap is a **share**, not a promise of cycles: on a busy host every case reads 100% of its cap and does less work for it, and no other column shows it |
 | the VM trim command is known | `docker run --rm --privileged --pid=host alpine nsenter -t 1 -m -u -n -i -- fstrim -v /var/lib/docker` | space freed inside a Docker Desktop VM never returns to the host |
 
-**Then the tiny proof, before any fill.** A few thousand records, end to end:
+**Then the tiny proof, before any fill.** It is called tiny because it is short, **not because it is small**: it measures the drain rate that sizes everything else, so it needs enough data to warm up and hold a steady window at the fastest case. That is `rate x (warm-up + window + headroom)`, which for a fast pipeline is hundreds of millions of records — clean-room run 42 ran 400,000,000 and run 43 was told to run 391,613,400. This line used to say "a few thousand records", which is out by five orders of magnitude and led two runs to budget for a smoke test and get a second full one. Budget the disk and the minutes for it, and know that **every tuning change re-creates it**. End to end:
 
 - run **every case the suite will run**, and assert cap consumption in each.
   With the default two cases that is the two cases; a third case costs one

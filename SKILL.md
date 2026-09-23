@@ -500,6 +500,34 @@ a row, so `outputsPerInput: 0.0000278` would pass. It would be a lie: change
 the data and the number changes. If the ratio is not fixed by what the job
 does, declare a command instead.
 
+### If your outputs are per window, set these six things
+
+Everything above about a windowed pipeline is scattered through this section,
+`harness/README.md` and the example's own notes, and clean-room run 44 had to
+assemble it from eight cross-references in five files before it could write
+`pipeline.json`. Here it is in one place. `harness/pipeline.example.windowed.json`
+is a working copy of all of it.
+
+| set | to | because |
+|---|---|---|
+| `topics.out` | `[]` | these are the topics the harness counts rows in and divides by a fan-out. There is no fan-out, so counting them measures nothing |
+| `topicsAlsoWritten` | every topic the job writes | with `topics.out` empty this is the only thing that looks at the output at all — the completeness drain checks these, and the disk projection sizes them |
+| `outputsPerInput` | **do not set it** | a uniform generator makes any windowed pipeline look like it has a fan-out. It would be a property of your test data, not of the job |
+| `secondVantage` | `{"mode": "command", "cmd": …}` | the second, independent reading. Declaring neither stops the run |
+| the command's output | `{"inputRecordsProcessed": N}` | how much input the pipeline's own outputs account for |
+| the dashboard's rate panels | count rows per window, not rows per second against the input | the per-input panels in §7 assume a fan-out and read flat here |
+
+**The best signal is a count the pipeline already publishes.** If every row
+carries how many inputs it aggregated, the sum of that field over the topic is
+exactly the answer: exact, monotonic, no arithmetic against the manifest, and
+indifferent to rows left behind by an earlier case. Deriving it from the latest
+window per key works but is coarser, and coarse is what breaks it — see the two
+traps above, the step size and the clocks.
+
+Two levers in §6a do not apply to a single windowed aggregation: *read the
+input once* (there is one path, so it is already read once) and *fewer subtasks
+for the same cores* (the harness cannot express it — see the lever table there).
+
 **Read throughput from the transport, not the engine.** At 100% CPU the
 engine's metric service is starved with everything else; one case
 under-reported itself by 3×. Use committed broker offsets (committed only under
@@ -878,6 +906,23 @@ load. A pipeline with one aggregation and a throttled output has neither, and
 arrives at the tuning loop with four levers rather than six — the two largest
 numbers in the table among the missing. Check which rows your pipeline can
 even use before you count how many changes you have left.
+
+**And one row the harness cannot drive at all.** *Fewer subtasks for the same
+cores* has no hook: `flinkProperties` will not take
+`taskmanager.numberOfTaskSlots`, the task manager is always started with slots
+equal to cores, `perCase` carries only memory, and forking the harness is
+forbidden. Clean-room run 44 worked down this list, reached that row, and had
+nowhere to go. Which rows the harness can express:
+
+| lever | how to drive it |
+|---|---|
+| read the input once | your job |
+| pipeline memory per subtask | `caps.tmMemoryBase`, `caps.tmMemoryPerCore` |
+| the broker's page cache | `caps.kafkaMemory`, `caps.kafkaHeap` |
+| compress the sink writes | your job |
+| even key layout | `pipeline.max-parallelism` through `flinkProperties` |
+| checkpoint interval | `checkpointMs` |
+| **fewer subtasks for the same cores** | **nothing — do not plan on it** |
 
 **The levers transfer; the percentages do not.** Every figure above was
 measured on one pipeline on one laptop. Reading the input once is worth

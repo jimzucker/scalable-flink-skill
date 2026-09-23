@@ -694,6 +694,54 @@ def check_shape_ignores_the_plan(fail):
     return "the shape comparison ignores the plan it keeps for drawing"
 
 
+def check_windowed_in_one_place(fail):
+    """A windowed pipeline's whole configuration, in one section.
+
+    Clean-room run 44 assembled it from eight cross-references in five files
+    before it could write pipeline.json, and the single most useful sentence --
+    the best signal is a count the pipeline already publishes -- lived only in
+    a JSON comment inside an example the skill tells you not to copy.
+    """
+    skill = read(ROOT, "SKILL.md")
+    wanted = {
+        "If your outputs are per window, set these six things":
+            "§5 has no one place that gathers what a windowed pipeline must set",
+        "The best signal is a count the pipeline already publishes":
+            "§5 no longer says where a windowed pipeline's second reading should come from",
+        "one row the harness cannot drive at all":
+            "§6a does not say which levers the harness can actually express",
+        "fewer subtasks for the same cores":
+            "§6a does not name the lever that has no hook",
+    }
+    for needle, why in wanted.items():
+        if needle.lower() not in skill.lower():
+            fail(why)
+
+    # the example's caps note carries arithmetic, and arithmetic drifts
+    ex = json.loads(read(HERE, "pipeline.example.windowed.json"))
+    note = ex.get("_caps", "")
+    if not note:
+        fail("pipeline.example.windowed.json has no _caps note saying what VM it needs")
+        return "the windowed example has no caps note"
+
+    def mib(v):
+        v = str(v).strip()
+        return float(v[:-1]) * 1024 if v[-1] in "gG" else float(v[:-1])
+
+    caps, cores = ex["caps"], max(ex["cases"])
+    worker = mib(caps["tmMemoryBase"]) + cores * mib(caps["tmMemoryPerCore"])
+    total = worker + mib(caps["kafkaMemory"]) + 1600.0     # the job manager, set by the harness
+    shown = f"{total:,.0f} MiB"
+    if shown not in note:
+        fail(f"the windowed example's _caps note does not say {shown}, which is what its own "
+             f"caps add up to at {cores} cores ({worker:,.0f} worker + "
+             f"{mib(caps['kafkaMemory']):,.0f} broker + 1,600 job manager)")
+    if "_project" not in ex:
+        fail("pipeline.example.windowed.json does not say to change `project` before copying it")
+    return (f"the windowed example declares the {shown} its caps need, and §5 gathers "
+            f"the windowed settings in one place")
+
+
 def check_plain_english(fail):
     """No message a person reads uses a word we have had to explain.
 
@@ -802,7 +850,8 @@ def main():
                   check_both_examples_load,
                   check_shape_ignores_the_plan,
                   check_run41_lessons,
-                  check_plain_english):
+                  check_plain_english,
+                  check_windowed_in_one_place):
         lines.append(check(problems.append))
     for p in problems:
         print(f"doccheck: {p}")

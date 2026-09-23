@@ -771,6 +771,26 @@ happened. The ones that failed are the more useful half: run 35's memory fix
 did nothing for the case it was named for, and its subtask fix moved source
 idle exactly as predicted while the throughput went to the wrong cases.
 
+**Giving the broker more memory can cost you the worker, and on a laptop it
+usually does.** The size the harness asks for is measured and right — clean-room
+run 45 followed it from 4,096m to 6,400m and the broker's limit hits went from
+1,771 to zero at every case. On the same run's 9,937 MiB virtual machine that
+left the four-core worker at **77.8% of cap against 94.6% before**, because
+3,840 of worker plus 6,400 of broker plus 1,600 of job manager is 11,840 MiB.
+A starved worker reads as a pipeline that does not scale.
+
+| arm | broker | limit hits | four-core worker | four-core rate |
+|---|---:|---:|---:|---:|
+| A | 4,096m | 1,771 | 94.6% of cap | 3,209,419/s |
+| B | 6,400m | **0** | **77.8% of cap** | 3,082,852/s |
+
+So when the advice does not fit the machine, the harness says so and names the
+three ways out, in order: **raise the virtual machine**; or **drop the largest
+case** and claim the step below it; or **keep the broker where it is, let the
+largest case come back as a ceiling, and report it as where scaling stops.**
+The third is a result, not a failure — it is the honest answer on a machine
+that cannot hold both.
+
 **A failed check stops the suite — when it is about the rig.** A cap that did not
 apply at one core will not apply at two; a busy cluster, a bad window anchor,
 disagreeing vantage points are the same at every case. A guard about one

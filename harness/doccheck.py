@@ -718,6 +718,10 @@ def check_windowed_in_one_place(fail):
             "§5 lost run 45's measurement of the checkpoint interval against the disagreement",
         "The same is true of `flinkProperties`":
             "§5 does not warn that flinkProperties is baked in when the stack comes up",
+        "can cost you the worker":
+            "§6 no longer says that raising the broker can starve the worker",
+        "77.8% of cap against 94.6% before":
+            "§6 lost run 45's two-arm measurement of the broker against the worker",
     }
     for needle, why in wanted.items():
         if needle.lower() not in skill.lower():

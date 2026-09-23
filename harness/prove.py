@@ -35,6 +35,7 @@ import re
 import shutil
 import sys
 import tempfile
+import textwrap
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -1087,6 +1088,31 @@ def cmd_selftest(live=True, topic=None):
             raise Exception(f"the self-test wrote into the live results directory: {stray}")
         raise Refusal("rig", f"chain stopped at c, d never ran, DONE says {done!r}")
     expect("all: the chain stops at the first failing step", chain, "stopped at c")
+
+    def no_result_is_not_a_pass():
+        # clean-room run 46: ten cases measured, eight thrown out, the two
+        # survivors both at four cores, stepRatios null -- and results/DONE
+        # said "PASS 58.8 min". Comparing one core count with another IS the
+        # measurement, so a run with only one size left has measured nothing.
+        table = {"stepRatios": [{"step": "1->2", "reportable": False},
+                                {"step": "2->4", "reportable": False}],
+                 "cases": {"4": {"cores": 4, "reportable": True}}}
+        runs = [{"cores": 1, "status": "CEILING"}, {"cores": 2, "status": "CEILING"},
+                {"cores": 4, "status": "OK"}, {"cores": 4, "status": "OK"}]
+        got = L.no_result_reason(table, runs)
+        if not got:
+            raise Exception("a run whose only surviving cases share a core count was called a result")
+        if got["thrownOut"] != 2 or "4 cores" not in got["usableAt"]:
+            raise Exception(f"the sentence does not describe what happened: {got}")
+        # and a run that DID compare two sizes is left alone
+        ok_table = {"stepRatios": [{"step": "2->4", "reportable": True}],
+                    "cases": {"2": {"cores": 2, "reportable": True},
+                              "4": {"cores": 4, "reportable": True}}}
+        if L.no_result_reason(ok_table, runs) is not None:
+            raise Exception("a run with a reportable step was called a no-result")
+        raise Refusal("rig", f"no scaling result: {got['sentence']}")
+    expect("a run that measured nothing does not report a pass",
+           no_result_is_not_a_pass, "no scaling result")
 
     def broker_advice_on_a_small_machine():
         # clean-room run 45: told to raise the broker to 6,400m on a 9,937 MiB
@@ -2310,6 +2336,48 @@ def cmd_report():
         os.replace(tmp, final)
     save_json("suite.json", out)
     print("wrote results/suite.txt and results/suite.md")
+    # GUARD: a run that measured nothing is not a pass.
+    #
+    # Clean-room run 46 threw out eight of its ten cases -- four for source
+    # idle, four for the broker's memory -- kept two, both at four cores, and
+    # so had nothing to compare against anything. stepRatios came out null,
+    # `short` was therefore empty, and this function returned 0. results/DONE
+    # said "PASS 58.8 min" for a run that produced no scaling result at all.
+    # That is the one failure a reader cannot catch by reading further, because
+    # DONE is the file they are told to wait on.
+    nothing = L.no_result_reason(out["table"], out["runs"])
+    if nothing:
+        out["reportVerdict"] = "no-result"
+        out["noResult"] = nothing
+        save_json("suite.json", out)
+        print("\nNO SCALING RESULT\n")
+        print(f"  {nothing['sentence']}")
+        print("  Comparing one core count with another is the whole measurement, so there is")
+        print("  nothing here to report. This is not a slow pipeline and not a fast one.\n")
+        why = {}
+        for r in out["runs"]:
+            if r.get("status") != "OK":
+                msg = (r.get("ceiling") or r.get("refusal") or "thrown out")
+                # group by the KIND of reason, not the exact text: the numbers
+                # differ every time, so grouping on the whole sentence puts
+                # every case in a group of one. And never cut at a full stop --
+                # the numbers are full of them.
+                key = re.sub(r"[\d][\d,.%]*", "N", msg)[:110]
+                why.setdefault(key, [[], msg])[0].append(f"{r['cores']}c {r.get('pass', '')}".strip())
+        if why:
+            print("  Why each was thrown out:\n")
+            for _, (who, sample) in sorted(why.items(), key=lambda kv: -len(kv[1][0])):
+                print(f"   {len(who)} case{'' if len(who) == 1 else 's'} — {', '.join(who)}")
+                for line in textwrap.wrap(sample, 86):
+                    print(f"     {line}")
+                print()
+        print("  What to do: a guard that threw out a case whose worker was at its cap is")
+        print("  worth doubting before the pipeline is. Run `prove.py ceiling` to find out")
+        print("  whether the thing a guard blamed actually moves the rate, and `prove.py")
+        print("  probe` to find out whether this machine can do the step at all. Both are")
+        print("  minutes, and neither changes the pipeline.\n")
+        return 1
+
     if short:
         t = out["table"]
         need = 2 * T["scalingFloor"]
@@ -2429,7 +2497,11 @@ def cmd_report():
         print("  that did not, so the next is measured against your best pipeline and not")
         print("  your worst. Stop when the target is met, when no untried row matches the")
         print("  symptom, or after four changes.")
+        out["reportVerdict"] = "claim-not-met"
+        save_json("suite.json", out)
         return 1
+    out["reportVerdict"] = "met"
+    save_json("suite.json", out)
     return 0
 
 
@@ -2520,8 +2592,21 @@ def cmd_all(steps=None, results=None):
         if rc:
             # What a person reads when the chain is over. "FAIL at report"
             # said nothing about what happened; the run it described had a
-            # clean table and a pipeline that missed its target.
-            verdict = ("STOPPED at report: the table is good, the pipeline did not meet the target"
+            # clean table and a pipeline that missed its target. And a run
+            # that measured nothing is a third thing again -- clean-room run
+            # 46 kept two cases out of ten, both at the same core count, and
+            # this file said PASS.
+            why = None
+            if name == "report":
+                try:
+                    why = (load_json("suite.json") or {}).get("reportVerdict")
+                except Exception:
+                    why = None
+            verdict = ({"no-result": "STOPPED at report: no scaling result — too many cases were "
+                                     "thrown out to compare one core count with another",
+                        "claim-not-met": "STOPPED at report: the table is good, the pipeline did "
+                                         "not meet the target"}.get(why,
+                        "STOPPED at report: the table could not be reported")
                        if name == "report" else f"STOPPED at {name}")
             break
     out["verdict"] = verdict

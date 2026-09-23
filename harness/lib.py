@@ -2176,6 +2176,25 @@ def broker_cache_floor_mib():
     return min(best) if best else None
 
 
+def no_result_reason(table, runs):
+    """Pure. Why this run has no scaling result, or None when it has one.
+
+    Comparing one core count with another IS the measurement, so a run whose
+    surviving cases are all at the same size has measured nothing -- however
+    many passes it ran and however clean they were. Clean-room run 46 kept two
+    of ten cases, both at four cores, and results/DONE said "PASS 58.8 min".
+    """
+    if [r for r in (table.get("stepRatios") or []) if r.get("reportable")]:
+        return None
+    kept = [cs for cs in (table.get("cases") or {}).values() if cs.get("reportable")]
+    thrown = sum(1 for r in runs if r.get("status") != "OK")
+    where = (", ".join(f"{cs['cores']} core{'' if cs['cores'] == 1 else 's'}" for cs in kept)
+             or "no case at all")
+    return {"measured": len(runs), "thrownOut": thrown, "usableAt": where,
+            "sentence": (f"{len(runs)} cases were measured and {thrown} were thrown out, leaving "
+                         f"usable readings at {where}.")}
+
+
 def size_broker_memory(limit_bytes, hits):
     """What Kafka's memory should be, given that it ran out `hits` times.
 

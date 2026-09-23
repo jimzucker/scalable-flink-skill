@@ -2191,6 +2191,24 @@ def cmd_all(steps=None, results=None):
     done = os.path.join(results, "DONE")
     if os.path.exists(done):
         os.remove(done)
+    # GUARD: sweep before the chain starts, not only at tinyproof and down.
+    # A chain that fails restarts from the top, and the attempt before it can
+    # still be running: clean-room run 43 restarted three times and left a
+    # `prove.py tinyproof` (parent already dead) and a generator writing
+    # 400,000,000 records at the broker the next attempt was measuring. Load
+    # average sat at 9.24 on eight cores with nothing supposed to be running,
+    # its warm-up read 957,976 then 216,896 then 12,697,565 records an interval
+    # and never settled, and garbage collection took 14.1% of a case. Every one
+    # of those was read as the machine being too small for the pipeline. The
+    # reaper already knew how to find them -- it was only ever asked at the end.
+    if results == c.results:
+        swept = L.reap_host_watchers(ignore_children=True)
+        if swept:
+            log(f"  swept {len(swept)} process(es) left over from an earlier attempt: "
+                + ", ".join(f"{pid} {cl[:70]}" for pid, cl in swept))
+            log("  a previous chain was still running. Its numbers and this one's would have "
+                "shared the machine, so they are gone before anything is measured.")
+
     out = {"build": build_hash() if os.path.exists(c.jar) else None, "steps": []}
     quick0 = L.QUICK   # GUARD: a phase that leaves the flag different from how it
                        # found it mis-stamps every table after it (2026-09-05: the

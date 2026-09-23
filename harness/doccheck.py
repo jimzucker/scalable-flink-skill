@@ -145,6 +145,27 @@ def check_order_is_asserted(fail):
     return f"the verifier must assert {len(needed)} things about order"
 
 
+def check_chain_sweeps_on_start(fail):
+    """A restarted chain must not share the machine with the attempt before it.
+
+    Clean-room run 43 restarted three times and left the previous attempt's
+    generator writing 400,000,000 records at the broker the next attempt was
+    measuring. The reaper could already find those processes; cmd_all simply
+    never asked it to, so the sweep only happened at tinyproof and at down.
+    """
+    prove_src = read(HERE, "prove.py")
+    i = prove_src.find("def cmd_all(")
+    if i < 0:
+        fail("cmd_all is gone from prove.py")
+        return "cmd_all not found"
+    body = prove_src[i:i + 4000]
+    if "reap_host_watchers" not in body:
+        fail("cmd_all no longer sweeps leftover processes before the chain starts, so a "
+             "restarted chain can share the machine with the attempt before it -- which is "
+             "how run 43 measured a warm-up that would not settle")
+    return "the chain sweeps leftover processes before it starts"
+
+
 def check_run42_lessons(fail):
     """The rest of what clean-room run 42 found stays fixed.
 
@@ -702,6 +723,7 @@ def main():
                   check_windowed_example_backlogs,
                   check_broker_ceiling_observation,
                   check_run42_lessons,
+                  check_chain_sweeps_on_start,
                   check_example_broker_memory, check_example_comments,
                   check_key_layout, check_tinyproof_reruns,
                   check_broker_cpu_hook, check_target_not_needed,

@@ -606,7 +606,7 @@ for it.
 | observed cardinality ≠ predicted | distinct keys vs the interview's answer |
 | completeness has not passed for this build | §4, with no tolerances |
 | host free disk is below the next case's write | checked **before** the case — a full disk takes the shell down with it |
-| a monitor outlived the thing it watched | at teardown, no child the run started survives, and no host process watching `results/`, naming the project, or running `prove.py`-shaped loops from inside it either |
+| a monitor outlived the thing it watched | at teardown, no child the run started survives, and no host process watching `results/`, naming the project, or running `prove.py`-shaped loops from inside it either. **Swept at the start of a chain as well as at the end**: a chain that fails restarts from the top, and the attempt before it can still be running. Clean-room run 43 restarted three times and left a generator writing 400,000,000 records at the broker the next attempt was measuring — load average 9.24 on eight cores with nothing supposed to be running, a warm-up reading 957,976 then 216,896 then 12,697,565 records an interval, and 14.1% of a case spent on garbage collection. All of it was read as the machine being too small |
 
 **When the claim is not met, show the whole picture and ask before iterating.**
 The report prints every case and every step together, then the steps to fix in

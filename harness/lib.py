@@ -568,6 +568,38 @@ def topic_exists(topic):
     return topic in (r.stdout or "").split()
 
 
+def measured_bytes_per_record():
+    """How many bytes one record of input actually takes on the broker, or None.
+
+    Every topic the harness owns that already holds records, summed: bytes on
+    disk divided by records. Returns None on a cold broker, where there is
+    nothing to measure and the caller has to assume.
+
+    This exists because the disk check assumed 120 bytes for every run whatever
+    the record was. Clean-room run 43 measured 30 bytes -- 30,000,000 records in
+    0.90 GB, compressed on the way in -- so the check asked for four times the
+    space the run needed, stopped a configuration that would have fitted three
+    times over, and the run shrank its data to get under a limit that did not
+    exist.
+    """
+    c = cfg()
+    best = None
+    for t in (c.suite_topic_in, c.topic_in):
+        if not t or not topic_exists(t):
+            continue
+        try:
+            recs, _ = log_end(t)
+            if not recs:
+                continue
+            b = topic_bytes([t])
+            if b:
+                per = b / recs
+                best = per if best is None else min(best, per)
+        except Exception:
+            continue
+    return best
+
+
 def topic_retention_bytes(topic):
     """retention.bytes as the broker has it, or None.
 
@@ -2572,10 +2604,16 @@ def check_case(rec, cores, is_baseline):
                               f"and the limit is {T['vantageTol']:.0%}. One of them is wrong, so neither can "
                               f"be used." + why)
     if rec["backlogRemaining"] < rec["recordsPerSec"] * c.ckpt_s:
-        raise Refusal("case", f"the backlog nearly ran out: {rec['backlogRemaining']:,} records left at the "
-                              f"end of the window, which is {rec['headroomS']:.1f}s of work at this rate. "
-                              f"It needs at least one checkpoint interval left over, or the end of the "
-                              f"window was measuring a pipeline that was running dry.")
+        raise Refusal("case", f"the data ran out before the measurement finished: "
+                              f"{rec['backlogRemaining']:,} records left at the end of the window, "
+                              f"which is only {rec['headroomS']:.1f}s of work at this rate. The window "
+                              f"needs at least one checkpoint interval of data left over, or its last "
+                              f"moments measured a pipeline with nothing to read. Adding more data is "
+                              f"the fix ONLY if the warm-up settled first time. If the warm-up failed "
+                              f"and was retried, the retry read the data twice and the size was never "
+                              f"the problem -- clean-room run 43 raised its backlog from 750 million "
+                              f"records to 1.25 billion chasing this message, when what was actually "
+                              f"wrong was a rate that would not settle.")
     # Two different problems, so two different messages: the old one reported a
     # sample count even when the real fault was that no reading came back at all.
     if rec.get("sourceIdle") is None:

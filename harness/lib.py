@@ -2533,6 +2533,7 @@ def warmup_verdict(rates, elapsed_s):
 def wait_flat(deadline_s):
     """Warm up to a flat trend across N commit intervals, not a round number."""
     boundaries, last, detail = [], None, {}
+    ramp = {"flatAtS": None, "flatAtRates": None}
     t0 = time.time()
     k = T["warmupIntervals"]
     left = None  # records still unread, as of the last tick seen
@@ -2550,8 +2551,28 @@ def wait_flat(deadline_s):
         if len(boundaries) >= k + 1:
             b = boundaries[-(k + 1):]
             rates = [(b[i + 1][1] - b[i][1]) / ((b[i + 1][0] - b[i][0]) / 1000.0) for i in range(k)]
-            ok, detail = warmup_verdict(rates, time.time() - t0)
+            elapsed = time.time() - t0
+            ok, detail = warmup_verdict(rates, elapsed)
+            # When the trend first went flat, as opposed to when the floor let
+            # the case start. warmupMinS is 90 s, measured on run 10 where the
+            # ramp took 46-136 s -- on pipelines an order of magnitude slower
+            # than the ones run now. The floor multiplied by the rate is what
+            # sizes every backlog, so a fast pipeline pays for it in disk: at
+            # 1.7 million records a second, 90 s of warm-up is 157,000,000
+            # records before anything is measured. Whether a fast pipeline still
+            # needs 90 s to settle has never been measured, because the results
+            # kept only these four summary rates and threw the ramp away. Now it
+            # keeps both figures, so the next few runs answer it from the record
+            # instead of from an argument.
+            if ramp["flatAtS"] is None and warmup_verdict(rates, T["warmupMinS"])[0]:
+                ramp["flatAtS"] = round(elapsed, 1)
+                ramp["flatAtRates"] = [round(r, 1) for r in rates]
             if ok:
+                detail["rampFlatAtS"] = ramp["flatAtS"]
+                detail["rampFloorS"] = T["warmupMinS"]
+                detail["rampWaitedExtraS"] = (round(elapsed - ramp["flatAtS"], 1)
+                                              if ramp["flatAtS"] is not None else None)
+                detail["rampFlatAtRates"] = ramp["flatAtRates"]
                 return detail
         time.sleep(0.5)
     # A backlog running out looks exactly like a rate that will not settle,

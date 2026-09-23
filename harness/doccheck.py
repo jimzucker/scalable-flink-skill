@@ -12,6 +12,9 @@ Run it directly, or as part of CI.
 """
 
 import json
+import ast
+import io
+import tokenize
 import os
 import re
 import shutil
@@ -691,6 +694,56 @@ def check_shape_ignores_the_plan(fail):
     return "the shape comparison ignores the plan it keeps for drawing"
 
 
+def check_plain_english(fail):
+    """No message a person reads uses a word we have had to explain.
+
+    The user asked for this three times -- 2026-09-20, 2026-09-22 and
+    2026-09-23, the last time about single words in a status table. A prose
+    rule would not have held: the first attempt swapped "refuses" for
+    "failed", and "FAIL at report" was the exact line that drew the complaint
+    the third time. So the rule is a check.
+
+    Only string literals are read. Identifiers, comments and docstrings belong
+    to whoever works on the harness, and `class Refusal` stays.
+    """
+    banned = {"refus": "say stopped the run, or threw the case out",
+              "fail at ": "say STOPPED at <step>, and why in the same line",
+              "failed at ": "say stopped at <step>, and why in the same line",
+              "ran out of space": "say there is not enough disk space"}
+    # Keys the harness writes into its JSON for a machine to read back, and the
+    # recorded expectations that go with them. Not prose, not read by a person,
+    # and renaming them would break every recorded run.
+    allowed = {"refusal", "refusalScope", "refusals", "refuse", "accept"}
+    triples = ('"' * 3, "'" * 3)
+    bad = []
+    for name in ("lib.py", "prove.py"):
+        src = read(HERE, name)
+        for tok in tokenize.generate_tokens(io.StringIO(src).readline):
+            if tok.type != tokenize.STRING or tok.string[:3] in triples:
+                continue
+            try:
+                text = ast.literal_eval(tok.string)
+            except Exception:
+                continue
+            if not isinstance(text, str) or text.strip() in allowed:
+                continue
+            low = text.lower()
+            for word, why in banned.items():
+                if word in low:
+                    bad.append(f"{name}:{tok.start[0]} {why} -- {text[:70]!r}")
+    for b in bad:
+        fail(b)
+    skill = read(ROOT, "SKILL.md")
+    if "Every message a person reads is plain English" not in skill:
+        fail("SKILL.md no longer states the plain-English rule the harness enforces")
+    for needed in ("stopped the run, or threw the case out", "not enough disk space",
+                   "Say which way a near miss went"):
+        if needed not in skill:
+            fail(f"SKILL.md's plain-English table lost: {needed!r}")
+    return (f"{len(bad)} message(s) use a word we have had to explain" if bad
+            else "every message a person reads is plain English, and the skill says so")
+
+
 def check_run41_lessons(fail):
     """The findings clean-room run 41 paid for, held in the prose that carries
     them. Each cost that run real time and each is a sentence someone will
@@ -748,7 +801,8 @@ def main():
                   check_windowed_pipelines,
                   check_both_examples_load,
                   check_shape_ignores_the_plan,
-                  check_run41_lessons):
+                  check_run41_lessons,
+                  check_plain_english):
         lines.append(check(problems.append))
     for p in problems:
         print(f"doccheck: {p}")

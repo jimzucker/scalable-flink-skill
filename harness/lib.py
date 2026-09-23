@@ -2901,7 +2901,7 @@ def run_case(cores, pass_id, run_id, shape_ref, is_baseline, manifest,
         rec["ceiling"] = e.msg
         raise CaseRefused(rec, Refusal("ceiling", e.msg))
     except Refusal as e:
-        rec["status"] = "REFUSED"
+        rec["status"] = "DROPPED"
         rec["refusalScope"] = e.scope
         rec["refusal"] = e.msg
         raise CaseRefused(rec, e)
@@ -3301,5 +3301,5 @@ def render_markdown(out):
     if graph:
         L += ["", "### The job graph that ran", "",
               "Read off the running plan, not drawn. Every case ran this shape — a row whose "
-              "shape differed would have been refused.", "", "```mermaid", graph, "```"]
+              "shape differed would have been thrown out.", "", "```mermaid", graph, "```"]
     return "\n".join(L) + "\n"

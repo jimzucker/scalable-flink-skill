@@ -93,7 +93,7 @@ A reader can then see what was assumed rather than agreed.
    the harness. `prices` and the two market-value topics are the pipeline's
    own — see question 2. **Name the two market-value topics in
    `topicsAlsoWritten`**: a picture cannot be checked, but a list of topics
-   that must receive records can, and the completeness drain refuses any that
+   that must receive records can, and the completeness drain stops the run on any that
    stayed empty. That is what turns this diagram from a drawing into
    something the run is held to.
 
@@ -479,7 +479,7 @@ The harness runs it at each end of the window and compares the difference with
 the committed offsets. This is delegated for the same reason correctness is
 delegated to `verifier.cmd`: the harness cannot read progress out of an
 arbitrary output, and whoever wrote the pipeline can. A pipeline that declares
-neither is refused rather than measured once and called measured.
+neither stops the run rather than being measured once and called measured.
 
 **Two things make a delegated second reading disagree, and neither shows in
 the numbers.** *It moves in steps.* A windowed pipeline's progress jumps by a
@@ -590,8 +590,8 @@ for it.
 | the component under test is not the constraint | ≥95% of cap at every case, baseline included; external-boundary back-pressure not material; the broker never hits its own memory limit inside a window (a starved page cache depresses the rate while the cores still read 96% of cap). **Measured once where it did not:** run 42's broker hit its limit 2,771-2,840 times a window, the guard classified the two fastest four-core passes as ceilings on a tenth of a point of the 99% cap exemption, and kept the slowest -- leaving one usable reading where two are needed, so the step was voided. Giving the broker its page cache removed every hit and moved the four-core mean 0.5%, and the two discarded readings sat inside the band the case then produced. The guard found the right thing to change; what it cost was a 40-minute suite's headline number. One run is not a threshold, so nothing moves on it -- it is recorded so the next run that sees it is not the first. A case that misses is a **ceiling**: measured, reported with its rate as where scaling stops, and excluded from the ratios — never deleted |
 | the input divides evenly across subtasks | partition count divisible by every parallelism under test (8 partitions serves 1, 2, 4; 6 would leave the 4-core case reading 2/2/1/1 and never reaching its cap) |
 | an output the business case asks for was never written | after the completeness drain, every topic named in `topicsAlsoWritten` has records. These are the pipeline's own outputs — the throttled ones, outside `topics.out` — and nothing else looks at them. Two clean-room runs in a row built **one** market value where the default asks for two, and passed every other guard |
-| the keys divide evenly across subtasks | the engine's own key-group assignment says where every key in `keySets` would land at every case. A subtask with **no keys** always refuses; an uneven one refuses when a `pipeline.max-parallelism` exists that would even it out, and is reported in the row when none does |
-| memory is not the constraint | **every case gives its subtasks the same memory**, as a base plus a per-core share. Passing nothing does not leave memory to the engine: the image ships a flat figure — `flink:1.20.1` sets 1728m — so every case runs on the same total, which is the configuration this rule exists to refuse. Clean-room run 36 measured 2→4 at 1.510 on the image default against 1.743 with memory per subtask, and the GC ceiling did **not** catch it: GC was at its lowest, 1.40%, on the case losing the most. A case whose GC exceeds 5.5% of its capacity is still a ceiling, not a result |
+| the keys divide evenly across subtasks | the engine's own key-group assignment says where every key in `keySets` would land at every case. A subtask with **no keys** always stops the run; an uneven one stops it when a `pipeline.max-parallelism` exists that would even it out, and is reported in the row when none does |
+| memory is not the constraint | **every case gives its subtasks the same memory**, as a base plus a per-core share. Passing nothing does not leave memory to the engine: the image ships a flat figure — `flink:1.20.1` sets 1728m — so every case runs on the same total, which is the configuration this rule exists to catch. Clean-room run 36 measured 2→4 at 1.510 on the image default against 1.743 with memory per subtask, and the GC ceiling did **not** catch it: GC was at its lowest, 1.40%, on the case losing the most. A case whose GC exceeds 5.5% of its capacity is still a ceiling, not a result |
 | the claim itself | each step returns **1.90× or better** on a doubling, or the chain fails with the per-core, idle, GC and cap figures for both cases — a valid table that does not scale is a result about the pipeline, not a table to publish |
 | a failed case still owns the cluster | job torn down on **every** exit path |
 | no job is actually running | engine reports RUNNING with the expected parallelism |
@@ -696,6 +696,29 @@ case's *data* — spread, headroom at close — marks that case and moves on. Re
 plainly transient; if it fails again, say *"stopping here: the remaining
 cases would fail the same way"* and exit. "FAILED — continuing" produces a
 table with holes that look like data.
+
+**Every message a person reads is plain English.** A check that stops a run is
+read by someone who has not read the harness, often hours later and often
+tired. The words below were all in the harness's own output and all had to be
+explained to a reader afterwards:
+
+| never write | write |
+|---|---|
+| refused, a refusal | stopped the run, or threw the case out — then what it found |
+| FAIL at *step* | STOPPED at *step*, and why in the same line |
+| ran out of space | not enough disk space |
+
+Two more rules that cost a reader the same way:
+
+- **Say which way a near miss went.** *"Came within 10 GB of refusing the run"*
+  reads as running out of space. It meant the opposite: the check nearly
+  stopped a run that would have fitted six times over.
+- **Say what happened, give the numbers, say what to do** — short sentences,
+  no stacked clauses.
+
+Internal names in the code are not covered: `class Refusal` is fine, because
+nobody reads it. `harness/doccheck.py` enforces the table above against every
+message string, so this rule cannot quietly come undone.
 
 **Assert the effect, never the exit code.** `docker update --cpus 0` reports
 success and does nothing; a metrics reload returned 200 over a half-written
@@ -832,7 +855,7 @@ every case the suite will run, back to back on one build, and takes minutes
 rather than most of an hour. **It can be re-run after the fill** — the disk
 projection credits the backlog already on the broker, so the suite's input
 topic stays where it is between levers. Before that credit existed the
-projection counted the same backlog as used *and* as still to write, refused
+projection counted the same backlog as used *and* as still to write, stopped
 a suite that fitted, and made every lever cost a delete and a re-fill, about
 twelve minutes of broker I/O each (clean-room run 36). Confirm the winner with
 the suite once, at the end.
@@ -871,7 +894,7 @@ test changes the number being measured. Whatever you add is recorded in the
 results header, so a reader knows what else was on the machine. That is the only
 sanctioned way — the harness is still not to be forked.
 
-**Five of the seven panels need engine metrics, and those need a reporter**: set one through `flinkProperties` in `pipeline.json`, which reaches the job manager and every task manager. On `flink:1.20.x` that is all you need: the reporters ship **already installed** as plugins in `/opt/flink/plugins/metrics-*`, so the factory class resolves with no further help. **Do not set `ENABLE_BUILT_IN_PLUGINS` on these images.** That variable tells the entrypoint to link a jar out of `/opt/flink/opt`, which on `flink:1.20.1-scala_2.12-java17` contains no reporter at all; the entrypoint prints `Plugin … does not exist. Exiting.` and the container dies before the job manager starts. Verified by listing both directories in the image. This paragraph previously said the opposite and gave the variable as the fix — clean-room run 43 followed it verbatim and lost its first `prove.py up` to it, which is worse than the forty minutes run 42 lost having no guidance at all. `flinkEnv` remains for images that do keep reporters in `/opt/flink/opt` (older tags and the slim variants) and for any other environment the engine needs. Clean-room run 32 had no such hook, could not fork the harness, and spent about fifty minutes rebuilding the numbers from outside the engine — Kafka offsets, a tail of each sink, the REST API and the docker socket. The settings the measurement depends on are refused rather than silently overridden.
+**Five of the seven panels need engine metrics, and those need a reporter**: set one through `flinkProperties` in `pipeline.json`, which reaches the job manager and every task manager. On `flink:1.20.x` that is all you need: the reporters ship **already installed** as plugins in `/opt/flink/plugins/metrics-*`, so the factory class resolves with no further help. **Do not set `ENABLE_BUILT_IN_PLUGINS` on these images.** That variable tells the entrypoint to link a jar out of `/opt/flink/opt`, which on `flink:1.20.1-scala_2.12-java17` contains no reporter at all; the entrypoint prints `Plugin … does not exist. Exiting.` and the container dies before the job manager starts. Verified by listing both directories in the image. This paragraph previously said the opposite and gave the variable as the fix — clean-room run 43 followed it verbatim and lost its first `prove.py up` to it, which is worse than the forty minutes run 42 lost having no guidance at all. `flinkEnv` remains for images that do keep reporters in `/opt/flink/opt` (older tags and the slim variants) and for any other environment the engine needs. Clean-room run 32 had no such hook, could not fork the harness, and spent about fifty minutes rebuilding the numbers from outside the engine — Kafka offsets, a tail of each sink, the REST API and the docker socket. The settings the measurement depends on stop the run rather than being silently overridden.
 
 **The CPU-per-component panel needs the broker, and no reporter can give it to
 you.** `flinkProperties` reaches the job manager and the workers; the panel's

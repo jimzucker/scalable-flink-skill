@@ -1088,6 +1088,65 @@ def cmd_selftest(live=True, topic=None):
         raise Refusal("rig", f"chain stopped at c, d never ran, DONE says {done!r}")
     expect("all: the chain stops at the first failing step", chain, "stopped at c")
 
+    def vantage_direction(sink, needle):
+        # The message used to offer two causes and let the run pick. Run 45 was
+        # thrown out five times out of five with the outputs behind the source,
+        # while the cause it acted on predicts them ahead.
+        def go():
+            cf = L.cfg()
+            was = cf.vantage_mode
+            cf.vantage_mode = "command"
+            try:
+                r = dict(good)
+                r.update(vantageSinkRecords=sink, vantageDisagreement=0.09)
+                L.check_case(r, 4, False)
+            finally:
+                cf.vantage_mode = was
+        return go
+    expect("outputs behind the source point at checkpoint phase",
+           vantage_direction(9_000_000.0, None), "BEHIND the source, which points at checkpoint phase")
+    expect("outputs ahead of the source point at the step size",
+           vantage_direction(11_000_000.0, None), "AHEAD of the source, which points at the step size")
+
+    def restarting_job_says_so():
+        # clean-room run 45: fifteen restarts on OutOfMemoryError, reported as
+        # "the rate never settled down ... Last readings were [], drift None".
+        real = L.job_health
+        try:
+            L.job_health = lambda jid: {"state": "RUNNING", "restored": 15,
+                                        "cause": "Caused by: java.lang.OutOfMemoryError: Direct buffer memory"}
+            why = L.job_is_failing("jid", 0)
+        finally:
+            L.job_health = real
+        if not why:
+            raise Exception("a job that restarted 15 times was called healthy")
+        raise Refusal("rig", why)
+    expect("a job that is restarting is not called an unsteady rate",
+           restarting_job_says_so, "restarted 15 times")
+
+    def dead_job_says_so():
+        real = L.job_health
+        try:
+            L.job_health = lambda jid: {"state": "FAILED", "restored": 0,
+                                        "cause": "Caused by: java.lang.OutOfMemoryError: Direct buffer memory"}
+            why = L.job_is_failing("jid", 0)
+        finally:
+            L.job_health = real
+        raise Refusal("rig", why or "no message")
+    expect("a failed job is named as failed", dead_job_says_so, "the job is failed, not running")
+
+    def healthy_job_is_left_alone():
+        real = L.job_health
+        try:
+            L.job_health = lambda jid: {"state": "RUNNING", "restored": 2, "cause": None}
+            why = L.job_is_failing("jid", 2)      # same count it started with
+        finally:
+            L.job_health = real
+        if why:
+            raise Exception(f"a healthy job was called failing: {why}")
+    expect("a running job that has not restarted is left alone (must not fire)",
+           healthy_job_is_left_alone, "", should_fire=False)
+
     def ceiling_on_top_case():
         # clean-room run 44: the 4-core case hit the broker's memory limit, was
         # kept as a ceiling, and the tiny proof then stopped with KeyError: 4.
@@ -1290,9 +1349,21 @@ def cmd_preflight():
             return f"FAIL: no retention.bytes on {missing}, which nothing ever drains"
         checked = list(c.topics_out) + also
         if not checked:
+            # Not the same as "there are none". A windowed pipeline declares
+            # every one of its outputs in topicsAlsoWritten and none of them
+            # exists until the job has run once, so this row could only ever
+            # pass vacuously on a first run -- on exactly the shape it exists
+            # to protect. Clean-room run 45 created its topic by hand to make
+            # the row mean something.
+            declared = list(c.topics_also)
+            if declared:
+                return ("nothing to check yet: " + ", ".join(declared)
+                        + " will be written and never drained, but the job has not run yet so "
+                          "they do not exist. Checked again after the completeness drain.")
             return "no topic is written but never drained"
-        return (f"retention.bytes={T['sinkRetentionBytes']} set and read back on {c.topics_out}"
-                + (f", declared retention read back on {also}" if also else "")
+        names = ", ".join(c.topics_out) or "none"
+        return (f"retention.bytes={T['sinkRetentionBytes']} set and read back on {names}"
+                + (f"; retention declared by the run and read back on {', '.join(also)}" if also else "")
                 + " (a periodic sweep, not a bound)")
 
     def determinism():
@@ -1367,11 +1438,69 @@ def cmd_preflight():
         except Exception:
             return "load average not available on this host"
         n = os.cpu_count() or 1
-        top = L.sh("ps -Ao %cpu,comm -r | head -4 | tail -3", check=False).stdout.strip().splitlines()
-        busiest = "; ".join(" ".join(x.split()[:2]) for x in top) if top else ""
-        verdict = "quiet" if one < n * 0.5 else ("busy" if one < n else "OVERSUBSCRIBED")
-        return (f"{verdict}: load {one:.2f} / {five:.2f} / {fifteen:.2f} on {n} cores"
-                + (f" — busiest now: {busiest}" if busiest else ""))
+        # Two numbers, because the load average alone cannot tell a busy host
+        # from a working one. Clean-room run 45 was told "OVERSUBSCRIBED: load
+        # 11.31 ... busiest now: com.apple.Virtualization.VirtualMachine 298%"
+        # on a host measured at 1.09 cores: the virtual machine at 298% was the
+        # run's own Kafka and job manager, and the load average was the probe
+        # that had just finished. So: exclude the Docker VM and this harness's
+        # own processes, and sum what is left.
+        ours = ("virtualmachine", "docker", "com.docker", "qemu", "java", "python3", "prove.py")
+        rows = L.sh("ps -Ao %cpu,comm -r | tail -n +2", check=False).stdout.strip().splitlines()
+        other, top = 0.0, []
+        for line in rows:
+            parts = line.split(None, 1)
+            if len(parts) < 2:
+                continue
+            try:
+                pct = float(parts[0])
+            except ValueError:
+                continue
+            name = parts[1].strip()
+            if any(o in name.lower() for o in ours):
+                continue
+            other += pct
+            if pct >= 5.0 and len(top) < 3:
+                top.append(f"{name.split('/')[-1]} {pct:.0f}%")
+        cores_other = other / 100.0
+        verdict = ("quiet" if cores_other < n * 0.25
+                   else ("busy" if cores_other < n * 0.5 else "OVERSUBSCRIBED"))
+        return (f"{verdict}: {cores_other:.2f} of {n} cores are being used by something that is not "
+                f"this run (load average {one:.2f} / {five:.2f} / {fifteen:.2f}, which also counts "
+                f"this run's own containers)"
+                + (f" — busiest: {'; '.join(top)}" if top else ""))
+
+    def host_memory():
+        """The Docker VM against the machine it runs on. Reported, not enforced.
+
+        Preflight checks the containers against the VM and nothing checked the
+        VM against the machine. Clean-room run 45 wedged filling a 400,000,000
+        record topic because macOS ran out of memory, not the VM: 3,044 MB of
+        4,096 MB of swap used, 62 MB of free pages, and the generator's JVM
+        swapped down to a 27 MB resident set and stopped answering. The
+        generator is a host process the harness launches itself, so the memory
+        the VM does not take has to hold it.
+
+        Reported rather than enforced because one run is one data point, and
+        what is left over has to cover a browser, an editor and whatever else
+        the owner is doing -- which is not a number this project has measured.
+        """
+        try:
+            phys = int(L.sh("sysctl -n hw.memsize", check=False).stdout.strip()) / 1048576.0
+        except Exception:
+            return "host memory not readable on this platform"
+        info = L.sh("docker info --format '{{.MemTotal}}'", check=False).stdout.strip()
+        vm = (int(info) / 1048576.0) if info.isdigit() else 0.0
+        if not (phys and vm):
+            return "could not read both the machine's memory and the VM's"
+        left = phys - vm
+        return (f"the machine has {phys/1024:.1f} GB and the Docker VM takes {vm/1024:.1f} GB, "
+                f"leaving {left/1024:.1f} GB for macOS, this harness and the generator, which runs "
+                f"on the host. Run 45 swapped 3 GB and stalled its generator with {left/1024:.1f} GB "
+                f"left over, so watch the fill if this figure is near that."
+                if left < 7168 else
+                f"the machine has {phys/1024:.1f} GB and the Docker VM takes {vm/1024:.1f} GB, "
+                f"leaving {left/1024:.1f} GB for the host and the generator")
 
     def memory_budget():
         """Worker at its largest case, broker and job manager must fit the VM with
@@ -1385,7 +1514,10 @@ def cmd_preflight():
         worker = (L._mib(L.mem_for(c.tm_mem_per_core, top, c.tm_mem_base)) if c.tm_mem_per_core
                   else L._mib(c.tm_mem)) if capped else 0.0
         broker = L._mib(c.kafka_mem)
-        jm = 1024.0
+        # what the compose file actually gives it: jobmanager.memory.process.size
+        # is 1600m, and clean-room run 45 found this line budgeting 1024m while
+        # the container it describes gets more than that.
+        jm = 1600.0
         need = worker + broker + jm
         # Reported, not enforced. A rule refusing need > VM - 1 GB was added on
         # 2026-09-07 and removed the same day: runs 20 and 21 both passed with a
@@ -1555,10 +1687,16 @@ def cmd_preflight():
             steps = h["ofLinear"].get(mode, {})
             parts.append(mode + " " + ", ".join(f"{k} {v:.0%}" for k, v in steps.items()))
         return "; ".join(parts)
+    # Before the probe, not after it. host_ceiling runs Spin at 1, 2 and 4 cores
+    # in two arms, and a one-minute load average taken straight afterwards is
+    # mostly the probe: clean-room run 45 was told OVERSUBSCRIBED: load 11.31 on
+    # a host its brief had measured at 1.09 cores, and watched the average fall
+    # from 10.52 to 7.15 in 45 seconds with nothing running.
+    check("nothing else is using the cores (reported)", quiet_machine)
     check("what this host's own cores do", host_ceiling)
     check("backlog covers warm-up, window and headroom", backlog_sizing_hint)
     check("the interview and the plan were written down", interview_and_plan)
-    check("nothing else is using the cores (reported)", quiet_machine)
+    check("the Docker VM against the machine's memory (reported)", host_memory)
     check("pipeline, broker and job manager against the VM (reported)", memory_budget)
     check("group / txn-id prefix scoped per run", scoping)
     check("back-pressure counters exist on the endpoint read", bp_endpoint)
@@ -1815,6 +1953,7 @@ def cmd_completeness():
 
     def drain(group, kill_at=None):
         jid, killed, killed_at = None, False, None
+        restored0, checked_at = None, time.time()
         try:
             # the run's own declared outputs are cleared too: the two arms are
             # asserted differently and their rows must not be mixed
@@ -1825,7 +1964,8 @@ def cmd_completeness():
             L.start_sampler(group)
             jid = L.submit_job(cores, group)
             L.wait_running(jid, cores)
-            t0 = time.time()
+            restored0 = L.job_health(jid)["restored"]
+            t0 = checked_at = time.time()
             while True:
                 ticks = L.sampler_tail(4)
                 cm = max([t.get("committed", -1) for t in ticks] or [-1])
@@ -1855,6 +1995,18 @@ def cmd_completeness():
                             "shape": L.graph_shape(jid)}
                 if time.time() - t0 > 1800:
                     raise Refusal("rig", f"it did not process all of the input: {cm:,} of {c.small:,} records")
+                # Ask the engine how the job is. This loop watched the offset
+                # and nothing else, so clean-room run 45 sat here for 11 silent
+                # minutes against a job that could not run, and would have sat
+                # for 30. The kill arm restarts the job on purpose, so the
+                # baseline moves with it.
+                if time.time() - checked_at > 10:
+                    checked_at = time.time()
+                    if killed:
+                        restored0 = L.job_health(jid)["restored"]
+                    why = L.job_is_failing(jid, restored0)
+                    if why:
+                        raise Refusal("rig", f"the drain stopped after {time.time()-t0:.0f}s: {why}")
                 time.sleep(0.5)
         finally:
             try:

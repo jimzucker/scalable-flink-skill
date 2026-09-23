@@ -494,6 +494,32 @@ where the source was at the **last checkpoint**; the outputs are where the
 pipeline is **now**. If the rate is not flat across the window they differ by
 the change in that lead — measured on one rig at 2 to 3 seconds of drain.
 
+**When the two counts disagree, the sign says which cause it is.** The
+committed offset moves a whole checkpoint at a time; a delegated count moves
+continuously. So:
+
+| the outputs are | the cause | the fix |
+|---|---|---|
+| **behind** the source | checkpoint phase — the offset trails by up to one interval | shorten `checkpointMs`, or lengthen the window, until `checkpointMs ÷ window` is well under the tolerance |
+| **ahead** of the source | the step size — progress jumps by a whole window | more windows per measurement, which is a change to the data or the job |
+
+Measured, one rig, one build, one variable — clean-room run 45 halved its
+checkpoint interval from 10 s to 5 s and nothing else:
+
+| cores | disagreement at 10 s | at 5 s |
+|---|---:|---:|
+| 1 | 0.35% | 1.72% |
+| 2 | 1.19% | 0.93% |
+| 4 | **10.5%** | **1.19%** |
+
+An 8.8× fall at the only case that ever missed, and that case was accepted for
+the first time in the run. Its four-core worker also recovered from 77.8% to
+98.7% of cap. The step size was ruled out by arithmetic — one output row held
+36,000 records and the gap was 236 to 327 rows' worth — and so was the
+pipeline's own in-flight state, which does not depend on the checkpoint
+interval at all. **Watch this ratio at the tiny proof**, whose window is 30 s:
+a 10 s interval is a third of it.
+
 **A fan-out is a property of the job, not of the test data.** A uniform
 generator makes any windowed pipeline *look* like it has one — 36,000 readings
 a row, so `outputsPerInput: 0.0000278` would pass. It would be a lie: change
@@ -606,12 +632,29 @@ sweep does not read:
 PROJECT_DIR=/path/to/run sh harness/watch.sh
 ```
 
+**If you are an agent, put the path inside a file, not on a command line.**
+Run 45 lost three shells to the sweep anyway, because the tool that launched
+`watch.sh` put the project path on the wrapper's command line even though the
+script kept it off its own. The form that survives is a two-line script in a
+scratch directory with the path written into it, invoked by its scratch path:
+
+```
+printf 'PROJECT_DIR=/path/to/run\nsh /path/to/skill/harness/watch.sh\n' > /tmp/scratch/w.sh
+sh /tmp/scratch/w.sh
+```
+
 **Start the fill the moment the tiny proof passes** and build the dashboard's
 panels while it runs. Nothing but the cases depends on them. The dashboard's
 *service* is not so free: `extraServices` is read when the stack comes up, so
 it has to be in `pipeline.json` before the first `up` — decide at §1a that
 there will be a dashboard, and write the service in then, even if the panels
-come later.
+come later. **The same is true of `flinkProperties`**, and it fails more
+quietly: it reaches the containers through the generated compose file, which is
+baked in at creation, so a setting added afterwards changes nothing and says
+nothing. Clean-room run 45 added `pipeline.max-parallelism` after `up`, watched
+preflight's own key row pass — that row reads the file, not the engine — ran a
+whole completeness drain, and found out only when the design diff read 128 back
+off the running job.
 
 ## 6. The checks that fail a run
 

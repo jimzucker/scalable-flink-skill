@@ -712,6 +712,12 @@ def check_windowed_in_one_place(fail):
             "§6a does not say which levers the harness can actually express",
         "fewer subtasks for the same cores":
             "§6a does not name the lever that has no hook",
+        "the sign says which cause it is":
+            "§5 no longer says which of the two causes a disagreement points at",
+        "an 8.8× fall at the only case that ever missed":
+            "§5 lost run 45's measurement of the checkpoint interval against the disagreement",
+        "The same is true of `flinkProperties`":
+            "§5 does not warn that flinkProperties is baked in when the stack comes up",
     }
     for needle, why in wanted.items():
         if needle.lower() not in skill.lower():

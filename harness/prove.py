@@ -743,7 +743,7 @@ def cmd_selftest(live=True, topic=None):
         bad = L.key_skew_verdict(sp, floor, [])
         if bad:
             raise bad
-    expect("an uneven layout with no fix available is reported, not refused (must not fire)",
+    expect("an uneven layout with no fix available is reported, not thrown out (must not fire)",
            skew_reports, "", should_fire=False)
 
     def skew_idle():
@@ -1064,7 +1064,7 @@ def cmd_selftest(live=True, topic=None):
 
     def chain():
         # in its own directory: the first version wrote its fake chain into the
-        # live results/ (phases.log, all.json and a DONE saying "FAIL at c")
+        # live results/ (phases.log, all.json and a DONE saying "STOPPED at c")
         # while a real `all` was running the live self-test around it
         ran = []
         fake = [(n, (lambda n=n: (ran.append(n), 0)[1])) for n in ("a", "b")]
@@ -1078,7 +1078,7 @@ def cmd_selftest(live=True, topic=None):
                      and os.path.getmtime(os.path.join(c.results, f)) > t_self]
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
-        if rc != 1 or ran != ["a", "b", "c"] or not done.startswith("FAIL at c") or allj["verdict"] != "FAIL at c":
+        if rc != 1 or ran != ["a", "b", "c"] or not done.startswith("STOPPED at c") or allj["verdict"] != "STOPPED at c":
             raise Exception(f"rc={rc} ran={ran} DONE={done!r} verdict={allj.get('verdict')}")
         if stray:
             raise Exception(f"the self-test wrote into the live results directory: {stray}")
@@ -1096,7 +1096,7 @@ def cmd_selftest(live=True, topic=None):
             raise Exception(f"sized from the {got['cores']}-core case, not the 4-core ceiling")
         # and a case that stopped before it had a rate is not sizeable
         partial = [dict(cores=1, recordsPerSec=608_333.0, status="OK"),
-                   dict(cores=4, status="REFUSED")]
+                   dict(cores=4, status="DROPPED")]
         if L.sizing_case(partial)["cores"] != 1:
             raise Exception("sized from a case that never produced a rate")
         raise Refusal("rig", "sized from the 4-core ceiling case, as it should")
@@ -1104,7 +1104,7 @@ def cmd_selftest(live=True, topic=None):
            ceiling_on_top_case, "sized from the 4-core ceiling case")
 
     def no_case_has_a_rate():
-        L.sizing_case([dict(cores=1, status="REFUSED"), dict(cores=2, status="REFUSED")])
+        L.sizing_case([dict(cores=1, status="DROPPED"), dict(cores=2, status="DROPPED")])
     expect("tinyproof stops plainly when no case produced a rate",
            no_case_has_a_rate, "nothing to size the suite from")
 
@@ -2011,13 +2011,13 @@ def cmd_suite():
                     f"headroom {rec['headroomS']:.0f}s  vantage {rec['vantageDisagreement']:.2%}")
             except CaseRefused as e:
                 out["runs"].append(e.rec)
-                kind = "CEILING" if e.refusal.scope == "ceiling" else "REFUSED"
-                label = "CEILING" if kind == "CEILING" else "FAILED"
+                kind = "CEILING" if e.refusal.scope == "ceiling" else "DROPPED"
+                label = "CEILING" if kind == "CEILING" else "THROWN OUT"
                 out.setdefault("ceilings" if kind == "CEILING" else "refusals", []).append(
                     {"case": cores, "pass": pass_id, "scope": e.refusal.scope, "message": e.refusal.msg})
                 log(f"  {label}: {e.refusal.msg}")
                 if e.refusal.scope == "rig":
-                    stop = ("rig refusal", e.refusal.msg)
+                    stop = ("a check about the rig stopped it", e.refusal.msg)
             done_cases += 1
             save()
             if stop:
@@ -2323,7 +2323,11 @@ def cmd_all(steps=None, results=None):
         mark(f"phase={name} end rc={rc} {time.time() - t0:.0f}s")
         save_all()
         if rc:
-            verdict = f"FAIL at {name}"
+            # What a person reads when the chain is over. "FAIL at report"
+            # said nothing about what happened; the run it described had a
+            # clean table and a pipeline that missed its target.
+            verdict = ("STOPPED at report: the table is good, the pipeline did not meet the target"
+                       if name == "report" else f"STOPPED at {name}")
             break
     out["verdict"] = verdict
     out["seconds"] = round(time.time() - t_all, 1)

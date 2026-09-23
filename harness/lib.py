@@ -1954,7 +1954,11 @@ def design_table(rows):
     out = [f"  {'area':<18} {'declared':<{w}} {'built':<5}  what was found",
            "  " + "-" * (18 + w + 7 + 30)]
     for r in rows:
-        out.append(f"  {r['area']:<18} {r['declared'][:w]:<{w}} {'yes' if r['built'] else 'NO':<5}  {r['detail']}")
+        # "yes" beside "not created yet" is a row contradicting itself, which
+        # clean-room run 45 filed. A third word for the one case that is neither.
+        mark = "later" if (r["built"] and "not created yet" in (r["detail"] or "")) else \
+               ("yes" if r["built"] else "NO")
+        out.append(f"  {r['area']:<18} {r['declared'][:w]:<{w}} {mark:<5}  {r['detail']}")
     return out
 
 
@@ -2634,11 +2638,72 @@ def warmup_verdict(rates, elapsed_s):
                 "warmupS": round(elapsed_s, 1)}
 
 
-def wait_flat(deadline_s):
+def job_health(jid):
+    """Is the job actually running, and has it been restarting?
+
+    Every loop that watches a drain watched the committed offset and nothing
+    else, so a job that could not run at all looked exactly like a rate that
+    would not settle. Clean-room run 45's four-core case was crash-looping on
+    `OutOfMemoryError: Direct buffer memory` -- fifteen restarts -- and the
+    harness stopped it twice with "the rate never settled down within 120s.
+    Last readings were [], drift None, scatter None", then retried it, because
+    nothing ever asked the engine how the job was. One REST call it already
+    knew how to make.
+    """
+    out = {"state": None, "restored": None, "cause": None}
+    try:
+        out["state"] = rest(f"/jobs/{jid}")["state"]
+    except Exception:
+        pass
+    try:
+        counts = (rest(f"/jobs/{jid}/checkpoints") or {}).get("counts") or {}
+        out["restored"] = counts.get("restored")
+    except Exception:
+        pass
+    try:
+        ex = rest(f"/jobs/{jid}/exceptions") or {}
+        root = ex.get("rootException") or ""
+        if not root:
+            hist = (ex.get("exceptionHistory") or {}).get("entries") or []
+            root = (hist[0].get("stacktrace") or "") if hist else ""
+        for line in root.splitlines():
+            line = line.strip()
+            # the line that names the fault, not the frames under it
+            if line.startswith("Caused by:") or (line and not line.startswith("at ") and ":" in line):
+                out["cause"] = line[:200]
+                break
+    except Exception:
+        pass
+    return out
+
+
+def job_is_failing(jid, restored_at_start):
+    """A plain sentence when the job is not running, or None when it is fine."""
+    if not jid:
+        return None
+    h = job_health(jid)
+    if h["state"] and h["state"] not in ("RUNNING", "CREATED", "RESTARTING", "INITIALIZING"):
+        return (f"the job is {h['state'].lower()}, not running"
+                + (f": {h['cause']}" if h["cause"] else ". Nothing is reading the backlog."))
+    n = h["restored"]
+    if n is not None and restored_at_start is not None and n > restored_at_start:
+        times = n - restored_at_start
+        return (f"the job has restarted {times} time{'' if times == 1 else 's'} since this case "
+                f"started. It is failing and recovering, not reading at an unsteady rate"
+                + (f": {h['cause']}" if h["cause"] else ".")
+                + " Fix the job; nothing about this is a measurement.")
+    return None
+
+
+def wait_flat(deadline_s, jid=None):
     """Warm up to a flat trend across N commit intervals, not a round number."""
     boundaries, last, detail = [], None, {}
     ramp = {"flatAtS": None, "flatAtRates": None}
     t0 = time.time()
+    # what the job's restart count was before this case began, so a restart
+    # during it is visible rather than inferred from a rate that wanders
+    restored0 = (job_health(jid)["restored"] if jid else None)
+    checked_at = time.time()
     k = T["warmupIntervals"]
     left = None  # records still unread, as of the last tick seen
     while time.time() - t0 < deadline_s:
@@ -2678,6 +2743,13 @@ def wait_flat(deadline_s):
                                               if ramp["flatAtS"] is not None else None)
                 detail["rampFlatAtRates"] = ramp["flatAtRates"]
                 return detail
+        # Ask the engine how the job is, every few seconds. Watching only the
+        # offset makes a job that cannot run look like one that is slow.
+        if jid and time.time() - checked_at > 8:
+            checked_at = time.time()
+            why = job_is_failing(jid, restored0)
+            if why:
+                raise Refusal("rig", why)
         time.sleep(0.5)
     # A backlog running out looks exactly like a rate that will not settle,
     # because it is one: the readings fall away as the source runs dry. Clean-room
@@ -2694,11 +2766,21 @@ def wait_flat(deadline_s):
                      f"reading. A backlog that runs dry while warming up cannot settle: size it for "
                      f"the warm-up plus the window plus two checkpoint intervals at the fastest "
                      f"case's rate.") if secs < 120 else f" The backlog had {left:,} records left."
+    why = job_is_failing(jid, restored0) if jid else None
+    if why:
+        raise Refusal("rig", why)
+    seen = [round(r) for r in (detail.get("rates") or [])]
+    if not seen:
+        # No rate at all is not a rate that failed to settle. Run 45 read
+        # "Last readings were [], drift None, scatter None" and spent 25
+        # minutes on it; the empty list was the whole story.
+        raise Refusal("rig", f"the pipeline did not commit a single offset in {deadline_s:.0f}s, so there "
+                             f"is nothing to measure. It is not reading the backlog. Check the job is "
+                             f"running and that the task manager has the memory it asked for.")
     raise Refusal("case", f"the rate never settled down within {deadline_s:.0f}s.{short} It has to hold steady for "
                           f"{T['warmupMinS']:.0f}s, drifting less than {T['warmupFlatTol']:.0%} with scatter under "
-                          f"{T['warmupScatterTol']:.0%}. Last readings were "
-                          f"{[round(r) for r in detail.get('rates', [])]}, drift {detail.get('drift')}, "
-                          f"scatter {detail.get('scatter')}.")
+                          f"{T['warmupScatterTol']:.0%}. The last readings were {seen} records a second, "
+                          f"drifting {detail.get('drift')} with scatter {detail.get('scatter')}.")
 
 
 def check_case(rec, cores, is_baseline):
@@ -2715,14 +2797,37 @@ def check_case(rec, cores, is_baseline):
         # Two causes account for nearly every case of this, and neither is
         # obvious from the numbers. Clean-room run 41 spent about 35 minutes
         # and one wrong fix on the second before measuring it.
-        why = ("\n  The two usual causes: the second reading moves in steps bigger than the "
-               "difference being measured -- a windowed pipeline's progress jumps by a whole "
-               "window, so work out how many input records one window holds and compare it with "
-               "how many a measurement window consumes at the SMALLEST case; or the readings are "
-               "taken at different moments -- the committed offset is where the source was at the "
-               "last checkpoint, the outputs are where the pipeline is now, so an unsteady rate "
-               "across the window makes them differ by the change in that lead."
-               if cfg().vantage_mode == "command" else "")
+        # Which cause, from the sign of the difference, instead of two causes
+        # and a guess. Clean-room run 45 was thrown out at four cores five
+        # times out of five with the outputs BEHIND the source, while the
+        # message's second cause -- the outputs are where the pipeline is now
+        # -- predicts them AHEAD. It then measured the discriminating test, one
+        # variable, checkpoint interval 10 s against 5 s:
+        #   4 cores  10.5% -> 1.19%   (1 core 0.35% -> 1.72%, 2 cores 1.19% -> 0.93%)
+        # an 8.8x fall at the only case that ever missed, and the case was
+        # accepted for the first time in that run. The step size was ruled out
+        # by arithmetic (one row held 36,000 records; the gap was 236-327 rows'
+        # worth) and so was the pipeline's own in-flight state, which does not
+        # depend on the checkpoint interval at all.
+        behind = rec["vantageSinkRecords"] < rec["recordsConsumed"]
+        ratio = (c.ckpt_s / max(rec["elapsedS"], 1e-9)) if rec.get("elapsedS") else None
+        if cfg().vantage_mode != "command":
+            why = ""
+        elif behind:
+            why = ("\n  The outputs are BEHIND the source, which points at checkpoint phase. The "
+                   "committed offset moves a whole checkpoint at a time; the outputs move "
+                   f"continuously, so they trail by up to one interval. Here that interval is "
+                   f"{c.ckpt_s:.0f}s against a {rec.get('elapsedS', 0):.0f}s window"
+                   + (f" -- {ratio:.0%} of it" if ratio else "")
+                   + ". Shorten checkpointMs or lengthen the window until that ratio is well "
+                     "under the tolerance. Run 45 took its four-core disagreement from 10.5% to "
+                     "1.19% by halving the interval, changing nothing else.")
+        else:
+            why = ("\n  The outputs are AHEAD of the source, which points at the step size: a "
+                   "windowed pipeline's progress jumps by a whole window. Work out how many input "
+                   "records one window holds and compare it with how many a measurement window "
+                   "consumes at the SMALLEST case -- that case reads slowest and needs the finest "
+                   "signal. The fix is in the data or the job, not the harness.")
         raise Refusal("case", f"the two ways of counting do not agree. The source says "
                               f"{rec['recordsConsumed']:,} records went through; the outputs account for "
                               f"{rec['vantageSinkRecords']:,.0f}. That is {rec['vantageDisagreement']:.1%} apart "
@@ -2770,7 +2875,7 @@ def check_case(rec, cores, is_baseline):
                       f"Kafka was the bottleneck here, not the cores.{hint}", rec)
     if (rec.get("gcFracOfCapacity") or 0) > T["gcCeil"]:
         raise Ceiling(f"garbage collection used {rec['gcFracOfCapacity']:.1%} of this case's time and the "
-                      f"limit is {T['gcCeil']:.0%}. The pipeline ran short of memory, not cores. Give it more "
+                      f"limit is {T['gcCeil']:.1%}. The pipeline ran short of memory, not cores. Give it more "
                       f"memory instead of more cores.", rec)
     if rec["sourceIdle"] > T["sourceIdleCeil"]:
         raise Ceiling(f"the source sat idle {rec['sourceIdle']:.1%} of the window and the limit is "
@@ -2851,7 +2956,7 @@ def run_case(cores, pass_id, run_id, shape_ref, is_baseline, manifest,
         rec["shape"] = shape
         check_shape(shape, shape_ref)
 
-        rec["warmup"] = wait_flat(warmup_max_s or T["warmupMaxS"])
+        rec["warmup"] = wait_flat(warmup_max_s or T["warmupMaxS"], jid=jid)
         rec["tSteady"] = time.time()
 
         open_tick = next_boundary()

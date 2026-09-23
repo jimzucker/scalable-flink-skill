@@ -567,6 +567,17 @@ averages of 8.2 and 13.5 on eight cores because it was querying Prometheus
 mid-suite to watch progress. Read `results/PROGRESS.txt`, which the harness
 writes anyway, and wait for `results/DONE`.
 
+**Use `harness/watch.sh` to do the waiting**, rather than writing a loop.
+The teardown kills any host process that names the project directory on its
+command line, and two clean-room runs have lost the shell they were waiting in
+to it — run 44 by putting `cat …/results/PROGRESS.txt` on the same command
+line as something else. The script takes the path in `PROJECT_DIR`, which the
+sweep does not read:
+
+```
+PROJECT_DIR=/path/to/run sh harness/watch.sh
+```
+
 **Start the fill the moment the tiny proof passes** and build the dashboard's
 panels while it runs. Nothing but the cases depends on them. The dashboard's
 *service* is not so free: `extraServices` is read when the stack comes up, so

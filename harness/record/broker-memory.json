@@ -1,6 +1,6 @@
 {
   "what": "Broker memory sizings whose outcome we already know. size_broker_memory decides whether a suite is allowed to run, so a change to it that disagrees with one of these is wrong.",
-  "why": "Clean-room run 31 lost a 44-minute suite to a broker that had already run out of memory 1,104 times during the tiny proof, 21 minutes earlier. The tiny proof passed anyway. The size each of these asks for is the size that was afterwards measured to work.",
+  "why": "Clean-room run 31 lost a 44-minute suite to a broker that had already run out of memory 1,104 times during the tiny proof, 21 minutes earlier. The tiny proof passed anyway. The size each of these asks for is the size that was afterwards measured to work. Run 45 confirmed the formula twice over and found its missing half: the advice never asked whether the machine could give what it was asking for.",
   "sizings": [
     {
       "run": "run-21",
@@ -29,6 +29,20 @@
       "hits": 0,
       "expectMb": null,
       "why": "the broker never hit its limit; the case ceiling's cap exemption is a separate rule and is not this one's business"
+    },
+    {
+      "run": "run-45-arm-a",
+      "limitMb": 4096,
+      "hits": 1771,
+      "expectMb": 6400,
+      "why": "clean-room run 45's controlled experiment, arm A: 4,096m gave 1,771 limit hits and 491,758 page refaults at four cores, worker at 94.63% of cap, 3,209,419 rec/s"
+    },
+    {
+      "run": "run-45-arm-b",
+      "limitMb": 6400,
+      "hits": 0,
+      "expectMb": null,
+      "why": "the same rig, one variable changed: 6,400m took the limit hits to ZERO at every case and refaults to 78,585 -- the sizing was right. But on a 9,937 MiB VM it starved the worker, which fell from 94.63% to 77.76% of cap at four cores and the rate from 3,209,419 to 3,082,852. Correct advice the machine could not afford, which is why broker_advice_fits() now says so"
     }
   ]
 }

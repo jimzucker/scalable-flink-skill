@@ -1088,6 +1088,38 @@ def cmd_selftest(live=True, topic=None):
         raise Refusal("rig", f"chain stopped at c, d never ran, DONE says {done!r}")
     expect("all: the chain stops at the first failing step", chain, "stopped at c")
 
+    def broker_advice_on_a_small_machine():
+        # clean-room run 45: told to raise the broker to 6,400m on a 9,937 MiB
+        # VM. It did, the limit hits went to zero, and the four-core worker fell
+        # from 94.6% to 77.8% of cap because the three limits no longer fit.
+        class FakeRun:
+            stdout = "10420092928"      # 9,937 MiB, the VM run 44 and 45 measured on
+        real = L.sh
+        try:
+            L.sh = lambda *a, **k: FakeRun()
+            why = L.broker_advice_fits(6400)
+        finally:
+            L.sh = real
+        if not why:
+            raise Exception("6,400m of broker was called affordable on a 9,937 MiB machine")
+        raise Refusal("rig", why)
+    expect("broker advice says when the machine cannot give it",
+           broker_advice_on_a_small_machine, "cannot give it that")
+
+    def broker_advice_on_a_big_machine():
+        class FakeRun:
+            stdout = "34359738368"      # 32 GB
+        real = L.sh
+        try:
+            L.sh = lambda *a, **k: FakeRun()
+            why = L.broker_advice_fits(6400)
+        finally:
+            L.sh = real
+        if why:
+            raise Exception(f"6,400m was called unaffordable on a 32 GB machine: {why}")
+    expect("broker advice is silent when the machine can give it (must not fire)",
+           broker_advice_on_a_big_machine, "", should_fire=False)
+
     def vantage_direction(sink, needle):
         # The message used to offer two causes and let the run pick. Run 45 was
         # thrown out five times out of five with the outputs behind the source,
@@ -1854,9 +1886,11 @@ def cmd_tinyproof():
                 # cost to be safe, and lets the config check upstream do the
                 # gating.
                 have = (worst.get("brokerLimitBytes") or 0) / 1048576
+                doesnt_fit = L.broker_advice_fits(want_mem)
                 log(f"  kafka memory: ran out {hits:,} times in a {worst.get('elapsedS', 0):.0f}s "
                     f"window at {have:.0f}m. The suite's windows are longer. If its cases come "
-                    f"back as ceilings, {want_mem}m is the size to try.")
+                    f"back as ceilings, {want_mem}m is the size to try"
+                    + (f" -- {doesnt_fit}" if doesnt_fit else "."))
             else:
                 log(f"  kafka memory: {(worst.get('brokerLimitBytes') or 0) / 1048576:.0f}m, "
                     f"ran out {hits} times")

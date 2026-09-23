@@ -2191,6 +2191,41 @@ def size_broker_memory(limit_bytes, hits):
     return int(limit_bytes * 1.6 / 268435456) * 256
 
 
+def broker_advice_fits(want_mb):
+    """Can this machine give the broker what it is about to be told to give it?
+
+    The sizing itself is right -- clean-room run 45 followed it from 4,096m to
+    6,400m and the limit hits went from 1,771 to zero at every case. But on its
+    9,937 MiB VM that left the four-core worker at 77.8% of cap against 94.6%
+    before, because 3,840 of worker + 6,400 of broker + 1,600 of job manager is
+    11,840 MiB. The advice was correct and unaffordable at the same time, and
+    it said nothing about the second half.
+
+    Returns None when it fits, or a sentence saying what to do instead.
+    """
+    c = cfg()
+    info = sh("docker info --format '{{.MemTotal}}'", check=False).stdout.strip()
+    vm = (int(info) / 1048576.0) if info.isdigit() else 0.0
+    if not vm or not want_mb:
+        return None
+    top = max(c.cases)
+    worker = (_mib(mem_for(c.tm_mem_per_core, top, c.tm_mem_base)) if c.tm_mem_per_core
+              else _mib(c.tm_mem)) if tm_memory_capped() else 0.0
+    need = worker + want_mb + 1600.0
+    if need <= vm:
+        return None
+    over = need - vm
+    smaller = sorted(n for n in set(c.cases) if n != top)
+    return (f"but this machine cannot give it that. At {top} cores the worker wants "
+            f"{worker:,.0f} MiB, the job manager takes 1,600, and {want_mb:,}m of broker on top "
+            f"is {need:,.0f} MiB against a {vm:,.0f} MiB virtual machine -- over by {over:,.0f}. "
+            f"Raising the broker anyway does not fail; the worker gives way instead, which reads "
+            f"as a pipeline that does not scale. Three ways out, in order: raise the virtual "
+            f"machine to about {need/1024:.0f} GB; or drop the {top}-core case and claim the step "
+            f"into {smaller[-1] if smaller else top} cores; or keep the broker where it is, let "
+            f"the {top}-core case come back as a ceiling, and report it as where scaling stops.")
+
+
 def tm_memory_record():
     """What suite.json should say was held still about worker memory.
 

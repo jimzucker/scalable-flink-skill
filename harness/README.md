@@ -262,7 +262,9 @@ Type the steps yourself only when one of them needs re-running:
 python3 $H replay          # thresholds vs the recorded runs — seconds, no stack
 python3 $H up              # stack/compose.yml generated, broker + job manager up, sampler compiled
 python3 $H preflight       # §3, one PASS/FAIL row per check
-python3 $H tinyproof       # two cases on a small backlog, ratio bounded, every guard broken on purpose
+sh $HERE/watch.sh          # watch a detached run without being swept up in its teardown
+                           #   PROJECT_DIR=/path/to/run sh harness/watch.sh
+python3 $H tinyproof       # every case in `cases`, on a small backlog, ratio bounded, every guard broken on purpose
 nohup python3 $H fill > results/fill.log 2>&1 &        # the full backlog; build the dashboard meanwhile
 python3 $H completeness    # process a small test data set twice (once cleanly, once killed), check
 python3 $H suite           # the table
@@ -278,7 +280,7 @@ self-test) and `completeness` have passed **for the same build hash**.
 
 | field | what |
 |---|---|
-| `project` | short lowercase token; every container, volume and network is prefixed with it, and `down` asserts nothing with the prefix survives — nor any host process holding a file under `results/` open, naming the project directory on its command line, or naming `prove.py` while running from inside the project (those are killed and listed; a survivor fails the run — another project's harness, or a shell merely sitting in the directory, is left alone) |
+| `project` | short lowercase token, **letters and digits only** — `[a-z][a-z0-9]{1,15}`, so `st44` but not `st-44`; every container, volume and network is prefixed with it, and `down` asserts nothing with the prefix survives — nor any host process holding a file under `results/` open, naming the project directory on its command line, or naming `prove.py` while running from inside the project (those are killed and listed; a survivor fails the run — another project's harness, or a shell merely sitting in the directory, is left alone) |
 | `topics.in`, `topics.out[]` | **the topics the harness owns, not every topic the job uses.** `topics.out` may be empty when `secondVantage` is a command. `topics.in` is the one input it fills, measures and drains — the one being scaled to capacity. `topics.out` is every topic whose growth is a **constant** multiple of that input, because their rows divided by `outputsPerInput` are the second vantage point. A second *input* — a price feed, a reference stream — is yours: create it, fill it, read it, and leave it out of both lists; the harness will not touch it. A timer-driven *output* is also yours and must stay out of `topics.out`, because its rows are per interval and not per input, which is what makes the two vantage points disagree. Set `retention.bytes` on anything you own that is written and never drained (§3). The harness sets retention on `topics.out` and recreates them per case |
 | `outputsPerInput` | records written to all outputs per input record. The two-vantage guard divides sink growth by this and compares to committed source offsets. **Optional**, and meaningless for a pipeline whose outputs are per window rather than per input — see `secondVantage` |
 | `topicsAlsoWritten` | every topic the pipeline writes that the harness does not own — the throttled ones, the per-window ones, anything outside `topics.out`. The harness cannot infer them and cannot read a diagram, so the run declares them and the completeness drain stops the run on any that stayed empty. They are **emptied between the two completeness arms** along with `topics.out`, so a verifier asked for different assertions on the clean drain and the killed one is not handed both arms' rows at once. Set `retention.bytes` on them yourself at creation; the harness only applies its own retention when it recreates them |

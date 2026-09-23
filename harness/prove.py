@@ -1321,8 +1321,8 @@ def cmd_preflight():
         produced them, so the interview and the plan were honour-system and
         every run produced them differently. Missing files fail; a plan that
         does not name one of the disclosures is listed, because matching prose
-        is loose and a loose check that refuses is worse than one that tells
-        you what it could not find.
+        is loose, and a loose check that stops a run is worse than one that
+        says what it looked for and could not find.
         """
         root = os.path.dirname(os.path.abspath(cfg().results))
         missing = [f for f in ("ASSUMPTIONS.md", "PLAN.md")
@@ -1340,9 +1340,15 @@ def cmd_preflight():
                 "the shape of the suite": ("pass",),
                 "the mid-run kill": ("kill",),
                 "where to watch it": ("progress.txt",)}
-        absent = [k for k, needles in want.items() if not any(n in plan for n in needles)]
+        absent = [(k, want[k]) for k in want if not any(n in plan for n in want[k])]
+        # Say what was looked for. Clean-room run 44 read "the plan does not
+        # mention: the objective" and had no way to know the check wanted the
+        # digits 1.90 or the words near-linear -- a plan saying "99% of linear"
+        # gets the same line. It passed only because it had read this file.
         return ("the plan names every disclosure" if not absent
-                else "the plan does not mention: " + ", ".join(absent))
+                else "the plan does not mention: "
+                     + "; ".join(f"{k} (looked for {' or '.join(repr(n) for n in v)})"
+                                 for k, v in absent))
 
     def quiet_machine():
         """Nothing else should be competing for the cores under test.
@@ -1367,7 +1373,7 @@ def cmd_preflight():
     def memory_budget():
         """Worker at its largest case, broker and job manager must fit the VM with
         room to spare. Runs 20 and 21 each lost attempts discovering this by
-        refusal instead: the broker's page cache grows into whatever cap it is
+        being stopped mid-run instead: the broker's page cache grows into whatever cap it is
         given, and paying for that cap out of the worker drove 1-core GC to 26%."""
         info = L.sh("docker info --format '{{.MemTotal}}'", check=False).stdout.strip()
         vm = int(info) if info.isdigit() else 0

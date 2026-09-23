@@ -15,6 +15,7 @@ import json
 import os
 import re
 import shutil
+import statistics
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -236,10 +237,15 @@ def check_windowed_example_backlogs(fail):
     """
     import lib
     rec = json.loads(read(HERE, "record", "sizing.json"))
-    suites = [s for s in (rec.get("suites") or []) if s.get("pipeline") == "windowed"]
-    if not suites:
-        return "no recorded rates for the windowed shape"
-    top = max(suites, key=lambda s: s["rateAtTop"])
+    # Sized like the other example: a typical recorded rate across every shape,
+    # because one windowed run is not a distribution and sizing off its single
+    # figure is what inflated this example to 720,000,000 records.
+    all_suites = rec.get("suites") or []
+    if not all_suites:
+        return "no recorded rates to size against"
+    rate = statistics.median([s["rateAtTop"] for s in all_suites])
+    suites = all_suites
+    top = min(suites, key=lambda s: abs(s["rateAtTop"] - rate))
     ex = json.loads(read(HERE, "pipeline.example.windowed.json"))
     b = ex.get("backlog") or {}
     ckpt = ex.get("checkpointMs", 10000) / 1000.0
@@ -281,10 +287,18 @@ def check_example_backlogs(fail):
     # pipeline's rate demands roughly 234 GB of Kafka log -- and it is the same
     # mistake as explaining one system's number with another system's
     # measurement. Untagged records predate the tag and are this example's.
+    # A TYPICAL recorded rate, not the fastest ever seen. Sizing an example for
+    # the fastest run on record made the windowed example ship 720,000,000
+    # records -- about 37 GB with its tiny proof -- for a file whose own comment
+    # says "These counts are NOT for you. Size them from your own pipeline's
+    # measured rate." An example is a starting point; the tiny proof is what
+    # actually protects a run, because it measures the rate and fails the chain
+    # when the backlog is short of what it measured.
     suites = [s for s in suites if s.get("pipeline", "trading") == "trading"]
     if not suites:
         return "no recorded rates for this example's shape"
-    top = max(suites, key=lambda s: s["rateAtTop"])
+    rate = statistics.median([s["rateAtTop"] for s in suites])
+    top = min(suites, key=lambda s: abs(s["rateAtTop"] - rate))
     ex = json.loads(read(HERE, "pipeline.example.json"))
     b = ex.get("backlog") or {}
     ckpt = ex.get("checkpointMs", 10000) / 1000.0

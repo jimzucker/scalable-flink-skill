@@ -1,7 +1,7 @@
 {
  "what": "Backlog sizing replayed against every recorded suite. Each row is the rate the top case actually reached, its measured warm-up, the checkpoint interval and the backlog that suite actually used. size_backlog must not demand more than the backlog these valid tables were produced with.",
  "sizingWindowS": 30.0,
- "whyThatWindow": "The guard runs inside cmd_tinyproof, where T is overridden to minWindowS 30 for the tiny proof itself, so that is the window sizing actually uses. Sizing on the suite's own 60 s window was tried and rejected: replayed here it refuses run-11 (wants 216,628,068 against 200,000,000), run-17 (225,451,973 against 192,000,000) and phase3 (215,934,416 against 200,000,000), all three of which produced tables we accepted. The x1.5 margin absorbs the difference in practice.",
+ "whyThatWindow": "Sizing uses a pinned 30 s window (T['sizingWindowS']), not the suite's 60 s and not whatever minWindowS happens to be when it is called. Replayed here against all 24 recorded sizings: at 30 s none is stopped; at 60 s four are -- run-11 (wants 216,628,068 against 200,000,000), run-17 (225,451,973 against 192,000,000), phase3 (215,934,416 against 200,000,000) and run-42 (718,247,376 against 600,000,000) -- and all four produced tables we accepted. The x1.5 margin absorbs the difference in practice. It was an accident before clean-room run 44 filed it: the value came from the tiny proof's own override of minWindowS, so changing the tiny proof's window would have silently resized every suite.",
  "suites": [
   {
    "run": "run-11",

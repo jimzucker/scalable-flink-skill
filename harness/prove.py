@@ -28,6 +28,7 @@ scalable-flink-skill harness — the one entry point.
 
 Exit code 0 means the command's own assertion held; anything else, read the log.
 """
+import inspect
 import json
 import os
 import re
@@ -1084,6 +1085,40 @@ def cmd_selftest(live=True, topic=None):
         raise Refusal("rig", f"chain stopped at c, d never ran, DONE says {done!r}")
     expect("all: the chain stops at the first failing step", chain, "stopped at c")
 
+    def ceiling_on_top_case():
+        # clean-room run 44: the 4-core case hit the broker's memory limit, was
+        # kept as a ceiling, and the tiny proof then stopped with KeyError: 4.
+        cases = [dict(cores=1, recordsPerSec=608_333.0, status="OK"),
+                 dict(cores=2, recordsPerSec=1_141_957.0, status="OK"),
+                 dict(cores=4, recordsPerSec=2_100_000.0, status="CEILING")]
+        got = L.sizing_case(cases)
+        if got["cores"] != 4:
+            raise Exception(f"sized from the {got['cores']}-core case, not the 4-core ceiling")
+        # and a case that stopped before it had a rate is not sizeable
+        partial = [dict(cores=1, recordsPerSec=608_333.0, status="OK"),
+                   dict(cores=4, status="REFUSED")]
+        if L.sizing_case(partial)["cores"] != 1:
+            raise Exception("sized from a case that never produced a rate")
+        raise Refusal("rig", "sized from the 4-core ceiling case, as it should")
+    expect("tinyproof sizes from a ceiling top case instead of stopping",
+           ceiling_on_top_case, "sized from the 4-core ceiling case")
+
+    def no_case_has_a_rate():
+        L.sizing_case([dict(cores=1, status="REFUSED"), dict(cores=2, status="REFUSED")])
+    expect("tinyproof stops plainly when no case produced a rate",
+           no_case_has_a_rate, "nothing to size the suite from")
+
+    def bytes_per_record_reads_every_input_topic():
+        # run 44: 25,000,000 readings on <in>-small at 18 B each, and the disk
+        # check still used its 120-byte guess because it only looked at <in>.
+        src = inspect.getsource(L.measured_bytes_per_record)
+        for needed in ("-small", "-tiny"):
+            if needed not in src:
+                raise Exception(f"measured_bytes_per_record does not look at {needed} topics")
+        raise Refusal("rig", "bytes per record is measured across every input topic")
+    expect("bytes per record is measured on every input topic the run owns",
+           bytes_per_record_reads_every_input_topic, "every input topic")
+
     def warm():
         ok, d = L.warmup_verdict([325e3, 259e3, 241e3, 340e3], 120)
         if ok:
@@ -1580,17 +1615,42 @@ def cmd_tinyproof():
                     e.rec["status"] = "CEILING"
                     out.setdefault("ceilings", []).append(
                         {"case": cores, "message": e.refusal.msg})
-                    log(f"  CEILING: {e.refusal.msg}")
+                    rate = e.rec.get("recordsPerSec")
+                    log(f"  CEILING at {rate:,.0f} rec/s, tm {e.rec.get('tmCapFrac', 0):.1%} of cap: "
+                        f"{e.refusal.msg}" if rate else f"  CEILING: {e.refusal.msg}")
                     log(f"  keeping it: a case that is not the constraint is reported and left out "
                         f"of the steps, not a reason to stop.")
                 else:
                     log(f"  FAILED ({e.refusal.scope}): {e.refusal.msg}")
                     out["result"] = "FAIL"
                     rc = 1
+        # Every case that produced a rate, whether it was accepted or was a
+        # ceiling. A ceiling case is measured and kept a few lines above -- its
+        # rate is real, and it is still the case the suite has to be sized for
+        # -- but it never went into recs, and recs[hi] then asked for a key that
+        # was not there. Clean-room run 44's 4-core case hit the broker's memory
+        # limit, the harness logged "keeping it: a case that is not the
+        # constraint is reported and left out of the steps", and one statement
+        # later the tiny proof died with KeyError: 4. Nothing caught it: rc was
+        # still 0, tinyproof.json was never written, the 98-guard self-test never
+        # ran, and the ceiling case's rate was lost with it -- so the broker
+        # memory change that run then made had nothing to be measured against.
+        top = None
         if rc == 0:
+            try:
+                top = L.sizing_case(out["cases"])
+            except Refusal as e:
+                out["result"] = "FAIL"
+                log(f"  STOPPED: {e.msg}")
+                rc = 1
+        if rc == 0:
+            if top["cores"] != hi:
+                log(f"  sizing the suite from the {top['cores']}-core case at "
+                    f"{top['recordsPerSec']:,.0f} rec/s -- the {hi}-core case did not "
+                    f"produce a rate. The suite may need more records than this says.")
             # GUARD: the suite's disk, projected from the measured shape, before the fill
             try:
-                out["disk"] = L.disk_projection(topic, c.tiny, recs[hi])
+                out["disk"] = L.disk_projection(topic, c.tiny, top)
             except Refusal as e:
                 out["disk"] = getattr(e, "detail", None)
                 out["result"] = "FAIL"
@@ -1609,27 +1669,31 @@ def cmd_tinyproof():
             # warmup_verdict returns "warmupS"; reading "seconds" silently
             # yielded None, so sizing fell back to the tiny proof's own
             # warmupMinS override (20 s) instead of the measured warm-up.
-            warm = (recs[hi].get("warmup") or {}).get("warmupS")
-            want = L.size_backlog(recs[hi]["recordsPerSec"], hi, c.ckpt_ms / 1000.0,
+            warm = (top.get("warmup") or {}).get("warmupS")
+            want = L.size_backlog(top["recordsPerSec"], top["cores"], c.ckpt_ms / 1000.0,
                                   warmup_max_s=warm)
             out["backlogNeeded"] = want
             out["backlogConfigured"] = c.backlog
             if c.backlog < want:
                 out["result"] = "FAIL"
                 log(f"  FAILED (rig): backlog {c.backlog:,} is short of the {want:,} records the "
-                    f"{hi}-core case needs at its measured {recs[hi]['recordsPerSec']:,.0f} rec/s "
+                    f"{top['cores']}-core case needs at its measured {top['recordsPerSec']:,.0f} rec/s "
                     f"(warm-up + window + headroom, x1.5); set backlog.count to at least that")
                 rc = 1
             else:
                 log(f"  backlog: {c.backlog:,} configured, {want:,} needed at the measured "
-                    f"{recs[hi]['recordsPerSec']:,.0f} rec/s")
+                    f"{top['recordsPerSec']:,.0f} rec/s")
             # Kafka's memory, sized the same way and at the same moment as the
             # backlog. Run 31 saw 1,104 limit hits here in a 30 s window, passed,
             # and then lost a 44-minute suite to the same broker at 60 s windows
             # with 90 s of warm-up in front of them -- four times the exposure.
             # The tiny proof is where this gets caught, because it is the first
             # real drain and it already knows the rate.
-            worst = max(recs.values(), key=lambda r: r.get("brokerLimitHits") or 0)
+            # Every case, not only the accepted ones. The case that hits the
+            # broker's memory limit is usually the case that was called a
+            # ceiling for hitting it, and recs left that one out -- so the
+            # broker sizing skipped the only evidence it had.
+            worst = max(out["cases"], key=lambda r: r.get("brokerLimitHits") or 0)
             hits = worst.get("brokerLimitHits") or 0
             want_mem = L.size_broker_memory(worst.get("brokerLimitBytes") or 0, hits)
             out["brokerLimitHits"] = hits

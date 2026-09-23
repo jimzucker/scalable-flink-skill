@@ -161,6 +161,7 @@ T = {
     # it -- so the backlog was sized on a warm-up that only had to reach 20 s
     # while the suite it sizes for will not start measuring before 90 s.
     "suiteWarmupMinS": 90.0,
+    "sizingWindowS": 30.0,
     "warmupMaxS": 240.0,
     # window: >=3 commit boundaries is the rule; six 10 s boundaries average the
     # checkpoint jitter (run 10). Windows of 20 s, 45 s and 60 s were tried in
@@ -584,7 +585,21 @@ def measured_bytes_per_record():
     """
     c = cfg()
     best = None
-    for t in (c.suite_topic_in, c.topic_in):
+    # Every input topic the harness owns, not only the suite's. The completeness
+    # step fills <in>-small and the tiny proof fills <in>-tiny, and both are on
+    # the broker long before the suite's own topic has a single record in it.
+    # Clean-room run 44 had 25,000,000 readings sitting on <in>-small at a
+    # measured 18 bytes each and this function still returned None, so the disk
+    # check fell back to its 120-byte guess and projected 108 GB for a run that
+    # wanted 16 -- 10 GB short of stopping a run that would have fitted six
+    # times over.
+    base = c.suite_topic_in
+    names = [c.suite_topic_in, c.topic_in, f"{base}-tiny", f"{base}-small"]
+    seen = set()
+    for t in names:
+        if t in seen:
+            continue
+        seen.add(t)
         if not t or not topic_exists(t):
             continue
         try:
@@ -594,7 +609,10 @@ def measured_bytes_per_record():
             b = topic_bytes([t])
             if b:
                 per = b / recs
-                best = per if best is None else min(best, per)
+                # the largest of the measured topics, not the smallest: every
+                # one of them holds the same record shape, and a projection
+                # that understates the disk is the one that fills it.
+                best = per if best is None else max(best, per)
         except Exception:
             continue
     return best
@@ -709,9 +727,41 @@ def size_backlog(rate_at_top, cores_top, ckpt_s, warmup_max_s=None, window_s=Non
     # of them (run-11, run-17, phase3), which is why only this term changes.
     warmup = max(warmup_max_s if warmup_max_s is not None else T["warmupMinS"],
                  T.get("suiteWarmupMinS", 0.0))
-    window = window_s if window_s is not None else T["minWindowS"]
+    # An explicit number, not whatever minWindowS happens to be when this is
+    # called. It is called from inside the tiny proof, which has already lowered
+    # minWindowS to 30 s for its own use, so the sizing window was the tiny
+    # proof's window by accident -- change the tiny proof's window and the suite
+    # silently gets sized for a different one. Clean-room run 44 read the code
+    # and filed this as sizing being understated by 107,000,000 records.
+    #
+    # It is 30 s and not the suite's own 60 s because the suite's window was
+    # tried and the record refuses it. Replayed against all 24 recorded sizings:
+    # at 30 s none of them is stopped; at 60 s four are -- run-11 (wants
+    # 216,628,068 against 200,000,000), run-17 (225,451,973 against 192,000,000),
+    # phase3 (215,934,416 against 200,000,000) and run-42 (718,247,376 against
+    # 600,000,000) -- and all four produced tables we accepted. The x1.5 margin
+    # absorbs the difference in practice.
+    window = window_s if window_s is not None else T["sizingWindowS"]
     seconds = warmup + window + ckpt_s * 3          # headroom guard wants > 1 interval
     return int(rate_at_top * seconds * margin)
+
+
+def sizing_case(cases):
+    """The case the suite gets sized from: the biggest one that produced a rate.
+
+    A ceiling case is measured and kept -- it is where scaling stopped, not a
+    broken measurement -- so its rate is real and it is still the case the suite
+    has to hold data for. The tiny proof used to reach for the biggest case by
+    core count and index a dictionary that only held the accepted ones. Clean-room
+    run 44's 4-core case hit the broker's memory limit, was logged as kept, and
+    the next statement stopped the tiny proof with KeyError: 4 -- no
+    tinyproof.json, no self-test, and the ceiling case's rate gone with it.
+    """
+    sized = {r["cores"]: r for r in cases if r.get("recordsPerSec")}
+    if not sized:
+        raise Refusal("rig", "not one case produced a rate, so there is nothing to size "
+                             "the suite from. The messages above say why each case stopped.")
+    return sized[max(sized)]
 
 
 def disk_projection(tiny_topic, tiny_count, last_case_rec):

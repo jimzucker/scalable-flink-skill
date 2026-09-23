@@ -2307,6 +2307,34 @@ def gib_str(byts):
     return f"{byts / 1073741824:g}g"
 
 
+def host_arm_note(step_name):
+    """What this host's own bare cores did on the same step, or None.
+
+    preflight measures it every run and saves it, and nothing ever put it in
+    front of a reader. Clean-room run 44 missed 1.90x on both steps with every
+    diagnostic column saying the pipeline was the constraint; the figure that
+    says whether 1.90x was reachable on that host at all sat in preflight.json
+    and appeared in no rendering of the result.
+    """
+    try:
+        with open(os.path.join(cfg().results, "preflight.json")) as f:
+            hs = (json.load(f) or {}).get("hostScaling") or {}
+    except Exception:
+        return None
+    of = hs.get("ofLinear") or {}
+    alu = (of.get("alu") or {}).get(step_name)
+    mem = (of.get("mem") or {}).get(step_name)
+    if alu is None and mem is None:
+        return None
+    parts = []
+    if mem is not None:
+        parts.append(f"{mem:.3f} when it has to reach memory")
+    if alu is not None:
+        parts.append(f"{alu:.3f} when it does not")
+    return ("this host's own cores returned " + " and ".join(parts)
+            + " on the same step, with no pipeline involved")
+
+
 def corrective_action(rec, step=None, is_baseline=False):
     """What to do, in two or three words, for the column.
 
@@ -2318,9 +2346,15 @@ def corrective_action(rec, step=None, is_baseline=False):
         if is_baseline:
             return "check it matches"
         if not step or not step.get("reportable"):
-            return "investigate"
-        if (step.get("ratioLowCI") or 0) > step["idealRatio"] or not step.get("meetsClaim"):
-            return "investigate"
+            return "no usable step"
+        if (step.get("ratioLowCI") or 0) > step["idealRatio"]:
+            return "baseline reads low"
+        if not step.get("meetsClaim"):
+            # Run 44 was told "investigate" twice while every column beside it
+            # said the pipeline was the constraint, the broker was idle and the
+            # GC was at 0.3%. There was nothing in the rig left to investigate:
+            # the step is the pipeline's, or the host's.
+            return "check the host"
         return "add cores for more"
     return {"Pipeline memory": "more memory",
             "Kafka CPU": "more Kafka cores",
@@ -2452,7 +2486,14 @@ def scorecard(out):
                        "(env.java.opts.taskmanager: -XX:+UseG1GC) and measure again.")
     if busy:
         worst = max(busy, key=lambda x: x[1])
-        notes.append(f"  the machine was busy with something else: load reached {worst[1]:.1f} on "
+        # which pass, not only how busy. Run 44 read "load reached 15.4 on 8
+        # cores" and had to open suite.json to find out which of ten passes it
+        # was talking about, and whether the fast ones or the slow ones were
+        # the busy ones.
+        who = next((f"the {r['cores']}-core {r.get('pass') or 'pass'}" for r in (out.get("runs") or [])
+                    if (r.get("hostLoadClose") or 0) == worst[1]), None)
+        where = f"{who}: " if who else ""
+        notes.append(f"  {where}the machine was busy with something else: load reached {worst[1]:.1f} on "
                      f"{worst[2]} cores while measuring. A CPU cap is a share, not a promise of "
                      f"cycles — every case can read 100% of its cap and still do less work. Close "
                      f"what else is running and measure again.")
@@ -2498,6 +2539,19 @@ def scorecard(out):
             verdict = "missed"
         L.append(f"  {r['step']} cores: doubling gave {r['ratio']:.2f}x, target {need:.2f}x"
                  f"  ->  {verdict}")
+        if verdict.startswith("missed"):
+            arm = host_arm_note(r["step"])
+            if arm:
+                text = (f"for comparison, {arm}. The target is "
+                        f"{T['scalingFloor']:.2f} of linear.")
+                line = "     "
+                for word in text.split():
+                    if len(line) + len(word) + 1 > 96:
+                        L.append(line)
+                        line = "         " + word
+                    else:
+                        line += " " + word
+                L.append(line)
     return "\n".join(L)
 
 

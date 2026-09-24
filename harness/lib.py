@@ -550,8 +550,50 @@ def rest_patch(path, timeout=30):
         return r.read().decode()
 
 
+_KAFKA_TOOLS = {}
+
+
+def vendor_only_classes(names):
+    """Classes in a jar that only one Kafka vendor provides: Confluent's own
+    client libraries (Schema Registry serializers and the like) live under
+    io/confluent/. A pipeline built without them runs against Apache Kafka or
+    Confluent with nothing changed but the broker image in pipeline.json."""
+    return sorted(n for n in names if n.startswith("io/confluent/") and n.endswith(".class"))
+
+
+def kafka_tool_path(found):
+    """Where the broker image keeps its tools, from where kafka-topics was found.
+
+    apache/kafka ships /opt/kafka/bin/kafka-topics.sh; confluentinc/cp-kafka ships
+    /usr/bin/kafka-topics, with no .sh. Every command used to be sent to the
+    first, so a Confluent broker came up healthy and the harness still stopped
+    with "kafka never answered" (checked on cp-kafka:7.7.0, 2026-09-24).
+    Returns (directory, suffix), or None if nothing was found."""
+    found = (found or "").strip().splitlines()
+    if not found or not found[0].startswith("/"):
+        return None
+    path = found[0]
+    stem = path.rsplit("/", 1)[-1]
+    if stem not in ("kafka-topics.sh", "kafka-topics"):
+        return None
+    return path.rsplit("/", 1)[0], (".sh" if stem.endswith(".sh") else "")
+
+
 def kafka(args, check=True, timeout=300):
-    return sh(f"docker exec {cfg().kafka} /opt/kafka/bin/{args}", check=check, timeout=timeout)
+    """Run one of the broker's own command-line tools inside its container.
+    args start with the tool's Apache name (kafka-topics.sh ...); the name is
+    mapped to wherever this image keeps it."""
+    c = cfg()
+    if c.kafka not in _KAFKA_TOOLS:
+        r = sh(f"docker exec {c.kafka} sh -c 'command -v /opt/kafka/bin/kafka-topics.sh "
+               f"|| command -v kafka-topics.sh || command -v kafka-topics'", check=False)
+        where = kafka_tool_path(r.stdout) if r.returncode == 0 else None
+        if where:
+            _KAFKA_TOOLS[c.kafka] = where
+    directory, suffix = _KAFKA_TOOLS.get(c.kafka, ("/opt/kafka/bin", ".sh"))
+    tool, _, rest = args.partition(" ")
+    tool = tool[:-3] if tool.endswith(".sh") else tool
+    return sh(f"docker exec {c.kafka} {directory}/{tool}{suffix} {rest}", check=check, timeout=timeout)
 
 
 def host_free_bytes():
@@ -1124,14 +1166,21 @@ def host_watchers(ignore_children=False):
     return sorted(found)
 
 
-def reap_host_watchers(ignore_children=False):
-    found = host_watchers(ignore_children)
+def reap_host_watchers(ignore_children=False, only=None):
+    """Stop the processes host_watchers finds. only: a set of pids to limit it
+    to. The guard's own self-test passes the pids it started: without that it
+    stopped every process naming the project directory, and under the example
+    config that directory is the harness's own folder -- so running the gates
+    stopped a live chain launched from the same harness (2026-09-24, a
+    completeness run on a Confluent broker, killed one second in)."""
+    found = [(pid, cl) for pid, cl in host_watchers(ignore_children) if only is None or pid in only]
     for pid, _ in found:
         sh(f"kill -TERM {pid}", check=False)
     if found:
         time.sleep(1.0)
         for pid, _ in host_watchers(ignore_children):
-            sh(f"kill -KILL {pid}", check=False)
+            if only is None or pid in only:
+                sh(f"kill -KILL {pid}", check=False)
         time.sleep(0.5)
     return found
 

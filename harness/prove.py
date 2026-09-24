@@ -593,6 +593,30 @@ def cmd_selftest(live=True, topic=None):
     expect("fill: a 4-minute pause after writing runs on (must not fire)",
            stall([(0, 0), (30, 4_000_000)] + [(30 + i * 30, 4_000_000) for i in range(1, 9)], 270, None),
            "", should_fire=False)
+    # Confluent's broker image keeps its tools in /usr/bin with no .sh; the
+    # harness sent every command to Apache's /opt/kafka/bin (cp-kafka:7.7.0).
+    def tools(found, want):
+        def go():
+            got = L.kafka_tool_path(found)
+            assert got == want, f"read {found!r} as {got!r}, expected {want!r}"
+        return go
+    expect("kafka tools: the Apache image (must not fire)",
+           tools("/opt/kafka/bin/kafka-topics.sh\n", ("/opt/kafka/bin", ".sh")), "", should_fire=False)
+    expect("kafka tools: the Confluent image (must not fire)",
+           tools("/usr/bin/kafka-topics\n", ("/usr/bin", "")), "", should_fire=False)
+    expect("kafka tools: nothing found is not guessed at (must not fire)",
+           tools("", None), "", should_fire=False)
+    def tools_only(names, want):
+        def go():
+            got = L.vendor_only_classes(names)
+            assert got == want, f"found {got!r}, expected {want!r}"
+        return go
+    expect("either Kafka: a plain Apache-client build has nothing vendor-only (must not fire)",
+           tools_only(["org/apache/kafka/clients/producer/KafkaProducer.class", "st48/Job.class"], []),
+           "", should_fire=False)
+    expect("either Kafka: Confluent serializers are found (must not fire)",
+           tools_only(["io/confluent/kafka/serializers/KafkaAvroSerializer.class", "io/confluent/x.txt"],
+                      ["io/confluent/kafka/serializers/KafkaAvroSerializer.class"]), "", should_fire=False)
     expect("the broker was starved of page cache (cores off their cap)",
            case(brokerLimitHits=310423, brokerRefaults=6270562, tmCapFrac=0.93), "hit its memory limit", ceiling=True)
     expect("cores off their cap with no broker hits still says something else held it back",
@@ -766,7 +790,9 @@ def cmd_selftest(live=True, topic=None):
             for x in (w, t, u, other, bystander):
                 x.kill()
             raise Exception(f"host_watchers wanted {sorted(want)} and not {other.pid}/{bystander.pid}; got {sorted(found)}")
-        L.reap_host_watchers(ignore_children=True)
+        # only what this test started: anything else naming this directory could
+        # be a live chain launched from the same harness
+        L.reap_host_watchers(ignore_children=True, only=want)
         time.sleep(0.5)
         left = {pid for pid, _ in L.host_watchers(ignore_children=True)} & want
         other_alive = other.poll() is None and bystander.poll() is None
@@ -1795,6 +1821,22 @@ def cmd_preflight():
             raise Exception(f"{c.jar} does not exist")
         return f"build {build_hash()}"
 
+    def either_kafka():
+        """The same build should run on Apache Kafka or Confluent with a config
+        change. Reported, not enforced: an interview can ask for a Confluent-only
+        feature, and then the build is meant to need it."""
+        import zipfile
+        if not os.path.exists(c.jar):
+            return "nothing to check yet: the job jar is not built"
+        with zipfile.ZipFile(c.jar) as z:
+            only = L.vendor_only_classes(z.namelist())
+        if not only:
+            return ("no Confluent-only classes in the job jar, so this build runs on Apache Kafka or "
+                    "Confluent with only images.kafka and images.kafkaLibs changed in pipeline.json")
+        pkgs = sorted({"/".join(n.split("/")[:3]) for n in only})
+        return (f"the job jar carries {len(only):,} Confluent-only classes ({', '.join(pkgs[:3])}), so moving "
+                f"it to Apache Kafka needs more than a config change. Fine if the interview asked for them")
+
     os.makedirs(c.results, exist_ok=True)
     check("every image is native to the host arch", arch)
     check("the JDK the engine needs resolves, pinned", jdk)
@@ -1837,6 +1879,7 @@ def cmd_preflight():
     check("back-pressure counters exist on the endpoint read", bp_endpoint)
     check("the VM trim command is known", trim)
     check("the job jar exists and hashes", jar)
+    check("the build runs on either Kafka (reported)", either_kafka)
     save_json("preflight.json", {"checks": [{"check": a, "result": b, "detail": d} for a, b, d in rows],
                                  **extra})
     fails = [r for r in rows if r[1] == "FAIL"]

@@ -606,6 +606,15 @@ def cmd_selftest(live=True, topic=None):
            tools("/usr/bin/kafka-topics\n", ("/usr/bin", "")), "", should_fire=False)
     expect("kafka tools: nothing found is not guessed at (must not fire)",
            tools("", None), "", should_fire=False)
+    def libs(image, want):
+        def go():
+            got = L.default_kafka_libs(image)
+            assert got == want, f"{image} got {got!r}, expected {want!r}"
+        return go
+    expect("kafka jars: left out, Apache's path for the Apache image (must not fire)",
+           libs("apache/kafka:3.9.0", "/opt/kafka/libs"), "", should_fire=False)
+    expect("kafka jars: left out, Confluent's path for the Confluent image (must not fire)",
+           libs("confluentinc/cp-kafka:7.7.0", "/usr/share/java/kafka"), "", should_fire=False)
     def tools_only(names, want):
         def go():
             got = L.vendor_only_classes(names)

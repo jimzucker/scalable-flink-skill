@@ -2338,6 +2338,15 @@ def no_result_reason(table, runs):
                          f"usable readings at {where}.")}
 
 
+def broker_held_back(cases):
+    """The case the broker could have held back, or None: the one with the most
+    broker limit hits among cases whose worker was under its cap floor. A case
+    at its cap was the constraint itself, whatever the broker did."""
+    held = [r for r in cases if (r.get("brokerLimitHits") or 0) > T["brokerLimitHits"]
+            and (r.get("tmCapFrac") or 0) < T["brokerHitsCapExempt"]]
+    return max(held, key=lambda r: r.get("brokerLimitHits") or 0) if held else None
+
+
 def size_broker_memory(limit_bytes, hits):
     """What Kafka's memory should be, given that it ran out `hits` times.
 

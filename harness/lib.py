@@ -118,7 +118,13 @@ T = {
     # from 2 to 4 cores on this host, so a step that doubles the resource and
     # returns less than 95% of that is a result about the pipeline, not noise.
     # Set from the demo's measured 1.99x and the +-3% a two-pass ratio carries.
-    "scalingFloor": 0.95,
+    # The claim: each doubling returns at least this fraction of linear, judged on
+    # the low end of the step's range. 0.95 (1.90x) until 2026-09-24, taken from
+    # the published demo's 1.99x less a two-pass ratio's noise; lowered to 0.90
+    # (1.80x) by the author's decision. A target, not a noise threshold: this
+    # Mac's own cores return 1.48-1.82x on memory-heavy work over the same steps,
+    # and replayed against the 22 recorded steps it passes 7 where 1.90 passed 3.
+    "scalingFloor": 0.90,
     # Memory is not capped by default: this repository's own demo caps none and
     # reads 1.99x, while every memory cap we chose starved something. What the
     # claim needs is that CPU is the constraint, so instead of fixing memory's

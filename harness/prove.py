@@ -471,7 +471,7 @@ def cmd_selftest(live=True, topic=None):
     expect("detail: the baseline says why (must not fire)",
            detail(dict(tmCapFrac=0.99), 1, None, True, "Do not tune it"), "", should_fire=False)
     expect("detail: a short step names both numbers (must not fire)",
-           detail(dict(tmCapFrac=0.99), 4, short, False, "1.53x, short of the 1.90x"),
+           detail(dict(tmCapFrac=0.99), 4, short, False, f"1.53x, short of the {2 * L.T['scalingFloor']:.2f}x"),
            "", should_fire=False)
     expect("detail: a step above 2x says the smaller case reads low (must not fire)",
            detail(dict(tmCapFrac=0.99), 2, over, False, "reads too low"), "", should_fire=False)
@@ -861,21 +861,24 @@ def cmd_selftest(live=True, topic=None):
            lambda: L.disk_verdict(40e9, input_on_disk_bytes=37.9e9, **run36), "still to write")
 
     def wording_above_target():
-        """1.93x is not short of 1.90x. Clean-room run 36's scorecard said it
-        was, on the same page as a step line that got it right."""
+        """A ratio above its target is not short of it. Clean-room run 36's
+        scorecard called 1.93x short of 1.90x, on the same page as a step line
+        that got it right. Read from the target, so it cannot drift again."""
         rec = {"tmCapFrac": 0.99, "tmThrottledPeriodsPct": 40, "sourceBackpressured": 0.0,
                "gcFraction": 0.01, "brokerLimitHits": 0}
         # both ways round: with a lower bound to name, and without one. The
         # second is the path that still called 1.93x "short of" 1.90x, because
         # the branch that gets it right was reached only when a lower bound
         # existed to quote.
-        for lo in (1.896, None):
-            step = {"reportable": True, "ratio": 1.93, "idealRatio": 2.0,
+        target = 2 * L.T["scalingFloor"]
+        above = round(target + 0.03, 2)
+        for lo in (round(target - 0.004, 3), None):
+            step = {"reportable": True, "ratio": above, "idealRatio": 2.0,
                     "ratioLowCI": lo, "meetsClaim": False}
             line = L.action_detail(rec, 2, step=step) or ""
             if "short of" in line:
-                raise Exception(f"1.93x called short of its target (lowCI={lo}): {line}")
-            if "1.90" not in line or "1.93" not in line:
+                raise Exception(f"{above}x called short of its target (lowCI={lo}): {line}")
+            if f"{target:.2f}" not in line or f"{above:.2f}" not in line:
                 raise Exception(f"the line names neither number (lowCI={lo}): {line}")
     expect("scorecard: a ratio above its target is not called short of it (must not fire)",
            wording_above_target, "", should_fire=False)
@@ -887,7 +890,7 @@ def cmd_selftest(live=True, topic=None):
                 "ratioLowCI": 1.64, "meetsClaim": False}
         line = L.action_detail(rec, 4, step=step) or ""
         if "short of" not in line:
-            raise Exception(f"1.74x against a 1.90x target does not say short of: {line}")
+            raise Exception(f"1.74x against a {2 * L.T['scalingFloor']:.2f}x target does not say short of: {line}")
     expect("scorecard: a ratio below its target still says so (must not fire)",
            wording_below_target, "", should_fire=False)
 
@@ -1538,7 +1541,7 @@ def cmd_preflight():
                             f"questions and write them down; section 1a says to write the plan even "
                             f"with nobody to approve it. Both come before building.")
         plan = open(os.path.join(root, "PLAN.md")).read().lower()
-        want = {"the objective": ("1.90", "near-linear"),
+        want = {"the objective": (f"{2 * L.T['scalingFloor']:.2f}", "near-linear"),
                 "how long it takes": ("hour",),
                 "what it writes": ("record", "backlog"),
                 "the ports it takes": ("port",),
@@ -1549,7 +1552,7 @@ def cmd_preflight():
         absent = [(k, want[k]) for k in want if not any(n in plan for n in want[k])]
         # Say what was looked for. Clean-room run 44 read "the plan does not
         # mention: the objective" and had no way to know the check wanted the
-        # digits 1.90 or the words near-linear -- a plan saying "99% of linear"
+        # target's digits or the words near-linear -- a plan saying "99% of linear"
         # gets the same line. It passed only because it had read this file.
         return ("the plan names every disclosure" if not absent
                 else "the plan does not mention: "

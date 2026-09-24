@@ -174,11 +174,13 @@ broker plus the job manager do not leave the VM a spare gigabyte. Runs 20 and
 
 **The claim is gated separately from the measurement.** A table can be beyond
 reproach and still say the pipeline does not scale. `report` marks each step
-`meetsClaim` against `scalingFloor` (1.90x on a doubling) and exits non-zero when a
-step misses, so `all` ends FAIL rather than PASS. The floor comes from this
-repository's own demo, which reads 1.99x from 2 to 4 cores on the same laptop,
-less the +-3% a two-pass ratio carries. Replayed against the record before it
-shipped: 1->2 meets it in 11 of 12 recorded runs, 2->4 in three.
+`meetsClaim` against `scalingFloor` (1.80x on a doubling) and exits non-zero when a
+step misses, so `all` ends STOPPED rather than PASS. It was 1.90x until 2026-09-24,
+taken from the published demo's 1.99x less the +-3% a two-pass ratio carries; the
+author lowered it to 1.80x. It is a target, not a noise threshold: this laptop's own
+cores return 1.48-1.82x on memory-heavy work over the same steps. Replayed against
+the 22 recorded steps on the low end of their ranges, 1.80x passes 7 where 1.90x
+passed 3 -- and only the published demo passes both steps in one run.
 
 When a step misses, the report prints both cases side by side — per-core rate,
 cap, source idle, GC, back-pressure — and what this rig has already shown costs
@@ -199,9 +201,8 @@ unchanged build in an hour gave 13 pairs at 1.849 with sd 2.8%, so the two
 pairs `--quick` buys carry about ±3.9% at 95% confidence, and `ratioSdFallback`
 holds that figure for a step with a single pair.
 
-Replayed against the record: of twelve recorded runs, one (run 12) has a 2→4
-whose whole interval clears 1.90x on a doubling. That is the honest state of these
-pipelines, not a reason to move the floor.
+Replayed against the record when the floor was 1.90x: of twelve recorded runs,
+one (run 12) had a 2→4 whose whole interval cleared it.
 
 **Each step ratio also carries its adjacent pairs.** `ratioAdjacent` is the
 median of the ratios between cases measured next to each other in time, with

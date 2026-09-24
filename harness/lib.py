@@ -403,6 +403,7 @@ class Cfg:
             self.flink_props = dict(
                 (k.strip(), v.strip())
                 for k, _, v in (ln.partition(":") for ln in self.flink_props.splitlines() if ln.strip()))
+        self.flink_props = pin_collector(self.flink_props)
         # What the harness sets for the measurement is not open for discussion:
         # slots, parallelism, worker memory and the checkpoint store decide what
         # is being measured, and the slf4j reporter is where busy, idle and
@@ -551,6 +552,28 @@ def rest_patch(path, timeout=30):
 
 
 _KAFKA_TOOLS = {}
+
+
+def pin_collector(props):
+    """Every case runs the same garbage collector unless the config names one.
+
+    Left to itself Java picks the Serial collector in a one-CPU container and
+    G1 at two or more, so the one-core baseline runs a different program from
+    every case above it. Measured 2026-09-24 on the published demo's own build
+    at 4,096 keys: the 1-core case ran Copy + MarkSweepCompact (Serial) and the
+    rest G1, and 1->2 read 2.01x; with G1 on every case, nothing else changed,
+    1->2 read 1.91x. The published 2.06x came from the first configuration."""
+    props = dict(props)
+    both = " ".join(str(props.get(k, "")) for k in ("env.java.opts.taskmanager", "env.java.opts.all"))
+    if not re.search(r"-XX:\+Use\w*GC\b", both):
+        cur = str(props.get("env.java.opts.taskmanager", "")).strip()
+        props["env.java.opts.taskmanager"] = (cur + " -XX:+UseG1GC").strip()
+    return props
+
+
+def case_collectors(runs):
+    """The garbage collectors a case's passes reported, without the 'All' total."""
+    return frozenset(n for r in runs for n in (r.get("gcNames") or []) if n != "All")
 
 
 def default_kafka_libs(image):
@@ -3458,6 +3481,15 @@ def build_table(runs, cases_order=None, quick=False):
                          voidedBy=[x for x in (a, b) if not cases[x]["reportable"]],
                          reason="voided: " + "; ".join(f"{x}c {cases[x]['unreportableReason']}"
                                                       for x in (a, b) if not cases[x]["reportable"]))
+        ga, gb = case_collectors(ok.get(a, [])), case_collectors(ok.get(b, []))
+        if entry.get("reportable") and ga and gb and ga != gb:
+            # SKILL.md: a case with a different collector is a different program,
+            # so the step into it is not a scaling measurement. This was a note
+            # printed beside a passing table; the published demo's 1->2 passed on it.
+            entry.update(reportable=False, voidedBy=[a, b],
+                         reason=(f"voided: {a}c ran {', '.join(sorted(ga))} and {b}c ran "
+                                 f"{', '.join(sorted(gb))} -- a different garbage collector is a "
+                                 f"different program, so this is not a scaling step"))
         ratios.append(entry)
     order = {}
     for cores, rs in sorted(ok.items()):

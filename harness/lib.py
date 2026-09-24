@@ -2537,6 +2537,7 @@ def scorecard(out):
                      + ". A case with a different collector is a different program, so the step into "
                        "it is not a scaling measurement. Pin it in flinkProperties "
                        "(env.java.opts.taskmanager: -XX:+UseG1GC) and measure again.")
+    notes.extend(swap_note(out.get("runs") or [], t.get("cases")))
     if busy:
         worst = max(busy, key=lambda x: x[1])
         # which pass, not only how busy. Run 44 read "load reached 15.4 on 8
@@ -2832,6 +2833,73 @@ def wait_flat(deadline_s, jid=None):
                           f"drifting {detail.get('drift')} with scatter {detail.get('scatter')}.")
 
 
+def host_swap_mb():
+    """How much of the host's memory is moved out to disk right now, in MB.
+
+    Clean-room run 47's passes scattered 54-147% while every worker sat at its
+    cap. Swap separated them on all twelve passes of the test that followed:
+    the three slow ones were measured with the Mac 4.3-6.0 GB into swap, the
+    nine fast ones at 2.3 GB or less, with the broker's memory changed and
+    unchanged. Load average could not show it. None if the host will not say."""
+    try:
+        r = subprocess.run(["sysctl", "-n", "vm.swapusage"], capture_output=True, text=True, timeout=5)
+        m = re.search(r"used = ([\d.]+)M", r.stdout)
+        if m:
+            return round(float(m.group(1)), 1)
+    except Exception:
+        pass
+    try:
+        info = dict(line.split(":", 1) for line in open("/proc/meminfo"))
+        kb = lambda k: float(info[k].split()[0])
+        return round((kb("SwapTotal") - kb("SwapFree")) / 1024, 1)
+    except Exception:
+        return None
+
+
+def swap_note(runs, cases):
+    """A sentence when the host's swap, not the pipeline, split a case's passes.
+
+    Reported, never a reason to throw a pass out: one episode is not a
+    threshold. It speaks only for a case whose passes are already too far apart
+    to count, and only when there is a point in rate order where every slower
+    pass was measured with more memory moved out to disk than every faster one
+    -- the pattern run 47 showed, where the split was 3 slow passes against 1.
+
+    The separation must be at least half a gigabyte. That number is chosen,
+    not measured, and sits between what was: swap moved 0.2 GB across a whole
+    quiet suite (run 48) and 2.0 GB between run 47's slow and fast passes.
+    Because this only adds a sentence, a wrong call costs a sentence."""
+    notes = []
+    min_gap_mb = 512.0
+    for cs in (cases or {}).values():
+        if cs.get("reportable"):
+            continue
+        ps = sorted((r for r in runs if r.get("cores") == cs["cores"] and r.get("recordsPerSec")
+                     and r.get("hostSwapOpenMB") is not None and r.get("hostSwapCloseMB") is not None),
+                    key=lambda r: r["recordsPerSec"])
+        lo = lambda rs: min(min(r["hostSwapOpenMB"], r["hostSwapCloseMB"]) for r in rs)
+        hi = lambda rs: max(max(r["hostSwapOpenMB"], r["hostSwapCloseMB"]) for r in rs)
+        best = None
+        for k in range(1, len(ps)):
+            slow, fast = ps[:k], ps[k:]
+            if lo(slow) - hi(fast) >= min_gap_mb:
+                gap = fast[0]["recordsPerSec"] / slow[-1]["recordsPerSec"]
+                if best is None or gap > best[0]:
+                    best = (gap, slow, fast)
+        if not best:
+            continue
+        _, slow, fast = best
+        gb = lambda mb: f"{mb / 1024:.1f}"
+        rates = lambda rs: ", ".join(f"{r['recordsPerSec']:,.0f}/s" for r in rs)
+        which = lambda rs, word: f"the {word} pass" if len(rs) == 1 else f"the {word} passes"
+        was = "was" if len(slow) == 1 else "were"
+        notes.append(f"  {n_cores(cs['cores'])}: {which(slow, 'slower')} ({rates(slow)}) {was} measured while "
+                     f"the machine had {gb(lo(slow))}-{gb(hi(slow))} GB of its memory moved out to disk, "
+                     f"{which(fast, 'faster')} ({rates(fast)}) at {gb(lo(fast))}-{gb(hi(fast))} GB. The machine "
+                     f"was short of memory, not the pipeline. Close what else is using memory and measure again.")
+    return notes
+
+
 def check_case(rec, cores, is_baseline):
     """Pure guards on a finished case record. Every refusal here is about the
     case's DATA. `selftest` feeds this synthetic records."""
@@ -3028,6 +3096,7 @@ def run_case(cores, pass_id, run_id, shape_ref, is_baseline, manifest,
         try:
             rec["hostLoadOpen"] = round(os.getloadavg()[0], 2)
             rec["hostCores"] = os.cpu_count()
+            rec["hostSwapOpenMB"] = host_swap_mb()
         except Exception:
             pass
         boundaries, last, close_tick = 1, open_tick, None
@@ -3052,6 +3121,7 @@ def run_case(cores, pass_id, run_id, shape_ref, is_baseline, manifest,
         close_progress = progress_from_outputs(mpath) if want_progress else None
         try:
             rec["hostLoadClose"] = round(os.getloadavg()[0], 2)
+            rec["hostSwapCloseMB"] = host_swap_mb()
         except Exception:
             pass
         rec["boundaries"] = boundaries - 1

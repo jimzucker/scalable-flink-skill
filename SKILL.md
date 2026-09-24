@@ -416,6 +416,16 @@ work per cycle — the one failure mode every resource column in the table is
 blind to. The load average is recorded at the open and close of every window
 for exactly this reason.
 
+**Memory counts as much as cores.** Clean-room run 47's passes came back
+54–147% apart with every worker at its cap and nothing wrong in the
+pipeline: the machine had moved 4.3–6.0 GB of its memory out to disk during
+the slow passes and 2.3 GB or less during the fast ones. The load average did
+not show it. So the harness also records how much memory the machine has moved
+out to disk at the open and close of every window, and when a case's passes
+are too far apart to count and that figure splits the slow ones from the fast
+ones, the report says so. Close what is using memory, not only what is using
+the processor.
+
 **Cap the component under test; hold everything else still.** Capping a task
 manager at 1, 2 and 4 cores on one laptop reproduces the curve that took 32
 vCPUs and three brokers the expensive way, and it does not teach the audience

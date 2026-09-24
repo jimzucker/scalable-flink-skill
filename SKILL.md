@@ -176,9 +176,20 @@ A reader can then see what was assumed rather than agreed.
 
    *Default: Apache.*
 
-   Both are driven by `images.kafka` and `images.kafkaLibs` in `pipeline.json`
-   — the harness mines the broker image for its client jar, so the library path
-   moves with the vendor.
+   **The answer picks which Kafka is measured, not what the pipeline is built
+   for.** Build it so the other one works with a config change: the job, the
+   generator and the verifier take the broker's address from their arguments and
+   use the Apache Kafka client, which talks to either broker, and nothing
+   vendor-only — no Schema Registry, no Confluent serializers — unless the
+   interview asks for it. Switching is then two lines in `pipeline.json`:
+
+   | | `images.kafka` | `images.kafkaLibs` |
+   |---|---|---|
+   | Apache | `apache/kafka:3.9.0` | `/opt/kafka/libs` |
+   | Confluent | `confluentinc/cp-kafka:7.7.0` | `/usr/share/java/kafka` |
+
+   The harness finds the broker's own tools wherever the image keeps them, and
+   preflight reports whether the job jar carries anything Confluent-only.
 
 ## 1a. Then the plan, and stop
 

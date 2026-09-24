@@ -554,6 +554,21 @@ def cmd_selftest(live=True, topic=None):
            swapcase(SWAP_48, 1, False, None), "", should_fire=False)
     expect("swap: a case that counts gets no swap sentence (must not fire)",
            swapcase(SWAP_47, 4, True, None), "", should_fire=False)
+    # Finding F10, run 48: `orders-*` matched orders-tiny-0 and orders-small-3,
+    # so the suite's backlog was credited with 12.5 GB it did not have.
+    DIRS = ["orders-0", "orders-7", "orders-tiny-0", "orders-tiny-7", "orders-small-3",
+            "prices-0", "orders-2024-1", "__consumer_offsets-12", "orders"]
+    def dirs(topics, want):
+        def go():
+            got = L.partition_dirs(DIRS, topics)
+            assert got == want, f"picked {got!r}, expected {want!r}"
+        return go
+    expect("disk: a topic's bytes are its own partitions only (must not fire)",
+           dirs(["orders"], ["orders-0", "orders-7"]), "", should_fire=False)
+    expect("disk: a longer topic with the same start is its own (must not fire)",
+           dirs(["orders-tiny"], ["orders-tiny-0", "orders-tiny-7"]), "", should_fire=False)
+    expect("disk: two topics together (must not fire)",
+           dirs(["orders", "prices"], ["orders-0", "orders-7", "prices-0"]), "", should_fire=False)
     expect("the broker was starved of page cache (cores off their cap)",
            case(brokerLimitHits=310423, brokerRefaults=6270562, tmCapFrac=0.93), "hit its memory limit", ceiling=True)
     expect("cores off their cap with no broker hits still says something else held it back",

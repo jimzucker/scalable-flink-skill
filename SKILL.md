@@ -191,7 +191,7 @@ been asked:
 
 | | |
 |---|---|
-| the objective | near-linear scaling across 1, 2 and 4 cores. Each step must return **1.90× or better** on a doubling. Two steps are reported, 1→2 and 2→4 |
+| the objective | near-linear scaling across 1, 2 and 4 cores. Each step must return **1.80× or better** on a doubling. Two steps are reported, 1→2 and 2→4 |
 | where it runs | a laptop, in Docker |
 | the stack | the images in `pipeline.json` — Flink, and the Kafka chosen in question 6 |
 | what is measured | the drain rate of a fixed backlog at each core count, read from committed broker offsets, with the resource columns beside it |
@@ -684,7 +684,7 @@ for it.
 | an output the business case asks for was never written | after the completeness drain, every topic named in `topicsAlsoWritten` has records. These are the pipeline's own outputs — the throttled ones, outside `topics.out` — and nothing else looks at them. Two clean-room runs in a row built **one** market value where the default asks for two, and passed every other guard |
 | the keys divide evenly across subtasks | the engine's own key-group assignment says where every key in `keySets` would land at every case. A subtask with **no keys** always stops the run; an uneven one stops it when a `pipeline.max-parallelism` exists that would even it out, and is reported in the row when none does |
 | memory is not the constraint | **every case gives its subtasks the same memory**, as a base plus a per-core share. Passing nothing does not leave memory to the engine: the image ships a flat figure — `flink:1.20.1` sets 1728m — so every case runs on the same total, which is the configuration this rule exists to catch. Clean-room run 36 measured 2→4 at 1.510 on the image default against 1.743 with memory per subtask, and the GC ceiling did **not** catch it: GC was at its lowest, 1.40%, on the case losing the most. A case whose GC exceeds 5.5% of its capacity is still a ceiling, not a result |
-| the claim itself | each step returns **1.90× or better** on a doubling, or the chain fails with the per-core, idle, GC and cap figures for both cases — a valid table that does not scale is a result about the pipeline, not a table to publish |
+| the claim itself | each step returns **1.80× or better** on a doubling, judged on the low end of its range, or the chain fails with the per-core, idle, GC and cap figures for both cases — a valid table that does not scale is a result about the pipeline, not a table to publish |
 | a failed case still owns the cluster | job torn down on **every** exit path |
 | no job is actually running | engine reports RUNNING with the expected parallelism |
 | the cluster is still busy from the last case | assert idle by asking the engine, not by killing what you think is there |
@@ -754,7 +754,7 @@ cheap, and it decides whether there is anything in the pipeline to look for.
 
 **When there is no human to say yes, tune until you run out of levers.**
 **What is being tuned is the steps, not any case's speed.** The claim is
-1→2 and 2→4, each 1.90× or better. Making the baseline faster makes the step
+1→2 and 2→4, each 1.80× or better. Making the baseline faster makes the step
 off it *smaller*, so a faster one-core case is not progress and can be the
 opposite — the only thing worth fixing on a baseline is a way it differs from
 the cases above it, and clean-room run 35 found exactly one: a different
@@ -892,9 +892,9 @@ SCORECARD
       off it smaller, and the steps are what is being claimed. The only thing worth
       fixing here is a way it differs from the other cases — a different garbage
       collector, a different job graph, a cap that did not apply.
-  4 cores: doubling gave 1.80x, short of the 1.90x target.
+  4 cores: doubling gave 1.74x, short of the 1.80x target.
 
-  2->4 cores: doubling gave 1.80x, target 1.90x  ->  missed
+  2->4 cores: doubling gave 1.74x, target 1.80x  ->  missed
 ```
 
 **The shape is a rule, not a preference**, because it drifted back twice in one

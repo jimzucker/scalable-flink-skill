@@ -426,7 +426,7 @@ class Cfg:
         # sampler inside that image, so the path moves with the vendor:
         # apache/kafka keeps them in /opt/kafka/libs, confluentinc/cp-kafka in
         # /usr/share/java/kafka. Wrong path refuses rather than measuring badly.
-        self.kafka_libs = c["images"].get("kafkaLibs", "/opt/kafka/libs").rstrip("/")
+        self.kafka_libs = c["images"].get("kafkaLibs", default_kafka_libs(self.kafka_img)).rstrip("/")
         # deterministic 22-char base64url id, stable for this project
         self.cluster_id = base64.urlsafe_b64encode(
             hashlib.sha256(self.project.encode()).digest()[:16]).decode().rstrip("=")
@@ -551,6 +551,13 @@ def rest_patch(path, timeout=30):
 
 
 _KAFKA_TOOLS = {}
+
+
+def default_kafka_libs(image):
+    """Where a broker image keeps its jars, when pipeline.json does not say.
+    Naming the image is then enough: a config that set images.kafka to
+    confluentinc/cp-kafka and left kafkaLibs out used to get Apache's path."""
+    return "/usr/share/java/kafka" if "confluentinc/" in (image or "") else "/opt/kafka/libs"
 
 
 def vendor_only_classes(names):

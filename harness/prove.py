@@ -617,6 +617,17 @@ def cmd_selftest(live=True, topic=None):
     expect("either Kafka: Confluent serializers are found (must not fire)",
            tools_only(["io/confluent/kafka/serializers/KafkaAvroSerializer.class", "io/confluent/x.txt"],
                       ["io/confluent/kafka/serializers/KafkaAvroSerializer.class"]), "", should_fire=False)
+    # Finding F10, run 49: the tiny proof advised more broker memory for a case
+    # at 100.1% of its cap. Cases (cores, cap used, broker limit hits):
+    def held(cases, want_cores):
+        def go():
+            got = L.broker_held_back([dict(cores=c, tmCapFrac=f, brokerLimitHits=h) for c, f, h in cases])
+            assert (got or {}).get("cores") == want_cores, f"picked {got!r}, expected cores {want_cores}"
+        return go
+    expect("broker advice: run 49's hits on cases at their cap ask for nothing (must not fire)",
+           held([(1, 1.002, 381), (2, 0.992, 0), (4, 1.001, 0)], None), "", should_fire=False)
+    expect("broker advice: a case under its cap with hits is the one named (must not fire)",
+           held([(1, 0.99, 2000), (4, 0.93, 30927)], 4), "", should_fire=False)
     expect("the broker was starved of page cache (cores off their cap)",
            case(brokerLimitHits=310423, brokerRefaults=6270562, tmCapFrac=0.93), "hit its memory limit", ceiling=True)
     expect("cores off their cap with no broker hits still says something else held it back",
@@ -2020,7 +2031,15 @@ def cmd_tinyproof():
             # broker sizing skipped the only evidence it had.
             worst = max(out["cases"], key=lambda r: r.get("brokerLimitHits") or 0)
             hits = worst.get("brokerLimitHits") or 0
-            want_mem = L.size_broker_memory(worst.get("brokerLimitBytes") or 0, hits)
+            # Advice only where the broker could have held the worker back: a case
+            # under its cap floor. A case at its cap is the constraint whatever the
+            # broker did (the rule check_case applies since 2026-09-24). Clean-room
+            # run 49 was told to drop its 4-core case for 381 hits on a case at
+            # 100.1% of cap, then passed both steps (finding F10).
+            held = L.broker_held_back(out["cases"])
+            if held:
+                worst, hits = held, held.get("brokerLimitHits") or 0
+            want_mem = L.size_broker_memory(worst.get("brokerLimitBytes") or 0, hits) if held else None
             out["brokerLimitHits"] = hits
             out["brokerMemoryNeededMb"] = want_mem
             if want_mem:
@@ -2038,8 +2057,9 @@ def cmd_tinyproof():
                     f"back as ceilings, {want_mem}m is the size to try"
                     + (f" -- {doesnt_fit}" if doesnt_fit else "."))
             else:
-                log(f"  kafka memory: {(worst.get('brokerLimitBytes') or 0) / 1048576:.0f}m, "
-                    f"ran out {hits} times")
+                log(f"  kafka memory: {(worst.get('brokerLimitBytes') or 0) / 1048576:.0f}m, hit its limit "
+                    f"{hits:,} times" + (" with every worker at its cap, so nothing to change"
+                                         if hits else ""))
             # Every step the suite will report, bounded here. The pairs are the
             # adjacent ones the report leads with, plus the whole span, so a
             # config with three cases has its middle step checked too -- the

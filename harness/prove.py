@@ -606,6 +606,28 @@ def cmd_selftest(live=True, topic=None):
            tools("/usr/bin/kafka-topics\n", ("/usr/bin", "")), "", should_fire=False)
     expect("kafka tools: nothing found is not guessed at (must not fire)",
            tools("", None), "", should_fire=False)
+    def pinned(props, want):
+        def go():
+            got = L.pin_collector(props).get("env.java.opts.taskmanager")
+            assert got == want, f"{props!r} gave {got!r}, expected {want!r}"
+        return go
+    expect("collector: none named, G1 on every case (must not fire)",
+           pinned({}, "-XX:+UseG1GC"), "", should_fire=False)
+    expect("collector: other options kept, G1 added (must not fire)",
+           pinned({"env.java.opts.taskmanager": "-Xss1m"}, "-Xss1m -XX:+UseG1GC"), "", should_fire=False)
+    expect("collector: one the config names is left alone (must not fire)",
+           pinned({"env.java.opts.taskmanager": "-XX:+UseParallelGC"}, "-XX:+UseParallelGC"), "", should_fire=False)
+    def mixed_gc():
+        def run(c, p, rate, gc):
+            return dict(cores=c, **{"pass": p}, recordsPerSec=rate, status="OK", gcNames=["All"] + gc)
+        serial, g1 = ["Copy", "MarkSweepCompact"], ["G1 Old Generation", "G1 Young Generation"]
+        runs = [run(1, "p1-asc", 56299, serial), run(1, "p2-desc", 59341, serial),
+                run(2, "p1-asc", 117954, g1), run(2, "p2-desc", 118055, g1)]
+        t = L.build_table(runs, [1, 2])
+        st = t["stepRatios"][0]
+        assert st["reportable"] is False and "garbage collector" in st["reason"], st
+    expect("collector: a step between a Serial and a G1 case is not counted (must not fire)",
+           mixed_gc, "", should_fire=False)
     def libs(image, want):
         def go():
             got = L.default_kafka_libs(image)

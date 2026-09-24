@@ -531,6 +531,29 @@ def cmd_selftest(live=True, topic=None):
     expect("garbage collection is the constraint", case(gcFracOfCapacity=0.13), "garbage collection", ceiling=True)
     expect("GC at the worst level that behaved, 4.8% (must not fire)",
            case(gcFracOfCapacity=0.048), "", should_fire=False)
+    # The machine's swap, read at each window's open and close. Real readings:
+    # run 47's broker test, arm A, four-core passes (rate, swap MB at open, at
+    # close), and run 48 chain 3's one-core passes on a quiet machine.
+    SWAP_47 = [(227272, 4840.94, 6187.06), (282954, 4734.88, 4620.38),
+               (243496, 4529.06, 4394.69), (428504, 2375.56, 2018.31)]
+    SWAP_48 = [(129601, 2467.75, 2459.75), (125597, 2315.75, 2291.75),
+               (129686, 2275.75, 2267.75), (130460, 2251.75, 2251.75)]
+    def swapcase(rows, cores, reportable, want):
+        def go():
+            runs = [dict(cores=cores, recordsPerSec=r, hostSwapOpenMB=o, hostSwapCloseMB=c) for r, o, c in rows]
+            got = L.swap_note(runs, {str(cores): dict(cores=cores, reportable=reportable)})
+            if want is None:
+                assert not got, f"said {got!r} where swap did not split the passes"
+            else:
+                assert got and all(w in got[0] for w in want), f"said {got!r}, expected {want!r}"
+        return go
+    expect("swap: run 47's slow passes are put down to the machine's memory (must not fire)",
+           swapcase(SWAP_47, 4, False, ["227,272/s, 243,496/s, 282,954/s", "4.3-6.0 GB", "428,504/s", "2.0-2.3 GB",
+                                        "short of memory, not the pipeline"]), "", should_fire=False)
+    expect("swap: a quiet machine says nothing about swap (must not fire)",
+           swapcase(SWAP_48, 1, False, None), "", should_fire=False)
+    expect("swap: a case that counts gets no swap sentence (must not fire)",
+           swapcase(SWAP_47, 4, True, None), "", should_fire=False)
     expect("the broker was starved of page cache (cores off their cap)",
            case(brokerLimitHits=310423, brokerRefaults=6270562, tmCapFrac=0.93), "hit its memory limit", ceiling=True)
     expect("cores off their cap with no broker hits still says something else held it back",

@@ -327,7 +327,11 @@ def cmd_selftest(live=True, topic=None):
     expect("bottleneck label: Pipeline CPU (must not fire)",
            labelled(dict(tmCapFrac=0.99), "Pipeline CPU"), "", should_fire=False)
     expect("bottleneck label: Kafka memory (must not fire)",
-           labelled(dict(tmCapFrac=0.96, brokerLimitHits=12780), "Kafka memory"), "", should_fire=False)
+           labelled(dict(tmCapFrac=0.93, brokerLimitHits=12780), "Kafka memory"), "", should_fire=False)
+    # Runs 46-48: passes at 95-99% of cap with broker limit hits were blamed on
+    # Kafka and thrown out, at rates inside the passes kept beside them.
+    expect("bottleneck label: broker hits at 96.8% of cap are not blamed on Kafka (must not fire)",
+           labelled(dict(tmCapFrac=0.968, brokerLimitHits=10517), "Pipeline CPU"), "", should_fire=False)
     expect("bottleneck label: Pipeline memory (must not fire)",
            labelled(dict(tmCapFrac=0.99, gcFracOfCapacity=0.064), "Pipeline memory"), "", should_fire=False)
     expect("bottleneck label: Kafka writes (must not fire)",
@@ -472,7 +476,7 @@ def cmd_selftest(live=True, topic=None):
     expect("detail: a step above 2x says the smaller case reads low (must not fire)",
            detail(dict(tmCapFrac=0.99), 2, over, False, "reads too low"), "", should_fire=False)
     expect("detail: Kafka memory names the size to try (must not fire)",
-           detail(dict(tmCapFrac=0.96, brokerLimitHits=12780, brokerLimitBytes=4096 * 1048576),
+           detail(dict(tmCapFrac=0.93, brokerLimitHits=12780, brokerLimitBytes=4096 * 1048576),
                   2, None, False, "from 4g to about 6.25g"), "", should_fire=False)
     expect("action: the baseline has no step into it (must not fire)",
            steps(dict(tmCapFrac=0.99), None, True, "check it matches"), "", should_fire=False)
@@ -488,7 +492,7 @@ def cmd_selftest(live=True, topic=None):
     expect("action: says so when there is no usable step (must not fire)",
            acts(dict(tmCapFrac=0.99), "no usable step"), "", should_fire=False)
     expect("action: names the Kafka memory to try, in gigabytes (must not fire)",
-           acts(dict(tmCapFrac=0.96, brokerLimitHits=12780, brokerLimitBytes=4096 * 1048576),
+           acts(dict(tmCapFrac=0.93, brokerLimitHits=12780, brokerLimitBytes=4096 * 1048576),
                 "raise kafkaMemory"), "", should_fire=False)
     expect("action: more memory for the pipeline (must not fire)",
            acts(dict(tmCapFrac=0.99, gcFracOfCapacity=0.064), "more memory"), "", should_fire=False)
@@ -497,7 +501,7 @@ def cmd_selftest(live=True, topic=None):
     expect("bottleneck: CPU is the block (must not fire)",
            names(dict(tmCapFrac=0.99), "blocking higher throughput"), "", should_fire=False)
     expect("bottleneck: Kafka out of memory (must not fire)",
-           names(dict(tmCapFrac=0.96, brokerLimitHits=12780), "Kafka's memory"),
+           names(dict(tmCapFrac=0.93, brokerLimitHits=12780), "Kafka's memory"),
            "", should_fire=False)
     expect("bottleneck: out of memory (must not fire)",
            names(dict(tmCapFrac=0.99, gcFracOfCapacity=0.064), "cleaning up memory"),
@@ -528,7 +532,15 @@ def cmd_selftest(live=True, topic=None):
     expect("GC at the worst level that behaved, 4.8% (must not fire)",
            case(gcFracOfCapacity=0.048), "", should_fire=False)
     expect("the broker was starved of page cache (cores off their cap)",
-           case(brokerLimitHits=310423, brokerRefaults=6270562, tmCapFrac=0.964), "ran out of memory", ceiling=True)
+           case(brokerLimitHits=310423, brokerRefaults=6270562, tmCapFrac=0.93), "hit its memory limit", ceiling=True)
+    expect("cores off their cap with no broker hits still says something else held it back",
+           case(tmCapFrac=0.93), "Something else was holding it back", ceiling=True)
+    # The 99% exemption this replaced threw out twelve recorded passes at 95-99%
+    # of cap, every one within -4.7% to +5.2% of the passes kept beside it.
+    expect("broker limit hits at 97.9% of cap: the pass is kept (must not fire)",
+           case(brokerLimitHits=1494, brokerRefaults=90000, tmCapFrac=0.979), "", should_fire=False)
+    expect("broker limit hits at exactly the cap floor: the pass is kept (must not fire)",
+           case(brokerLimitHits=4496, brokerRefaults=300000, tmCapFrac=0.95), "", should_fire=False)
     expect("broker limit hits while the cores are pinned (must not fire)",
            case(brokerLimitHits=9437, brokerRefaults=572000, tmCapFrac=0.996), "", should_fire=False)
     expect("a broker that never hit its limit (must not fire)",

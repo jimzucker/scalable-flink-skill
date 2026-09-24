@@ -2,7 +2,7 @@
  "why": "Case verdicts whose classification is already known. The suite record holds rates and step verdicts but no cap fractions or broker counters, so a change to what makes a case valid cannot be replayed against it. These can. A case is either a scaling claim (the component under test was the constraint), a ceiling observation (something else was, which is a finding and not a defect), or invalid (the measurement itself cannot be trusted). Rates were not recorded here, because no rule needed them -- which means a rule that asks 'was this suspected ceiling actually slower than its siblings?' cannot be replayed at all. Clean-room run 42's cases carry rates so that it can be.",
  "cases": [
   {
-   "name": "run 5's 4-core case, 94% of cap \u2014 published a 2.82x that was retracted",
+   "name": "run 5's 4-core case, 94% of cap — published a 2.82x that was retracted",
    "expect": "ceiling",
    "rec": {
     "tmCapFrac": 0.94,
@@ -13,13 +13,14 @@
   },
   {
    "name": "the 2 GiB broker, 4 cores at 96.4% of cap, 30,927 limit hits, 13% slow",
-   "expect": "ceiling",
+   "expect": "claim",
    "rec": {
     "tmCapFrac": 0.964,
     "sourceIdle": 0.03,
     "brokerLimitHits": 30927,
     "brokerRefaults": 520575
-   }
+   },
+   "why": "Changed 2026-09-24 from ceiling. Judged per pass, a worker at 96.4% of its cap is the constraint, the same 0.95 floor every other guard uses. What was wrong here was the broker's SIZE, and preflight now stops a 2 GiB broker at setup: it leaves under 1 GB of page cache against the recorded floor of 3.25 GB (broker_cache_floor_mib, record/configs.json), so this configuration never reaches a pass."
   },
   {
    "name": "run 19's 4-core pass at 94.1% of cap",
@@ -97,24 +98,24 @@
   {
    "run": "run-42",
    "cores": 4,
-   "expect": "ceiling",
+   "expect": "claim",
    "rec": {
     "brokerLimitHits": 2840,
     "tmCapFrac": 0.964,
     "recordsPerSec": 2604148.0
    },
-   "why": "classified a ceiling today. DISPUTED: it was the FASTEST of its three passes, and after the broker was given its page cache the same case read 2,399,774-2,657,223/s -- this reading sits inside that band, so nothing about it was depressed."
+   "why": "classified a ceiling today. DISPUTED: it was the FASTEST of its three passes, and after the broker was given its page cache the same case read 2,399,774-2,657,223/s -- this reading sits inside that band, so nothing about it was depressed. RESOLVED 2026-09-24: kept, now that the broker guard uses the 0.95 cap floor."
   },
   {
    "run": "run-42",
    "cores": 4,
-   "expect": "ceiling",
+   "expect": "claim",
    "rec": {
     "brokerLimitHits": 2838,
     "tmCapFrac": 0.989,
     "recordsPerSec": 2622527.0
    },
-   "why": "classified a ceiling today, by one tenth of a point of the 0.99 cap exemption, with essentially the same hit count as the pass that was kept. DISPUTED on the same evidence."
+   "why": "classified a ceiling today, by one tenth of a point of the 0.99 cap exemption, with essentially the same hit count as the pass that was kept. DISPUTED on the same evidence. RESOLVED 2026-09-24: kept, now that the broker guard uses the 0.95 cap floor."
   },
   {
    "run": "run-42",
@@ -148,6 +149,72 @@
     "recordsPerSec": 2657223.0
    },
    "why": "the same case's fastest pass with no limit hits at all."
+  },
+  {
+   "run": "run-32",
+   "cores": 2,
+   "expect": "claim",
+   "rec": {
+    "brokerLimitHits": 19565,
+    "tmCapFrac": 0.988,
+    "recordsPerSec": 540832.0
+   },
+   "why": "thrown out under the 0.99 rule; +5.2% of the passes kept beside it."
+  },
+  {
+   "run": "run-46",
+   "cores": 4,
+   "expect": "claim",
+   "rec": {
+    "brokerLimitHits": 2978,
+    "tmCapFrac": 0.985,
+    "recordsPerSec": 2952272.0
+   },
+   "why": "thrown out under the 0.99 rule; -2.3% of the passes kept beside it."
+  },
+  {
+   "run": "run-47",
+   "cores": 1,
+   "expect": "claim",
+   "rec": {
+    "brokerLimitHits": 5556,
+    "tmCapFrac": 0.986,
+    "recordsPerSec": 128794.0
+   },
+   "why": "re-measure on a quiet host: thrown out under the 0.99 rule; +4.7% of the passes kept beside it."
+  },
+  {
+   "run": "run-47",
+   "cores": 2,
+   "expect": "claim",
+   "rec": {
+    "brokerLimitHits": 10517,
+    "tmCapFrac": 0.968,
+    "recordsPerSec": 220730.0
+   },
+   "why": "re-measure on a quiet host: thrown out under the 0.99 rule; -2.0% of the passes kept beside it, with more limit hits (10,555 and 11,138) on the passes that were kept."
+  },
+  {
+   "run": "run-48",
+   "cores": 1,
+   "expect": "claim",
+   "rec": {
+    "brokerLimitHits": 1494,
+    "tmCapFrac": 0.979,
+    "recordsPerSec": 130915.0
+   },
+   "why": "the sentinel of chain 2, thrown out under the 0.99 rule with FEWER limit hits than three 1-core passes that were kept (1,897-2,747); -4.5% of them. Clean-room finding F13."
+  },
+  {
+   "run": "run-48",
+   "cores": 1,
+   "expect": "claim",
+   "rec": {
+    "brokerLimitHits": 1122,
+    "tmCapFrac": 0.978,
+    "recordsPerSec": 129686.0
+   },
+   "why": "chain 3, thrown out under the 0.99 rule; -0.3% of the passes kept beside it, and it cost the tiny proof its 1->2 check."
   }
  ]
 }

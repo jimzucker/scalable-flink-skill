@@ -86,22 +86,17 @@ T = {
     # the seven cases measured at 4 GiB the limit was hit zero times inside a
     # window, so any hit at all is outside the measured noise.
     "brokerLimitHits": 0,
-    # a worker this close to its cap is the constraint regardless of the broker.
-    # UNSETTLED, and the record now holds the evidence: everywhere else in this
-    # harness 0.95 of cap IS the component being the constraint (capFloorBaseline
-    # and capFloorOther, both 0.95). This one rule asks for 0.99, and nothing says
-    # why. Clean-room run 42 lost its two FASTEST four-core passes in that
-    # four-point gap, at 96.4% and 98.9%, one of them by a tenth of a point --
-    # while the slowest pass of the same case was kept at 99.1% with the same
-    # ~2,800 limit hits. Sweeping both knobs against every recorded verdict, a
-    # hit tolerance of 5,000 with an exemption of 0.97 satisfies all of them AND
-    # keeps run 42's passes -- but that pair was fitted to the record, not
-    # measured, so it is not being shipped on one run. What IS measured, one rig
-    # and kafkaMemory the only variable: ~2,800 hits gave 2,545,923-2,622,527/s
-    # and zero hits gave 2,399,774-2,657,223/s. The ranges overlap almost
-    # entirely, so at this broker size those hits cost nothing detectable.
-    # Three passes either way is not a threshold. The next windowed run settles it.
-    "brokerHitsCapExempt": 0.99,
+    # A worker at its cap is the constraint whatever the broker is doing, and
+    # "at its cap" is the same 0.95 every other guard uses. This was 0.99 and
+    # marked UNSETTLED; runs 46-48 settled it. Replayed on 2026-09-24 against
+    # every recorded suite: the 99% rule threw out twelve passes at 95-99% of
+    # cap (runs 32, 46, 47, 48) and every one sat -4.7% to +5.2% of the passes
+    # kept beside it -- inside the case's own noise, never slow. Limit hits do
+    # not separate the outcomes (run 23: 9,437 hits at 99.6% of cap, no rate
+    # effect). The broker that really was too small -- 2 GiB, 13% slow -- is
+    # stopped at setup by the page-cache floor (broker_cache_floor_mib) before
+    # a single pass is measured, which is where that check belongs.
+    "brokerHitsCapExempt": 0.95,
     # external boundary: a starved source idles (run 5: the broker was the ceiling
     # at 43% back-pressure with the TM under cap). Measured 2026-09-04: at-cap
     # 2-core cases idle 8.1-16.8% at the same throughput (14 cases, sd 2.3%), and
@@ -2909,24 +2904,30 @@ def check_case(rec, cores, is_baseline):
                               f"no way to tell whether the pipeline was working or waiting on Kafka.")
     floor = T["capFloorBaseline"] if is_baseline else T["capFloorOther"]
     if rec["tmCapFrac"] < floor:
+        why = "Something else was holding it back"
+        hits = rec.get("brokerLimitHits") or 0
+        if hits > T["brokerLimitHits"]:
+            lim = rec.get("brokerLimitBytes") or 0
+            # measured 2026-09-07 (run 21): 3,840 MiB gave 995 hits and 6,144 gave none,
+            # so the step that worked was x1.6. Named here so the next run raises it once.
+            hint = (f" Raise caps.kafkaMemory from {lim / 1048576:.0f}m to about "
+                    f"{int(lim * 1.6 / 268435456) * 256:.0f}m.") if lim else ""
+            why = (f"Kafka hit its memory limit {hits:,} times during the window and had to read the "
+                   f"backlog back off disk ({rec.get('brokerRefaults', 0):,} page refaults), which is the "
+                   f"likely reason.{hint} It")
+            raise Ceiling(f"the pipeline only used {rec['tmCapFrac']:.1%} of the {cores} cores it was given, and "
+                          f"it needs {floor:.0%} to count. {why} shows where scaling stops, and is kept in the "
+                          f"table and left out of the ratios.", rec)
         raise Ceiling(f"the pipeline only used {rec['tmCapFrac']:.1%} of the {cores} cores it was given, and it needs "
-                      f"{floor:.0%} to count. Something else was holding it back, so this case shows where "
+                      f"{floor:.0%} to count. {why}, so this case shows where "
                       f"scaling stops. It is kept in the table and left out of the ratios.", rec)
     # A worker at its cap is not waiting on the broker, whatever the broker's
-    # cgroup is doing. Measured twice: run 23's 1-core case hit the limit 9,437
+    # cgroup is doing: broker limit hits on a pass at or above the cap floor are
+    # reported and nothing more. Below the floor they are named as the likely
+    # reason, above. (Measured twice: run 23's 1-core case hit the limit 9,437
     # times at 99.6% of cap with no rate effect, while its 4-core case hit it
     # zero times -- on an idle VM the page cache reaches the cgroup limit, and
-    # under load global reclaim trims first. The case this guard was built for
-    # sat at 96.4% of cap and ran 13% slow.
-    if (rec.get("brokerLimitHits") or 0) > T["brokerLimitHits"] and rec["tmCapFrac"] < T["brokerHitsCapExempt"]:
-        lim = rec.get("brokerLimitBytes") or 0
-        # measured 2026-09-07 (run 21): 3,840 MiB gave 995 hits and 6,144 gave none,
-        # so the step that worked was x1.6. Named here so the next run raises it once.
-        hint = (f" — raise caps.kafkaMemory from {lim / 1048576:.0f}m to about "
-                f"{int(lim * 1.6 / 268435456) * 256:.0f}m") if lim else ""
-        raise Ceiling(f"Kafka ran out of memory {rec['brokerLimitHits']:,} times during the window and had "
-                      f"to read the backlog back off disk ({rec.get('brokerRefaults', 0):,} page refaults). "
-                      f"Kafka was the bottleneck here, not the cores.{hint}", rec)
+    # under load global reclaim trims first.)
     if (rec.get("gcFracOfCapacity") or 0) > T["gcCeil"]:
         raise Ceiling(f"garbage collection used {rec['gcFracOfCapacity']:.1%} of this case's time and the "
                       f"limit is {T['gcCeil']:.1%}. The pipeline ran short of memory, not cores. Give it more "

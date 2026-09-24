@@ -178,6 +178,13 @@ T = {
     # retention on undrained sink topics is a periodic sweep, not a bound (run 5:
     # 27 GB against a 4 GB cap between sweeps); 2 GB/partition let run 10's
     # sinks run without a sweep inside a window
+    # A fill that stops writing. Chosen, not measured, and set well clear of any
+    # healthy fill: run 48's generator spent 6.7 minutes writing its own price
+    # feed before its first order, and healthy fills here write 0.6-3.9 million
+    # records a second, so five minutes with no growth is not a pause. Run 48's
+    # generator died 7.5 s in and was waited on for 29 minutes (finding F8).
+    "fillStartS": 600.0,
+    "fillStallS": 300.0,
     "sinkRetentionBytes": 2 * 1024 ** 3,
 }
 
@@ -1312,6 +1319,30 @@ def manifest_path_of(manifest):
     return MANIFEST_PATHS.get(id(manifest))
 
 
+def minutes(seconds):
+    n = round(seconds / 60)
+    return "1 minute" if n == 1 else f"{n} minutes"
+
+
+def fill_stall_reason(samples, now, topic, start_s=None, stall_s=None):
+    """Why a running fill should be stopped, in one sentence, or None.
+
+    samples: [(time, records on the topic)], the first taken when the
+    generator started. Pure, so the self-test can drive it."""
+    start_s = T["fillStartS"] if start_s is None else start_s
+    stall_s = T["fillStallS"] if stall_s is None else stall_s
+    t0 = samples[0][0]
+    top = max(n for _, n in samples)
+    if top <= samples[0][1]:
+        if now - t0 >= start_s:
+            return f"the generator has written nothing to {topic} in {minutes(now - t0)}"
+        return None
+    grew = max(t for (t, n), (_, prev) in zip(samples[1:], samples) if n > prev)
+    if now - grew >= stall_s:
+        return f"{topic} has held at {top:,} records for {minutes(now - grew)} -- the generator stopped writing"
+    return None
+
+
 def fill(topic, count, seed, manifest_name):
     """Fill a backlog, write its manifest, read the log end back against it."""
     c = cfg()
@@ -1320,8 +1351,51 @@ def fill(topic, count, seed, manifest_name):
     man = os.path.join(c.results, manifest_name)
     cmd = c.fmt(c.gen_cmd, count=count, seed=seed, topic=topic, manifest=man)
     log("fill:", cmd)
-    r = sh(cmd, timeout=7200)
-    tail = r.stdout.strip().splitlines()[-1:] 
+    # Watched, not waited on: a generator that stops writing used to hold the
+    # chain for up to two hours in silence (run 48, finding F8), and its output
+    # was thrown away except for the last line (finding F6).
+    out_path = os.path.join(c.results, f"fill-{topic}.log")
+    with open(out_path, "w") as out:
+        proc = subprocess.Popen(cmd, shell=True, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
+    last_lines = lambda: open(out_path, errors="replace").read().strip().splitlines()[-5:]
+
+    def stop(why):
+        try:
+            os.killpg(proc.pid, 9)
+        except Exception:
+            pass
+        proc.wait()
+        raise Refusal("rig", f"{why}. The fill was stopped. The generator's last lines, from {out_path}:\n  "
+                             + "\n  ".join(last_lines() or ["(it printed nothing)"]))
+
+    t0 = time.time()
+    samples, said = [(t0, 0)], t0
+    while proc.poll() is None:
+        for _ in range(30):
+            if proc.poll() is not None:
+                break
+            time.sleep(1)
+        if proc.poll() is not None:
+            break
+        try:
+            n, _ = log_end(topic)
+        except Exception:
+            continue
+        now = time.time()
+        samples.append((now, n))
+        if now - said >= 60:
+            log(f"fill: {n:,} of {count:,} records written to {topic} ({n / count:.0%}), "
+                f"{(now - t0) / 60:.0f} min in")
+            said = now
+        why = fill_stall_reason(samples, now, topic)
+        if why:
+            stop(why)
+        if now - t0 > 7200:
+            stop(f"the generator was still running after two hours, with {n:,} of {count:,} records written")
+    if proc.returncode != 0:
+        raise Refusal("rig", f"the generator stopped with exit code {proc.returncode}. Its last lines, "
+                             f"from {out_path}:\n  " + "\n  ".join(last_lines() or ["(it printed nothing)"]))
+    tail = last_lines()[-1:]
     log("fill done:", tail[0] if tail else "")
     m = json.load(open(man))
     MANIFEST_PATHS[id(m)] = man

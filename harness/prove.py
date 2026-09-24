@@ -569,6 +569,30 @@ def cmd_selftest(live=True, topic=None):
            dirs(["orders-tiny"], ["orders-tiny-0", "orders-tiny-7"]), "", should_fire=False)
     expect("disk: two topics together (must not fire)",
            dirs(["orders", "prices"], ["orders-0", "orders-7", "prices-0"]), "", should_fire=False)
+    # Finding F8, run 48: a generator whose producer died 7.5 s in was waited on
+    # for 29 minutes in silence. samples are (seconds since start, records).
+    def stall(samples, now, want):
+        def go():
+            got = L.fill_stall_reason([(t, n) for t, n in samples], now, "orders")
+            if want is None:
+                assert got is None, f"stopped a healthy fill: {got!r}"
+            else:
+                assert got and want in got, f"said {got!r}, expected {want!r}"
+        return go
+    steady = [(i * 30, i * 30 * 2_000_000) for i in range(10)]
+    expect("fill: a fill that keeps growing runs on (must not fire)",
+           stall(steady, 300, None), "", should_fire=False)
+    expect("fill: 6.7 minutes before the first record, like run 48's price feed, runs on (must not fire)",
+           stall([(i * 30, 0) for i in range(14)], 402, None), "", should_fire=False)
+    expect("fill: nothing written in 10 minutes is stopped (must not fire)",
+           stall([(i * 30, 0) for i in range(21)], 600, "written nothing to orders in 10 minutes"),
+           "", should_fire=False)
+    expect("fill: a fill that stopped growing for 5 minutes is stopped (must not fire)",
+           stall([(0, 0), (30, 4_000_000)] + [(30 + i * 30, 4_000_000) for i in range(1, 11)], 330,
+                 "has held at 4,000,000 records for 5 minutes"), "", should_fire=False)
+    expect("fill: a 4-minute pause after writing runs on (must not fire)",
+           stall([(0, 0), (30, 4_000_000)] + [(30 + i * 30, 4_000_000) for i in range(1, 9)], 270, None),
+           "", should_fire=False)
     expect("the broker was starved of page cache (cores off their cap)",
            case(brokerLimitHits=310423, brokerRefaults=6270562, tmCapFrac=0.93), "hit its memory limit", ceiling=True)
     expect("cores off their cap with no broker hits still says something else held it back",

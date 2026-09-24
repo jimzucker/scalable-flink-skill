@@ -546,11 +546,30 @@ def host_free_bytes():
     return int(r.stdout.split()[3]) * 1024
 
 
+def partition_dirs(names, topics):
+    """The broker's partition directories that belong to these topics, exactly.
+
+    Kafka names each one <topic>-<partition number>. Matching <topic>-* also
+    takes every longer topic that starts with the same name: clean-room run 48
+    had "12.5 GB already on the broker" for a suite topic `orders` that had not
+    been filled yet, because orders-tiny-* and orders-small-* matched it, and
+    the disk check then under-counted what was still to write (finding F10)."""
+    want = [re.compile(re.escape(t) + r"-\d+") for t in topics]
+    return sorted(n for n in names if any(w.fullmatch(n) for w in want))
+
+
 def topic_bytes(topics):
     """Bytes on the broker's disk for these topics, read from the log dir."""
     c = cfg()
+    r = sh(f"docker exec {c.kafka} ls -1 /var/lib/kafka/data", check=False)
+    if r.returncode != 0:
+        raise Refusal("rig", f"could not list the broker's log directory: {r.stderr.strip()}")
+    dirs = partition_dirs((r.stdout or "").split(), topics)
+    if not dirs:
+        raise Refusal("rig", f"the broker holds nothing for {', '.join(topics)}: no partition of it is "
+                             f"on disk, so its size cannot be read.")
     # summed here, not in the container: the first live test died on awk quoting three shells deep
-    pat = " ".join(f"/var/lib/kafka/data/{t}-*" for t in topics)
+    pat = " ".join(f"/var/lib/kafka/data/{d}" for d in dirs)
     r = sh(f"docker exec {c.kafka} sh -c 'du -sk {pat}'", check=False)
     sizes = [ln.split()[0] for ln in r.stdout.splitlines() if ln.split()]
     if r.returncode != 0 or not sizes or not all(x.isdigit() for x in sizes):

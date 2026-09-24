@@ -131,10 +131,16 @@ A reader can then see what was assumed rather than agreed.
 3. **What are the keys, and how many distinct ones?**
 
    *Default: two key spaces. Symbol, and account / sub-account / symbol.
-   4 symbols, 2 accounts and each has 2 sub-accounts.*
+   4,096 symbols, 2 accounts and each has 2 sub-accounts.*
 
    *Make sure the cardinality is realistic, as 4K symbols vs 4 will materially
    impact the application design.*
+
+   At the default that is **4,096 symbol keys and 16,384 account keys** — the
+   workload the published demo measured. The default was 4 symbols until
+   2026-09-24; clean-room run 47 built it as written and measured 1.83× and
+   1.76× on a workload a thousand times smaller in keys than the one the
+   published 2.06× and 1.99× came from.
 
    **A key set does not spread over the cores by itself, and a small one
    rarely does.** Flink hashes each key into one of `maxParallelism` key groups

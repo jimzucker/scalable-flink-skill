@@ -2037,7 +2037,7 @@ def vertex_label(description):
     return "<br/>".join(out) or "?"
 
 
-def graph_mermaid(plan):
+def graph_mermaid(plan, ctx=None):
     """Pure. The job graph as Mermaid, from the plan the engine served.
 
     Every other picture of the pipeline is drawn by hand and is therefore a
@@ -2045,23 +2045,90 @@ def graph_mermaid(plan):
     market-value sink where the business case asks for two, and both drew
     diagrams; nothing compared either drawing with the job. This one is the
     job.
-    """
+
+    ctx adds what a reader wants from a streaming diagram and the plan does not
+    say (issue #76): the input topics and their partition count, the key set
+    and its size on each keyed edge, and the output topics with their key count
+    and, where the build declares one in design.every, how often each is
+    written. Topics are tied to vertices by name, never by position, so a
+    topic whose name no vertex carries is drawn unconnected rather than guessed.
+    ctx = {"inputs": [{"topic", "partitions", "source"}], "outputs": [{"topic",
+    "keys", "every"}], "keyed": {stage: key count}} -- every field optional."""
     nodes = (plan or {}).get("nodes") or []
     if not nodes:
         return ""
+    ctx = ctx or {}
     name = {n["id"]: f"v{i}" for i, n in enumerate(nodes)}
+    label = {n["id"]: vertex_label(n.get("description")) for n in nodes}
+    norm = lambda t: (t or "").lower().replace("_", "-")
+    def holding(text, only=None):
+        return [n["id"] for n in nodes if (only is None or n["id"] in only)
+                and norm(text) and norm(text) in norm(label[n["id"]])]
     lines = ["flowchart LR"]
     for n in nodes:
-        lines.append(f'  {name[n["id"]]}["{vertex_label(n.get("description"))}"]')
+        lines.append(f'  {name[n["id"]]}["{label[n["id"]]}"]')
+    sources = {n["id"] for n in nodes if not n.get("inputs")}
+    for k, t in enumerate(ctx.get("inputs") or []):
+        topic = MERMAID_SAFE.sub("", str(t.get("topic") or ""))
+        if not topic:
+            continue
+        parts = t.get("partitions")
+        lines.append(f'  in{k}[("{topic}' + (f"<br/>{parts} partitions" if parts else "") + '")]')
+        to = holding(t.get("source") or "", sources) or holding(topic, sources)
+        if len(to) == 1:
+            lines.append(f"  in{k} --> {name[to[0]]}")
+    keyed = ctx.get("keyed") or {}
     for n in nodes:
+        into = [stage for stage in keyed if norm(stage) in norm(label[n["id"]])]
         for i in n.get("inputs") or []:
             src = name.get(i.get("id"))
             if not src:
                 continue
             ship = MERMAID_SAFE.sub("", (i.get("ship_strategy") or "").strip())
+            if ship.upper() == "HASH" and len(into) == 1:
+                count = keyed[into[0]]
+                ship = MERMAID_SAFE.sub("", f"HASH: {into[0]}" + (f", {count:,} keys" if count else ""))
             arrow = f'-- {ship} -->' if ship and ship.upper() != "FORWARD" else "-->"
             lines.append(f'  {src} {arrow} {name[n["id"]]}')
+    for k, t in enumerate(ctx.get("outputs") or []):
+        topic = MERMAID_SAFE.sub("", str(t.get("topic") or ""))
+        if not topic:
+            continue
+        extra = ([f"{t['keys']:,} keys"] if t.get("keys") else []) + \
+                ([f"every {MERMAID_SAFE.sub('', str(t['every']))}"] if t.get("every") else [])
+        lines.append(f'  out{k}[("{topic}' + "".join(f"<br/>{e}" for e in extra) + '")]')
+        frm = holding(topic)
+        if not t.get("keys") and len(frm) == 1:
+            # no key set of its own: say whose keys its writer holds, rather than
+            # claim a count the harness never checked for this topic
+            owner = [stage for stage in keyed if norm(stage) in norm(label[frm[0]])]
+            if len(owner) == 1:
+                lines[-1] = lines[-1][:-3] + MERMAID_SAFE.sub("", f"<br/>same keys as {owner[0]}") + '")]'
+        if len(frm) == 1:
+            lines.append(f"  {name[frm[0]]} --> out{k}")
     return "\n".join(lines)
+
+
+def graph_context(c, manifest):
+    """What graph_mermaid needs beyond the plan, from the configuration and the
+    run's own manifest. Key counts come from the manifest's key sets, which
+    completeness already asserted exactly; the interval is what the build
+    declared in design.every, not something the harness measured."""
+    manifest = manifest or {}
+    design = c.raw.get("design") or {}
+    every = design.get("every") or {}
+    keyed = {}
+    for stage, field in (c.key_sets or {}).items():
+        v = manifest.get(field)
+        keyed[stage] = len(v) if isinstance(v, (dict, list)) else (v if isinstance(v, int) else None)
+    ins = [{"topic": c.raw["topics"]["in"], "partitions": c.partitions, "source": c.source_match}]
+    ins += [{"topic": t, "partitions": None} for t in (design.get("inputs") or []) if t != c.raw["topics"]["in"]]
+    outs = []
+    for t in list(c.raw["topics"].get("out") or []) + list(c.topics_also or []):
+        stage = next((s for s in keyed if s.lower().replace("_", "-") in t.lower().replace("_", "-")
+                      or t.lower().replace("_", "-") in s.lower().replace("_", "-")), None)
+        outs.append({"topic": t, "keys": keyed.get(stage) if stage else None, "every": every.get(t)})
+    return {"inputs": ins, "outputs": outs, "keyed": keyed}
 
 
 def design_diff(design, plan, topic_records, built_constraints, before_fill=False):
@@ -3917,9 +3984,15 @@ def render_markdown(out):
     # hand. Compare it with the picture in the interview: two runs in a row
     # built one market-value sink where the business case asks for two, and
     # neither drawing was ever held against the job.
-    graph = graph_mermaid(((out.get("runs") or [{}])[0].get("shape") or {}).get("plan"))
+    try:
+        man = json.load(open(os.path.join(c.results, "manifest.json")))
+    except Exception:
+        man = {}
+    graph = graph_mermaid(((out.get("runs") or [{}])[0].get("shape") or {}).get("plan"), graph_context(c, man))
     if graph:
         L += ["", "### The job graph that ran", "",
               "Read off the running plan, not drawn. Every case ran this shape — a row whose "
-              "shape differed would have been thrown out.", "", "```mermaid", graph, "```"]
+              "shape differed would have been thrown out. Partition and key counts come from the "
+              "configuration and the run's own manifest; an interval on an output is what the build "
+              "declared in design.every, not something the harness measured.", "", "```mermaid", graph, "```"]
     return "\n".join(L) + "\n"

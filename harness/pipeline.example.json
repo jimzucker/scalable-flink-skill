@@ -25,7 +25,8 @@
     "inputs": [
       "block-trades",
       "prices"
-    ]
+    ],
+    "every": {"market-values-by-symbol": "10 s", "market-values-by-account": "10 s"}
   },
   "partitions": 8,
   "_marketValues": "The throttled emit the interview asks for, and there are TWO of them: question 1 joins prices to each of the two position outputs, so a market value is emitted per symbol and per account/sub-account/symbol. Prices are broadcast rather than keyed, because the account side is keyed on account/sub-account/symbol and cannot be joined to a symbol-keyed price stream by key at all. Configurable interval, default 10000 ms. Neither is counted in outputsPerInput and neither topic is in topics.out — see _topics. The verifier should still check both: every market value equal to that key's final position x its latest published price, exactly, which is one of the assertions section 4 requires.",

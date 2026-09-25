@@ -672,6 +672,28 @@ def cmd_selftest(live=True, topic=None):
         assert "every 1-core pass was thrown out (4 of 4)" in g and "garbage collection used 9.2%" in g, g
     expect("claim: the missing step says why, in the harness's own words (must not fire)",
            why50, "", should_fire=False)
+    def diagram():
+        # issue #76, on the shape of clean-room run 49's plan: partitions on the
+        # input, key set and size on each keyed edge, key count and interval on
+        # the outputs, and a topic no vertex names left unconnected
+        plan = {"nodes": [
+            {"id": "a", "description": "positions-by-symbol+market-value-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>+- sink-market-values-by-symbol: Writer<br/>",
+             "inputs": [{"id": "s", "ship_strategy": "HASH"}, {"id": "p", "ship_strategy": "BROADCAST"}]},
+            {"id": "s", "description": "Source: orders-source<br/>+- parse<br/>", "inputs": []},
+            {"id": "p", "description": "Source: prices-source<br/>+- parse-prices<br/>", "inputs": []}]}
+        ctx = {"inputs": [{"topic": "orders", "partitions": 8, "source": "orders-source"}, {"topic": "prices"}],
+               "outputs": [{"topic": "positions-by-symbol", "keys": 4096},
+                           {"topic": "market-values-by-symbol", "every": "10 s"},
+                           {"topic": "nobody-writes-this"}],
+               "keyed": {"positions-by-symbol": 4096}}
+        g = L.graph_mermaid(plan, ctx)
+        for want in ("orders<br/>8 partitions", "in0 --> v1", "HASH: positions-by-symbol, 4,096 keys",
+                     "positions-by-symbol<br/>4,096 keys", "market-values-by-symbol<br/>every 10 s<br/>same keys as positions-by-symbol",
+                     "v0 --> out1", "BROADCAST"):
+            assert want in g, f"missing {want!r} in:\n{g}"
+        assert "--> out2" not in g, "a topic no vertex names was connected by guess"
+    expect("diagram: keys, interval and partitions from the configuration (must not fire)",
+           diagram, "", should_fire=False)
     def pinned(props, want):
         def go():
             got = L.pin_collector(props).get("env.java.opts.taskmanager")
@@ -1944,6 +1966,19 @@ def cmd_preflight():
             raise Exception(f"{c.jar} does not exist")
         return f"build {build_hash()}"
 
+    def every_declared():
+        """Outputs written outside topics.out are the throttled or windowed ones,
+        and only the build knows how often they are written. Reported, not
+        enforced: a build may have none (issue #76)."""
+        every = (c.raw.get("design") or {}).get("every") or {}
+        missing = [t for t in c.topics_also if t not in every]
+        if not c.topics_also:
+            return "no output is written outside topics.out, so there is no interval to show"
+        if not missing:
+            return "design.every gives an interval for " + ", ".join(f"{t} ({every[t]})" for t in c.topics_also)
+        return (f"no interval declared for {', '.join(missing)}: add design.every "
+                f"{{\"{missing[0]}\": \"10 s\"}} (with the real interval) so the job graph shows how often it is written")
+
     def either_kafka():
         """The same build should run on Apache Kafka or Confluent with a config
         change. Reported, not enforced: an interview can ask for a Confluent-only
@@ -2003,6 +2038,7 @@ def cmd_preflight():
     check("the VM trim command is known", trim)
     check("the job jar exists and hashes", jar)
     check("the build runs on either Kafka (reported)", either_kafka)
+    check("the diagram can show how often each output is written (reported)", every_declared)
     save_json("preflight.json", {"checks": [{"check": a, "result": b, "detail": d} for a, b, d in rows],
                                  **extra})
     fails = [r for r in rows if r[1] == "FAIL"]

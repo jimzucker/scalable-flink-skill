@@ -420,7 +420,13 @@ a table for the wrong pipeline.
 
 The suite report carries the graph a second way: **a Mermaid diagram rendered
 from the plan the engine served**, not drawn. A drawing is a claim; that one
-is the job.
+is the job. It also shows what a reader wants from a streaming diagram: the
+input topic and its partition count, the key set and its size on each keyed
+edge, and each output topic with its key count and how often it is written.
+Partitions and keys come from `pipeline.json` and the manifest. **How often an
+output is written only the build knows**: declare it in `design.every` for
+every output written on an interval (a throttled or windowed one), or the
+diagram cannot show it — preflight says which are missing.
 
 **An assertion with nothing to compare is written down, not skipped.** The
 table above is four assertions for a pipeline with two paths over one input.

@@ -673,11 +673,12 @@ def cmd_selftest(live=True, topic=None):
     expect("claim: the missing step says why, in the harness's own words (must not fire)",
            why50, "", should_fire=False)
     def diagram():
-        # issue #76, on the shape of clean-room run 49's plan: partitions on the
-        # input, key set and size on each keyed edge, key count and interval on
-        # the outputs, and a topic no vertex names left unconnected
+        # issue #76, drawn the way a person plans a job: one box per step, input
+        # topics with partitions, keyBy with the key set and its size, a dotted
+        # broadcast, outputs with key counts and the interval on the arrow in.
+        # Shapes from clean-room runs 49 (DataStream) and 51 (Flink SQL).
         plan = {"nodes": [
-            {"id": "a", "description": "positions-by-symbol+market-value-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>+- sink-market-values-by-symbol: Writer<br/>",
+            {"id": "a", "description": "positions-by-symbol+market-value-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>:  +- sink-positions-by-symbol: Committer<br/>+- sink-market-values-by-symbol: Writer<br/>   +- sink-market-values-by-symbol: Committer<br/>",
              "inputs": [{"id": "s", "ship_strategy": "HASH"}, {"id": "p", "ship_strategy": "BROADCAST"}]},
             {"id": "s", "description": "Source: orders-source<br/>+- parse<br/>", "inputs": []},
             {"id": "p", "description": "Source: prices-source<br/>+- parse-prices<br/>", "inputs": []}]}
@@ -687,12 +688,23 @@ def cmd_selftest(live=True, topic=None):
                            {"topic": "nobody-writes-this"}],
                "keyed": {"positions-by-symbol": 4096}}
         g = L.graph_mermaid(plan, ctx)
-        for want in ("orders<br/>8 partitions", "in0 --> v1", "HASH: positions-by-symbol, 4,096 keys",
-                     "positions-by-symbol<br/>4,096 keys", "market-values-by-symbol<br/>every 10 s<br/>same keys as positions-by-symbol",
-                     "v0 --> out1", "BROADCAST"):
+        for want in ('in0(["orders<br/>8 partitions"])', "in0 --> v1o0", '("parse")',
+                     "-- keyBy positions-by-symbol, 4,096 keys -->", "-. broadcast .->",
+                     'out0(["positions-by-symbol<br/>4,096 keys"])', "v0o0 --> out0",
+                     'out1(["market-values-by-symbol<br/>4,096 keys"])', "v0o0 -- every 10 s --> out1"):
             assert want in g, f"missing {want!r} in:\n{g}"
-        assert "--> out2" not in g, "a topic no vertex names was connected by guess"
-    expect("diagram: keys, interval and partitions from the configuration (must not fire)",
+        assert "Writer" not in g and "Committer" not in g, "sink plumbing was drawn"
+        assert "--> out2" not in g, "a topic no step names was connected by guess"
+        # SQL names are shortened the same way for every job
+        for raw, want in (("[38]:TableSourceScan(table=[[default_catalog, default_database, orders]], fields=[a])", "read orders"),
+                          ("[52]:WindowAggregate(groupBy=[symbol], window=[TUMBLE(time_col=[pt], size=[10 s])], select=[x])",
+                           "window by symbol, every 10 s"),
+                          ("[62]:Join(joinType=[InnerJoin], where=[(symbol = symbol0)], select=[x])", "join on symbol"),
+                          ("[59]:Rank(strategy=[AppendFastStrategy], rankType=[ROW_NUMBER], rankRange=[rankStart=1, rankEnd=1], partitionBy=[symbol], orderBy=[ts DESC], select=[x])", "latest by symbol"),
+                          ("[39]:Calc(select=[symbol, qty])", None)):
+            got = L._op_name(raw)
+            assert got == want, f"{raw[:40]} read as {got!r}, expected {want!r}"
+    expect("diagram: steps, keys, interval and partitions from the configuration (must not fire)",
            diagram, "", should_fire=False)
     def pinned(props, want):
         def go():
@@ -1239,7 +1251,8 @@ def cmd_selftest(live=True, topic=None):
 
     def graph_renders():
         m = L.graph_mermaid(RUN36_PLAN)
-        for needle in ("flowchart LR", "HASH", "BROADCAST", "parse-order"):
+        # edges say how records cross, in the words a reader uses (issue #76)
+        for needle in ("flowchart LR", "keyBy", "broadcast", "parse-order"):
             if needle not in m:
                 raise Exception(f"the rendered graph has no {needle}: {m}")
         if "<br/>:-" in m or "+-" in m:

@@ -2037,6 +2037,60 @@ def vertex_label(description):
     return "<br/>".join(out) or "?"
 
 
+def _op_tree(description):
+    """Pure. A vertex's chained operators as [(depth, name)], from Flink's ASCII
+    tree ("head<br/>:- child<br/>:  +- grandchild<br/>+- child")."""
+    out = []
+    for part in re.split(r"<br\s*/?>", description or ""):
+        if not part.strip():
+            continue
+        # lazy indent, so ":- child" is read as a branch marker, not indent + "-"
+        m = re.match(r"^([ :|]*?)([:+]- )(.*)$", part)
+        if m:
+            out.append((len(m.group(1)) // 3 + 1, m.group(3).strip()))
+        else:
+            out.append((0, part.strip()))
+    return out
+
+
+def _op_name(raw):
+    """Pure. An operator as a reader would name it, or None for plumbing.
+    DataStream operators keep the names the build gave them. Flink SQL
+    operators arrive as their full internal description and are shortened the
+    same way for every job: read <table>, aggregate by <keys>, window by <keys>
+    every <size>, join on <key>, latest by <key>. Projections (Calc), not-null
+    checks (ConstraintEnforcer) and two-phase commit steps (Committer) are
+    dropped; a Writer is the edge into its output topic, returned as ("sink", x)."""
+    name = re.sub(r"^\[\d+\]:", "", raw).strip()
+    if re.search(r":\s*Committer$", name):
+        return None
+    w = re.match(r"^(.*?)(\[\d+\])?:\s*Writer$", name)
+    if w:
+        return ("sink", re.sub(r"^Sink:\s*", "", w.group(1)).strip())
+    head = re.split(r"[(\[]", name, 1)[0].strip()
+    field = lambda key: (re.search(key + r"=\[([^\]]*)\]", name) or [None, None])[1]
+    if head in ("Calc", "ConstraintEnforcer", "DropUpdateBefore", "WatermarkAssigner"):
+        return None
+    if head == "TableSourceScan":
+        t = re.search(r"table=\[\[(?:[^\],]*,\s*)*([^\],]+)\]\]", name)
+        return f"read {t.group(1).strip()}" if t else "read"
+    if head in ("GroupAggregate", "LocalGroupAggregate", "GlobalGroupAggregate"):
+        return f"aggregate by {field('groupBy')}" if field("groupBy") else "aggregate"
+    if head in ("WindowAggregate", "LocalWindowAggregate", "GlobalWindowAggregate"):
+        size = re.search(r"size=\[([^\]]+)\]", name)
+        return ("window" + (f" by {field('groupBy')}" if field("groupBy") else "")
+                + (f", every {size.group(1)}" if size else ""))
+    if head == "Join":
+        on = re.search(r"where=\[\(?(\w+)\s*=", name)
+        return f"join on {on.group(1)}" if on else "join"
+    if head == "Correlate" and "UNNEST" in name:
+        col = re.search(r"\.(\w+)\)", name)
+        return f"unnest {col.group(1)}" if col else "unnest"
+    if head == "Rank" and "rankEnd=1" in name:
+        return f"latest by {field('partitionBy')}" if field("partitionBy") else "latest"
+    return head if "(" in name or "[" in name else name
+
+
 def graph_mermaid(plan, ctx=None):
     """Pure. The job graph as Mermaid, from the plan the engine served.
 
@@ -2044,68 +2098,96 @@ def graph_mermaid(plan, ctx=None):
     claim about what was built. Clean-room runs 36 and 37 both built one
     market-value sink where the business case asks for two, and both drew
     diagrams; nothing compared either drawing with the job. This one is the
-    job.
-
-    ctx adds what a reader wants from a streaming diagram and the plan does not
-    say (issue #76): the input topics and their partition count, the key set
-    and its size on each keyed edge, and the output topics with their key count
-    and, where the build declares one in design.every, how often each is
-    written. Topics are tied to vertices by name, never by position, so a
-    topic whose name no vertex carries is drawn unconnected rather than guessed.
+    job -- drawn the way a person plans one (issue #76): one box per step, the
+    input topics with their partition count at one end, the output topics with
+    their key count at the other, "keyBy" on a keyed edge, a dotted line for a
+    broadcast, and how often an output is written on the arrow into it.
+    Topics are tied to steps by name, never by position; a topic no step names
+    is drawn unconnected rather than guessed.
     ctx = {"inputs": [{"topic", "partitions", "source"}], "outputs": [{"topic",
     "keys", "every"}], "keyed": {stage: key count}} -- every field optional."""
     nodes = (plan or {}).get("nodes") or []
     if not nodes:
         return ""
     ctx = ctx or {}
-    name = {n["id"]: f"v{i}" for i, n in enumerate(nodes)}
-    label = {n["id"]: vertex_label(n.get("description")) for n in nodes}
     norm = lambda t: (t or "").lower().replace("_", "-")
-    def holding(text, only=None):
-        return [n["id"] for n in nodes if (only is None or n["id"] in only)
-                and norm(text) and norm(text) in norm(label[n["id"]])]
+    safe = lambda t: MERMAID_SAFE.sub("", str(t))
     lines = ["flowchart LR"]
+    ops, head, tail, sinks, text = {}, {}, {}, [], {}
+    for vi, n in enumerate(nodes):
+        tree, keep, parent_at = _op_tree(n.get("description")), [], {}
+        text[n["id"]] = " ".join(name for _, name in tree)
+        for oi, (depth, raw) in enumerate(tree):
+            op = _op_name(raw)
+            up = next((parent_at[d] for d in range(depth - 1, -1, -1) if d in parent_at), None)
+            if op is None:
+                parent_at[depth] = up
+                continue
+            if isinstance(op, tuple):
+                sinks.append((up, op[1], n["id"]))
+                continue
+            oid = f"v{vi}o{oi}"
+            lines.append(f'  {oid}("{safe(op)}")')
+            if up:
+                lines.append(f"  {up} --> {oid}")
+            parent_at[depth] = oid
+            keep.append(oid)
+        if keep:
+            # Flink does not say which chained branch feeds an outgoing edge, so a
+            # vertex that branches sends its edges from its first step, not a guess
+            # judged on Flink's full tree, before plumbing is dropped, ignoring sinks
+            real = [(d, r) for d, r in tree if not re.search(r":\s*(Writer|Committer)$", r)]
+            leaves = sum(1 for i, (d, _) in enumerate(real) if i + 1 == len(real) or real[i + 1][0] <= d)
+            head[n["id"]], tail[n["id"]] = keep[0], (keep[-1] if leaves <= 1 else keep[0])
+    keyed = ctx.get("keyed") or {}
+    vertex_keys = {}
+    label_of = {oid: re.search(r'\("(.*)"\)', ln).group(1) for ln in lines
+                if (oid := ln.strip().split("(", 1)[0]) and ln.strip().startswith("v") and '("' in ln}
     for n in nodes:
-        lines.append(f'  {name[n["id"]]}["{label[n["id"]]}"]')
-    sources = {n["id"] for n in nodes if not n.get("inputs")}
+        for i in n.get("inputs") or []:
+            a, b = tail.get(i.get("id")), head.get(n["id"])
+            if not a or not b:
+                continue
+            ship = (i.get("ship_strategy") or "").strip().upper()
+            if ship == "BROADCAST":
+                lines.append(f"  {a} -. broadcast .-> {b}")
+            elif ship == "HASH":
+                stage = [st for st in keyed if norm(st) in norm(text[n["id"]])]
+                if len(stage) == 1:
+                    vertex_keys[n["id"]] = keyed.get(stage[0])
+                    what = f"keyBy {stage[0]}" + (f", {keyed[stage[0]]:,} keys" if keyed.get(stage[0]) else "")
+                else:
+                    by = re.search(r"(?:by|on) (.+?)(?:, every .*)?$", label_of.get(b, ""))
+                    what = f"keyBy {by.group(1)}" if by else "keyBy"
+                lines.append(f"  {a} -- {safe(what)} --> {b}")
+            elif ship in ("", "FORWARD"):
+                lines.append(f"  {a} --> {b}")
+            else:
+                lines.append(f"  {a} -- {safe(ship.lower())} --> {b}")
+    sources = [n["id"] for n in nodes if not n.get("inputs") and n["id"] in head]
     for k, t in enumerate(ctx.get("inputs") or []):
-        topic = MERMAID_SAFE.sub("", str(t.get("topic") or ""))
+        topic = safe(t.get("topic") or "")
         if not topic:
             continue
         parts = t.get("partitions")
-        lines.append(f'  in{k}[("{topic}' + (f"<br/>{parts} partitions" if parts else "") + '")]')
-        to = holding(t.get("source") or "", sources) or holding(topic, sources)
+        lines.append(f'  in{k}(["{topic}' + (f"<br/>{parts} partitions" if parts else "") + '"])')
+        to = [s for s in sources if norm(t.get("source")) and norm(t.get("source")) in norm(text[s])] or \
+             [s for s in sources if norm(topic) in norm(text[s])]
         if len(to) == 1:
-            lines.append(f"  in{k} --> {name[to[0]]}")
-    keyed = ctx.get("keyed") or {}
-    for n in nodes:
-        into = [stage for stage in keyed if norm(stage) in norm(label[n["id"]])]
-        for i in n.get("inputs") or []:
-            src = name.get(i.get("id"))
-            if not src:
-                continue
-            ship = MERMAID_SAFE.sub("", (i.get("ship_strategy") or "").strip())
-            if ship.upper() == "HASH" and len(into) == 1:
-                count = keyed[into[0]]
-                ship = MERMAID_SAFE.sub("", f"HASH: {into[0]}" + (f", {count:,} keys" if count else ""))
-            arrow = f'-- {ship} -->' if ship and ship.upper() != "FORWARD" else "-->"
-            lines.append(f'  {src} {arrow} {name[n["id"]]}')
+            lines.append(f"  in{k} --> {head[to[0]]}")
     for k, t in enumerate(ctx.get("outputs") or []):
-        topic = MERMAID_SAFE.sub("", str(t.get("topic") or ""))
+        topic = safe(t.get("topic") or "")
         if not topic:
             continue
-        extra = ([f"{t['keys']:,} keys"] if t.get("keys") else []) + \
-                ([f"every {MERMAID_SAFE.sub('', str(t['every']))}"] if t.get("every") else [])
-        lines.append(f'  out{k}[("{topic}' + "".join(f"<br/>{e}" for e in extra) + '")]')
-        frm = holding(topic)
-        if not t.get("keys") and len(frm) == 1:
-            # no key set of its own: say whose keys its writer holds, rather than
-            # claim a count the harness never checked for this topic
-            owner = [stage for stage in keyed if norm(stage) in norm(label[frm[0]])]
-            if len(owner) == 1:
-                lines[-1] = lines[-1][:-3] + MERMAID_SAFE.sub("", f"<br/>same keys as {owner[0]}") + '")]'
+        hit = [(up, v) for up, sink, v in sinks if up and (norm(topic) in norm(sink) or norm(sink) in norm(topic))]
+        if not hit and len(sinks) == 1 and len(ctx.get("outputs") or []) == 1 and sinks[0][0]:
+            hit = [(sinks[0][0], sinks[0][2])]   # one sink, one output: they are the same
+        keys = t.get("keys") or (vertex_keys.get(hit[0][1]) if len(hit) == 1 else None)
+        lines.append(f'  out{k}(["{topic}' + (f"<br/>{keys:,} keys" if keys else "") + '"])')
+        frm = [up for up, _ in hit]
         if len(frm) == 1:
-            lines.append(f"  {name[frm[0]]} --> out{k}")
+            lines.append(f"  {frm[0]} -- {safe('every ' + str(t['every']))} --> out{k}" if t.get("every")
+                         else f"  {frm[0]} --> out{k}")
     return "\n".join(lines)
 
 

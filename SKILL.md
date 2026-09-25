@@ -172,22 +172,23 @@ A reader can then see what was assumed rather than agreed.
 
    *Default: DataStream.*
 
-   **If the answer is SQL**, the default business case is built differently, and
-   none of the DataStream advice below about broadcasts, side outputs or timers
-   applies. Clean-room run 50 built it this way and passed completeness three
-   times, killed arm included:
+   **If the answer is SQL**, none of the DataStream advice below about
+   broadcasts, side outputs or timers applies. These are the SQL forms of the
+   same needs, general to any pipeline; the default business case is in
+   brackets. Clean-room runs 50 and 51 built the default this way and passed
+   completeness every time, killed arm included:
 
-   | the business case needs | in SQL |
+   | the pipeline needs | in SQL |
    |---|---|
-   | read the input once | every `INSERT` in **one** `STATEMENT SET`; check with `EXPLAIN` that the plan scans the source once |
-   | one position row per allocation | `CROSS JOIN UNNEST` over the order's allocations |
-   | a sink made idempotent by the absolute value | `upsert-kafka` sinks, `PRIMARY KEY` = the aggregation key |
-   | one output per input | a `COUNT(*)` column in every aggregate: a running `SUM` can come back unchanged, and a row that did not change is not guaranteed to be written |
-   | the market value throttled to 10 s | a 10-second processing-time `TUMBLE` window of the position changes, a running `SUM` of those per key, then the latest price |
-   | the price joined to both key levels | a regular join on symbol, not a broadcast (SQL has none). Every account key carries exactly one symbol, so per-key order holds |
-   | the latest price | `ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY ts DESC) = 1` over the prices table — what runs 50 and 51 both used, and both passed completeness with it |
-   | `job.sourceVertexMatch` | `Source: ` and the input table's name — a SQL job names its source vertex that way, not `kafka-source` |
-   | `design.operators` | the sink tables' short names (`positions_by_symbol`), not `default_catalog.default_database.…`, which the plan never shows |
+   | read the input once, however many outputs | every `INSERT` in **one** `STATEMENT SET`; check with `EXPLAIN` that the plan scans each source once |
+   | several rows from one input record | `CROSS JOIN UNNEST` over the repeated field (one row per allocation of an order) |
+   | a sink made idempotent by the absolute value | `upsert-kafka` sinks with `PRIMARY KEY` = the aggregation key |
+   | one output per input, when the fan-out is counted | a `COUNT(*)` column in the aggregate: a running value can come back unchanged, and a row that did not change is not guaranteed to be written |
+   | an output throttled to an interval | a processing-time `TUMBLE` window of the changes at that interval, then a running aggregate of those per key (the 10-second market value) |
+   | a second input joined on a key | a regular join on that key; SQL has no broadcast. Per-key order holds when every output key carries exactly one join key (each account key has one symbol) |
+   | the latest value of that second input | `ROW_NUMBER() OVER (PARTITION BY <key> ORDER BY <time> DESC) = 1` (the latest price per symbol) |
+   | `job.sourceVertexMatch` | `Source: ` and the input table's name — how a SQL job names its source vertex |
+   | `design.operators` | the sink tables' short names, not `default_catalog.default_database.…`, which the plan never shows |
 
    What to expect, measured in runs 50 and 51: **a quarter to a sixth of the
    DataStream builds' throughput per core**, 2→4 at 1.82–2.12×, and a 1-core case

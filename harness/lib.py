@@ -914,10 +914,15 @@ def disk_projection(tiny_topic, tiny_count, last_case_rec):
 
 
 def build_hash():
+    """The jar and what the job is started with. Arguments change what the job
+    does as surely as code does, and a hash of the jar alone let a changed
+    job.args keep a completeness pass it never earned (clean-room run 51, S19)."""
+    c = cfg()
     h = hashlib.sha256()
-    with open(cfg().jar, "rb") as f:
+    with open(c.jar, "rb") as f:
         for b in iter(lambda: f.read(1 << 20), b""):
             h.update(b)
+    h.update(f"\n{c.main_class}\n{c.job_args}".encode())
     return h.hexdigest()[:16]
 
 
@@ -959,7 +964,7 @@ services:
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@{c.kafka}:9093
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       # apache/kafka generates one; confluentinc/cp-kafka requires it. Fixed per
-      # project so a restart rejoins its own log rather than refusing a new id.
+      # project so a restart rejoins its own log instead of turning a new id away.
       CLUSTER_ID: {c.cluster_id}
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
@@ -3210,6 +3215,14 @@ def check_case(rec, cores, is_baseline):
     # Two different problems, so two different messages: the old one reported a
     # sample count even when the real fault was that no reading came back at all.
     if rec.get("sourceIdle") is None:
+        # Name the setting. Clean-room run 51's SQL source vertex is called
+        # "Source: orders[38] -> ...", and nothing said what to set.
+        seen = sorted((rec.get("backpressure") or {}).keys())
+        if seen and not any(cfg().source_match.lower() in n.lower() for n in seen):
+            raise Refusal("case", f"no back-pressure reading came back for the source: no vertex in the running "
+                                  f"plan has {cfg().source_match!r} in its name (job.sourceVertexMatch). The plan's "
+                                  f"vertices are: {'; '.join(seen)[:400]}. Set sourceVertexMatch to part of the "
+                                  f"source's name -- for a SQL job, 'Source: ' and the input table's name.")
         raise Refusal("case", "no back-pressure reading came back for the source, so there is no way to "
                               "tell whether the pipeline was working or waiting on Kafka.")
     if (rec.get("bpSamples") or 0) < T["minBpSamples"]:
@@ -3742,8 +3755,8 @@ def render_table(out):
                 L.append(f"        ceiling: {r.get('ceiling')}")
         else:
             L.append(f"{r['cores']:>5} {r['pass']:>8} {'—':>11} {'—':>11} {'—':>10} {'—':>6} {'—':>5} "
-                     f"{'—':>10} {'—':>8} {'—':>7} {'—':>6} {'—':>6} {'FAILED':>8}")
-            L.append(f"        refusal ({r.get('refusalScope')}): {r.get('refusal')}")
+                     f"{'—':>10} {'—':>8} {'—':>7} {'—':>6} {'—':>6} {'STOPPED':>8}")
+            L.append(f"        stopped ({r.get('refusalScope')}): {r.get('refusal')}")
     L.append("-" * len(hdr))
     for cs in t["cases"].values():
         mark = "" if cs["reportable"] else f"   UNREPORTABLE ({cs['unreportableReason']})"
@@ -3890,7 +3903,7 @@ def render_markdown(out):
                      f"{r['tmThrottledPeriodsPct']:.0f}% | {r['kafkaCores']:.2f} / {c.kafka_cap:g} | {r['sourceIdle']:.1%} | "
                      f"{r['sourceBackpressured']:.1%} | {r['headroomS']:.0f} s | {r['vantageDisagreement']:.2%} |")
         else:
-            L.append(f"| {r['cores']} | {r['pass']} | FAILED ({r.get('refusalScope')}) — {r.get('refusal','')[:80]} | | | | | | | | |")
+            L.append(f"| {r['cores']} | {r['pass']} | STOPPED ({r.get('refusalScope')}) — {r.get('refusal','')[:80]} | | | | | | | | |")
     L += ["", "| cores | passes | mean records/s | spread | reportable |", "|---:|---:|---:|---:|---|"]
     for cs in t["cases"].values():
         L.append(f"| {cs['cores']} | {cs['passes']} | {cs['meanRecordsPerSec']:,.0f} | {cs['spread']:.1%} | "

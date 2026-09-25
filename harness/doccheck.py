@@ -776,19 +776,29 @@ def check_plain_english(fail):
     bad = []
     for name in ("lib.py", "prove.py"):
         src = read(HERE, name)
+        # The text inside f-strings too: it reached a person on every stopped
+        # pass ("refusal (rig): ...") and this check never read it.
+        fmid = getattr(tokenize, "FSTRING_MIDDLE", None)
         for tok in tokenize.generate_tokens(io.StringIO(src).readline):
-            if tok.type != tokenize.STRING or tok.string[:3] in triples:
+            if tok.type == fmid:
+                text = tok.string
+            elif tok.type != tokenize.STRING or tok.string[:3] in triples:
                 continue
-            try:
-                text = ast.literal_eval(tok.string)
-            except Exception:
-                continue
+            else:
+                try:
+                    text = ast.literal_eval(tok.string)
+                except Exception:
+                    continue
             if not isinstance(text, str) or text.strip() in allowed:
                 continue
             low = text.lower()
             for word, why in banned.items():
                 if word in low:
                     bad.append(f"{name}:{tok.start[0]} {why} -- {text[:70]!r}")
+            # A bare FAILED is a status a person reads first (run 47's F2).
+            # Flink's own job state is exactly "FAILED" and stays allowed.
+            if "FAILED" in text and text.strip() != "FAILED":
+                bad.append(f"{name}:{tok.start[0]} say STOPPED, and why -- {text[:70]!r}")
     for b in bad:
         fail(b)
     skill = read(ROOT, "SKILL.md")

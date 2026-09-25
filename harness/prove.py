@@ -528,7 +528,33 @@ def cmd_selftest(live=True, topic=None):
            case(tmCapFrac=0.959, _baseline=True), "", should_fire=False)
     expect("cores are not the constraint (other)", case(tmCapFrac=0.90), "only used", ceiling=True)
     expect("source idle past the ceiling", case(sourceIdle=0.4), "waiting for input", ceiling=True)
-    expect("garbage collection is the constraint", case(gcFracOfCapacity=0.13), "garbage collection", ceiling=True)
+    expect("garbage collection over the limit is flagged on the pass, not ruled on (must not fire)",
+           case(gcFracOfCapacity=0.13), "", should_fire=False)
+    # Judged at the table, against the nearest larger case under the limit. Real
+    # per-core figures from the record (pre-fix GC halved to its true value).
+    def gcj(cases, want):
+        def go():
+            runs = []
+            for cores, rate, gcf in cases:
+                for p in ("p1-asc", "p2-desc"):
+                    runs.append(dict(cores=cores, **{"pass": p}, recordsPerSec=rate, status="OK",
+                                     gcFracOfCapacity=gcf))
+            L.gc_judgement(runs)
+            got = {r["cores"]: r["status"] for r in runs}
+            assert got == want, f"got {got}, expected {want}"
+        return go
+    expect("gc: run 50's 1-core case (GC 9.1%, as much work per core as 2 cores) is kept (must not fire)",
+           gcj([(1, 28357, 0.091), (2, 56231, 0.033), (4, 105317, 0.010)], {1: "OK", 2: "OK", 4: "OK"}),
+           "", should_fire=False)
+    expect("gc: run 25's 1-core case (GC 7.7%, 0.85x the 2-core case per core) is a ceiling (must not fire)",
+           gcj([(1, 220719, 0.077), (2, 517824, 0.030), (4, 913312, 0.014)], {1: "CEILING", 2: "OK", 4: "OK"}),
+           "", should_fire=False)
+    expect("gc: run 21's 1-core case is judged against the 4-core case, not a 2-core case also over (must not fire)",
+           gcj([(1, 198930, 0.132), (2, 389594, 0.068), (4, 726636, 0.043)], {1: "OK", 2: "OK", 4: "OK"}),
+           "", should_fire=False)
+    expect("gc: the largest case over the limit has nothing to compare with and is a ceiling (must not fire)",
+           gcj([(1, 130000, 0.030), (2, 255000, 0.030), (4, 470000, 0.070)], {1: "OK", 2: "OK", 4: "CEILING"}),
+           "", should_fire=False)
     expect("GC at the worst level that behaved, 4.8% (must not fire)",
            case(gcFracOfCapacity=0.048), "", should_fire=False)
     # The machine's swap, read at each window's open and close. Real readings:

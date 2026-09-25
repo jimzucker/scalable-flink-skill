@@ -61,21 +61,23 @@
   },
   {
    "name": "run 21's 1-core case: GC 13.2% (was recorded 26.4% before the double count was found) of capacity",
-   "expect": "ceiling",
+   "expect": "claim",
    "rec": {
     "tmCapFrac": 0.995,
     "sourceIdle": 0.006,
     "gcFracOfCapacity": 0.132
-   }
+   },
+   "why": "Changed 2026-09-24. Garbage collection is judged at the table now. This case's 'ceiling' verdict was the old per-pass limit's own output; run 21's published table counted the case (198,906/s at 1 core). Its 2-core neighbour was also over the limit, so it is compared with the 4-core case, which it beat per core by 9.5%: kept (self-test 'gc: run 21')."
   },
   {
    "name": "run 25's 1-core case: GC 7.75% (recorded 15.5%), spread 14.3%, sentinel -14.5%",
-   "expect": "ceiling",
+   "expect": "claim",
    "rec": {
     "tmCapFrac": 0.989,
     "sourceIdle": 0.019,
     "gcFracOfCapacity": 0.0775
-   }
+   },
+   "why": "Changed 2026-09-24. Garbage collection is no longer ruled on per pass; build_table judges it against the nearest larger case under the limit. At the table this case is still a CEILING: it did 0.852x the 2-core case's work per core (self-test 'gc: run 25')."
   },
   {
    "name": "run 13's 1-core case: GC 4.8% (recorded 9.6%), the worst that behaved",

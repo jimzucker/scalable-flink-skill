@@ -2539,7 +2539,7 @@ def bottleneck(rec):
         return (f"Kafka's memory, blocking higher throughput. Kafka hit its limit "
                 f"{rec['brokerLimitHits']:,} times and had to read the test data back off disk, so the "
                 f"pipeline was waiting on Kafka rather than using its CPU.")
-    if (rec.get("gcFracOfCapacity") or 0) > T["gcCeil"]:
+    if (rec.get("gcFracOfCapacity") or 0) > T["gcCeil"] and not rec.get("gcKept"):
         return (f"Memory, blocking higher throughput. The pipeline spent {rec['gcFracOfCapacity']:.0%} "
                 f"of the time cleaning up memory instead of working. Give it more memory, not more CPU.")
     if (rec.get("sourceIdle") or 0) > T["sourceIdleCeil"]:
@@ -3249,10 +3249,11 @@ def check_case(rec, cores, is_baseline):
     # times at 99.6% of cap with no rate effect, while its 4-core case hit it
     # zero times -- on an idle VM the page cache reaches the cgroup limit, and
     # under load global reclaim trims first.)
+    # Garbage collection over the limit is flagged here and judged by build_table,
+    # which can see the case above it: a pass alone cannot tell a case slowed by
+    # memory from one that collects more and loses nothing (see gc_judgement).
     if (rec.get("gcFracOfCapacity") or 0) > T["gcCeil"]:
-        raise Ceiling(f"garbage collection used {rec['gcFracOfCapacity']:.1%} of this case's time and the "
-                      f"limit is {T['gcCeil']:.1%}. The pipeline ran short of memory, not cores. Give it more "
-                      f"memory instead of more cores.", rec)
+        rec["gcAboveLimit"] = True
     if rec["sourceIdle"] > T["sourceIdleCeil"]:
         raise Ceiling(f"the source sat idle {rec['sourceIdle']:.1%} of the window and the limit is "
                       f"{T['sourceIdleCeil']:.0%}. It spent that time waiting for input, so whatever feeds "
@@ -3458,9 +3459,56 @@ def run_case(cores, pass_id, run_id, shape_ref, is_baseline, manifest,
 
 # ------------------------------------------------------------------ the table
 
+def gc_judgement(runs):
+    """Which cases garbage collection held back. Marks the passes it rules on.
+
+    A case whose garbage collection is over the limit is a ceiling only if it
+    also did less work per core than the nearest larger case whose own garbage
+    collection is under the limit, by more than a step ratio's own noise
+    (1.96 x ratioSdFallback, measured). With no such case to compare against,
+    the limit alone decides, as it always did.
+
+    Why: the limit alone threw out clean-room run 50's whole 1-core case (SQL,
+    GC 8-10%) while it did 1.009x the 2-core case's work per core, and cutting
+    its GC from 9.1% to 7.4% made it no faster. Replayed on the record, run 25's
+    1-core case (GC ~7.7%, 0.852x the 2-core case per core) stays a ceiling, and
+    run 21's (GC ~13%, next to a 2-core case also over the limit, 1.095x the
+    4-core case per core) is kept, as the table that published it did.
+    Sets status CEILING with the reason on a ruled case's passes, and gcKept on
+    a kept case's, so the scorecard does not blame memory for it."""
+    slow_floor = 1 - 1.96 * T["ratioSdFallback"]
+    byc = {}
+    for r in runs:
+        if r.get("status", "OK") == "OK" and r.get("recordsPerSec"):
+            byc.setdefault(int(r["cores"]), []).append(r)
+    mean = lambda xs: sum(xs) / len(xs)
+    gc = {c: mean([r.get("gcFracOfCapacity") or 0 for r in rs]) for c, rs in byc.items()}
+    per_core = {c: mean([r["recordsPerSec"] for r in rs]) / c for c, rs in byc.items()}
+    for c in sorted(byc):
+        rs = byc[c]
+        if not any(r.get("gcAboveLimit") or (r.get("gcFracOfCapacity") or 0) > T["gcCeil"] for r in rs):
+            continue
+        ref = next((x for x in sorted(byc) if x > c and gc[x] <= T["gcCeil"]), None)
+        head = (f"garbage collection used {gc[c]:.1%} of this case's time and the limit is "
+                f"{T['gcCeil']:.1%}")
+        if ref is not None and per_core[c] >= per_core[ref] * slow_floor:
+            for r in rs:
+                r["gcKept"] = (f"{head}, but it did {per_core[c] / per_core[ref]:.3f}x the {n_cores(ref)} "
+                               f"case's work per core, so memory was not holding it back")
+            continue
+        why = (f"{head}, and it did {1 - per_core[c] / per_core[ref]:.1%} less work per core than the "
+               f"{n_cores(ref)} case" if ref is not None else
+               f"{head}, with no larger case under the limit to compare it with")
+        for r in rs:
+            r["status"] = "CEILING"
+            r["ceiling"] = (f"{why}. The pipeline ran short of memory, not cores. Give it more memory "
+                            f"instead of more cores.")
+
+
 def build_table(runs, cases_order=None, quick=False):
     """Pure: per-case means, spreads, reportability, step ratios, order effect.
     Fed by the suite, by `selftest`, and by `replay` over the record."""
+    gc_judgement(runs)
     ok = {}
     ceilings = []
     for r in runs:

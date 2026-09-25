@@ -307,6 +307,7 @@ self-test) and `completeness` have passed **for the same build hash**.
 | `caps` | `kafka`, `jobmanager` CPU caps; `tmMemory` (Flink process size), `tmMemoryLimit`, `kafkaMemory`, `kafkaHeap` |
 | `images.flink`, `images.kafka` | pinned tags; preflight checks they are native to the host |
 | `images.kafkaLibs` | where the broker image keeps its jars: `/opt/kafka/libs` for `apache/kafka` (the default), `/usr/share/java/kafka` for `confluentinc/cp-kafka`. Left out, it follows the image. The harness compiles its offset reader against the image's own kafka-clients jar and finds the broker's command-line tools itself |
+| `generator`, `verifier` | commands the harness runs **on the host, not in the cluster**, usually `{java} -cp {jar} …`. `{jar}` is then the whole classpath: nothing from the Flink image is on it. A job jar built with Flink and SLF4J marked `provided` will not start them (run 51 lost two rebuilds to `ClassNotFoundException`). Either shade what they use into the jar, or keep the generator and verifier free of Flink classes |
 | `settleS` | optional. How long completeness keeps the job running after the last input is committed, so a throttled output emits its final value before the job is cancelled. Default: one checkpoint interval plus 2 s, enough for a throttle no slower than the checkpoint. Set it for a slower one |
 | `jdk` | the host JDK home; preflight checks its major version matches the engine image |
 | `axis`, `apiLevel`, `guarantee.state`, `guarantee.sink`, `checkpointMs` | the header fields of §9, verbatim into the report |

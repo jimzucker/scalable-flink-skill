@@ -185,11 +185,17 @@ A reader can then see what was assumed rather than agreed.
    | one output per input | a `COUNT(*)` column in every aggregate: a running `SUM` can come back unchanged, and a row that did not change is not guaranteed to be written |
    | the market value throttled to 10 s | a 10-second processing-time `TUMBLE` window of the position changes, a running `SUM` of those per key, then the latest price |
    | the price joined to both key levels | a regular join on symbol, not a broadcast (SQL has none). Every account key carries exactly one symbol, so per-key order holds |
+   | the latest price | `ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY ts DESC) = 1` over the prices table — what runs 50 and 51 both used, and both passed completeness with it |
+   | `job.sourceVertexMatch` | `Source: ` and the input table's name — a SQL job names its source vertex that way, not `kafka-source` |
+   | `design.operators` | the sink tables' short names (`positions_by_symbol`), not `default_catalog.default_database.…`, which the plan never shows |
 
-   What to expect, measured once: about **a quarter of the DataStream builds'
-   throughput per core**, and a 1-core case that spent 7–10% of its time on
-   garbage collection, over the 5.5% limit. That threw out the whole 1-core case
-   then; a case that does as much work per core as the case above it is now kept. The key-spread
+   What to expect, measured in runs 50 and 51: **a quarter to a sixth of the
+   DataStream builds' throughput per core**, 2→4 at 1.82–2.12×, and a 1-core case
+   that spends 7–10% of its time on garbage collection. In run 51 that case also
+   did 11.5% less work per core than 2 cores, so it was a ceiling and 1→2 had no
+   number. More worker memory did not help in either run (+30% in run 51 left its
+   garbage collection where it was), so there is no memory setting to recommend:
+   the one-core SQL case is simply weaker. The key-spread
    check in preflight hashes keys the way DataStream does, which is not how a SQL
    job lays out its keys: treat its PASS as unchecked for SQL.
 

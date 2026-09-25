@@ -3493,11 +3493,11 @@ def gc_judgement(runs):
                 f"{T['gcCeil']:.1%}")
         if ref is not None and per_core[c] >= per_core[ref] * slow_floor:
             for r in rs:
-                r["gcKept"] = (f"{head}, but it did {per_core[c] / per_core[ref]:.3f}x the {n_cores(ref)} "
+                r["gcKept"] = (f"{head}, but it did {per_core[c] / per_core[ref]:.3f}x the {ref}-core "
                                f"case's work per core, so memory was not holding it back")
             continue
         why = (f"{head}, and it did {1 - per_core[c] / per_core[ref]:.1%} less work per core than the "
-               f"{n_cores(ref)} case" if ref is not None else
+               f"{ref}-core case" if ref is not None else
                f"{head}, with no larger case under the limit to compare it with")
         for r in rs:
             r["status"] = "CEILING"

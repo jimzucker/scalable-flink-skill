@@ -34,7 +34,12 @@ nohup python3 $H all > results/all.log 2>&1 &        # the whole chain below, on
 stopping at the first step that does not pass; `results/DONE` holds the
 verdict and the wall time, `results/phases.log` the timestamps the harness
 wrote (run 11 wrote its own by hand and spent 20 minutes between commands).
-Wait with `until [ -f results/DONE ]; do sleep 30; done` and nothing more.
+Wait with `watch.sh`, giving it the run directory in an environment variable:
+`PROJECT_DIR=/path/to/run sh $(dirname $H)/watch.sh`. It prints progress and exits when
+`results/DONE` appears. **Do not wait with** `cd /path/to/run && until [ -f results/DONE ]; do
+sleep 30; done`: the chain stops any process that names the run directory on its command line
+or sits in it, and that includes the shell you are waiting in (runs 36, 44, 47, 48 and 49 each
+lost one this way).
 
 While it runs, `results/PROGRESS.txt` holds one sentence, overwritten — which
 step of seven, which case of ten, a bar and an estimate of what is left:
@@ -263,7 +268,7 @@ Type the steps yourself only when one of them needs re-running:
 python3 $H replay          # thresholds vs the recorded runs — seconds, no stack
 python3 $H up              # stack/compose.yml generated, broker + job manager up, sampler compiled
 python3 $H preflight       # §3, one PASS/FAIL row per check
-sh $HERE/watch.sh          # watch a detached run without being swept up in its teardown
+PROJECT_DIR=$PWD sh $(dirname $H)/watch.sh   # watch a detached run without being swept up in its teardown
                            #   PROJECT_DIR=/path/to/run sh harness/watch.sh
 python3 $H tinyproof       # every case in `cases`, on a small backlog, ratio bounded, every guard broken on purpose
 nohup python3 $H fill > results/fill.log 2>&1 &        # the full backlog; build the dashboard meanwhile
@@ -301,6 +306,7 @@ self-test) and `completeness` have passed **for the same build hash**.
 | `caps` | `kafka`, `jobmanager` CPU caps; `tmMemory` (Flink process size), `tmMemoryLimit`, `kafkaMemory`, `kafkaHeap` |
 | `images.flink`, `images.kafka` | pinned tags; preflight checks they are native to the host |
 | `images.kafkaLibs` | where the broker image keeps its jars: `/opt/kafka/libs` for `apache/kafka` (the default), `/usr/share/java/kafka` for `confluentinc/cp-kafka`. Left out, it follows the image. The harness compiles its offset reader against the image's own kafka-clients jar and finds the broker's command-line tools itself |
+| `settleS` | optional. How long completeness keeps the job running after the last input is committed, so a throttled output emits its final value before the job is cancelled. Default: one checkpoint interval plus 2 s, enough for a throttle no slower than the checkpoint. Set it for a slower one |
 | `jdk` | the host JDK home; preflight checks its major version matches the engine image |
 | `axis`, `apiLevel`, `guarantee.state`, `guarantee.sink`, `checkpointMs` | the header fields of §9, verbatim into the report |
 

@@ -307,6 +307,11 @@ class Cfg:
                                  '{"inputRecordsProcessed": N}')
         self.ckpt_ms = int(c["checkpointMs"])
         self.ckpt_s = self.ckpt_ms / 1000.0
+        # How long completeness keeps the job running after the last input is
+        # committed. A checkpoint interval and two seconds by default: enough for
+        # a throttle no slower than the checkpoint (runs 48-50's 10 s market value
+        # passed with 2 s to spare). Set it for a slower throttled output.
+        self.settle_s = float(c.get("settleS") or (self.ckpt_s + 2))
         self.jar = os.path.join(self.root, c["job"]["jar"])
         self.jar_dir = os.path.dirname(self.jar)
         self.jar_in_ctr = "/jobs/" + os.path.basename(self.jar)
@@ -2783,10 +2788,15 @@ def scorecard(out):
         who = next((f"the {r['cores']}-core {r.get('pass') or 'pass'}" for r in (out.get("runs") or [])
                     if (r.get("hostLoadClose") or 0) == worst[1]), None)
         where = f"{who}: " if who else ""
-        notes.append(f"  {where}the machine was busy with something else: load reached {worst[1]:.1f} on "
-                     f"{worst[2]} cores while measuring. A CPU cap is a share, not a promise of "
-                     f"cycles — every case can read 100% of its cap and still do less work. Close "
-                     f"what else is running and measure again.")
+        # The load counts this run's own containers too. Runs 48, 49 and 50 were
+        # told "something else" when nothing else was running.
+        c = cfg()
+        busiest = next((r for r in (out.get("runs") or []) if (r.get("hostLoadClose") or 0) == worst[1]), {})
+        own = (busiest.get("cores") or 0) + c.kafka_cap + c.jm_cap
+        notes.append(f"  {where}the machine's load reached {worst[1]:.1f} on {worst[2]} cores while measuring. "
+                     f"This run's own containers are allowed about {own:.1f} of them, so some or all of "
+                     f"that is the run itself. If this pass reads like the others at its size it cost "
+                     f"nothing; if it does not, close what else is running and measure again.")
     L.append("")
     L.append("  Each pair is what it was allowed and how much of that went:")
     L.append("    scaling           what the step into this case gave — nothing on the baseline")

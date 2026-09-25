@@ -2248,7 +2248,9 @@ def cmd_completeness():
                     L.wait_running(jid, cores, timeout=240)
                     log("KILL: job RUNNING again after the restart")
                 if cm >= c.small:
-                    time.sleep(c.ckpt_s + 2)
+                    # the job keeps running this long after the last input is committed,
+                    # so a throttled output emits its final value before the job is cancelled
+                    time.sleep(c.settle_s)
                     log(f"processed the full test data set in {time.time()-t0:.1f}s" + (" (killed and restarted mid-run)" if killed else ""))
                     return {"group": group, "killed": killed, "drainS": round(time.time() - t0, 1),
                             "killedAtCommitted": killed_at,
@@ -2780,7 +2782,7 @@ def cmd_all(steps=None, results=None):
     verdict = "PASS"
     say = {"up": "starting the stack", "preflight": "preflight checks",
            "completeness": "proving nothing is lost, including after killing the pipeline mid-run",
-           "tinyproof": "the tiny proof: two cases end to end, and every guard broken on purpose",
+           "tinyproof": "the tiny proof: every case end to end, and every guard broken on purpose",
            "fill": "filling the backlog — the long quiet one",
            "suite": "measuring the cases", "report": "writing the report"}
     for i, (name, fn) in enumerate(steps):
@@ -2836,6 +2838,12 @@ def cmd_all(steps=None, results=None):
     out["seconds"] = round(time.time() - t_all, 1)
     save_all()
     mark(f"phase=all end {verdict} {out['seconds']/60:.1f} min")
+    # PROGRESS.txt used to stay at "86% ... writing the report" after DONE
+    # appeared (runs 48 and 49).
+    try:
+        L.progress(f"finished: {verdict} {out['seconds']/60:.1f} min", pct=1.0)
+    except Exception:
+        pass
     with open(done, "w") as f:
         f.write(f"{verdict} {out['seconds']/60:.1f} min\n")
     return 0 if verdict == "PASS" else 1
@@ -2925,6 +2933,11 @@ if __name__ == "__main__":
     if "--quick" in sys.argv[2:]:
         L.QUICK = True
         print(f"QUICK LOOK: {L.T['quickPasses']} passes per case; the table it writes is marked unpublishable")
+    # replay and selftest-pure read no stack, so they should not need a run
+    # directory: run 49 found `prove.py replay` crashing anywhere else.
+    if name in ("replay", "selftest-pure") and not os.environ.get("PIPELINE_JSON") \
+            and not os.path.exists("pipeline.json"):
+        os.environ["PIPELINE_JSON"] = os.path.join(L.HERE, "pipeline.example.json")
     if name not in ("replay",):
         cfg()  # validate pipeline.json first
     if name not in ("replay", "selftest-pure", "report"):

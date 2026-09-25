@@ -188,7 +188,8 @@ A reader can then see what was assumed rather than agreed.
 
    What to expect, measured once: about **a quarter of the DataStream builds'
    throughput per core**, and a 1-core case that spent 7–10% of its time on
-   garbage collection, over the 5.5% limit, so 1→2 had no number. The key-spread
+   garbage collection, over the 5.5% limit. That threw out the whole 1-core case
+   then; a case that does as much work per core as the case above it is now kept. The key-spread
    check in preflight hashes keys the way DataStream does, which is not how a SQL
    job lays out its keys: treat its PASS as unchecked for SQL.
 
@@ -718,7 +719,7 @@ for it.
 | the input divides evenly across subtasks | partition count divisible by every parallelism under test (8 partitions serves 1, 2, 4; 6 would leave the 4-core case reading 2/2/1/1 and never reaching its cap) |
 | an output the business case asks for was never written | after the completeness drain, every topic named in `topicsAlsoWritten` has records. These are the pipeline's own outputs — the throttled ones, outside `topics.out` — and nothing else looks at them. Two clean-room runs in a row built **one** market value where the default asks for two, and passed every other guard |
 | the keys divide evenly across subtasks | the engine's own key-group assignment says where every key in `keySets` would land at every case. A subtask with **no keys** always stops the run; an uneven one stops it when a `pipeline.max-parallelism` exists that would even it out, and is reported in the row when none does |
-| memory is not the constraint | **every case gives its subtasks the same memory**, as a base plus a per-core share. Passing nothing does not leave memory to the engine: the image ships a flat figure — `flink:1.20.1` sets 1728m — so every case runs on the same total, which is the configuration this rule exists to catch. Clean-room run 36 measured 2→4 at 1.510 on the image default against 1.743 with memory per subtask, and the GC ceiling did **not** catch it: GC was at its lowest, 1.40%, on the case losing the most. A case whose GC exceeds 5.5% of its capacity is still a ceiling, not a result |
+| memory is not the constraint | **every case gives its subtasks the same memory**, as a base plus a per-core share. Passing nothing does not leave memory to the engine: the image ships a flat figure — `flink:1.20.1` sets 1728m — so every case runs on the same total, which is the configuration this rule exists to catch. Clean-room run 36 measured 2→4 at 1.510 on the image default against 1.743 with memory per subtask, and the GC ceiling did **not** catch it: GC was at its lowest, 1.40%, on the case losing the most. A case whose GC exceeds 5.5% of its capacity is a ceiling **if it also does less work per core than the nearest larger case under that limit**, by more than a step ratio's own noise — or if there is no such case to compare it with. More GC with nothing lost is not a ceiling: clean-room run 50's SQL 1-core case ran 8–10% GC and did as much work per core as its 2-core case, and cutting its GC to 7.4% made it no faster, not a result |
 | the claim itself | each step returns **1.80× or better** on a doubling, judged on the low end of its range, or the chain fails with the per-core, idle, GC and cap figures for both cases — a valid table that does not scale is a result about the pipeline, not a table to publish |
 | a failed case still owns the cluster | job torn down on **every** exit path |
 | no job is actually running | engine reports RUNNING with the expected parallelism |

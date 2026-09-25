@@ -24,7 +24,8 @@
     ],
     "inputs": [
       "payments"
-    ]
+    ],
+    "every": {"hourly-total-by-merchant": "1 hour"}
   },
   "keySets": {
     "by-merchant": "merchantKeys"

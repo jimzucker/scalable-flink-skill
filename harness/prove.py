@@ -672,6 +672,40 @@ def cmd_selftest(live=True, topic=None):
         assert "every 1-core pass was thrown out (4 of 4)" in g and "garbage collection used 9.2%" in g, g
     expect("claim: the missing step says why, in the harness's own words (must not fire)",
            why50, "", should_fire=False)
+    def diagram():
+        # issue #76, drawn the way a person plans a job: one box per step, input
+        # topics with partitions, keyBy with the key set and its size, a dotted
+        # broadcast, outputs with key counts and the interval on the arrow in.
+        # Shapes from clean-room runs 49 (DataStream) and 51 (Flink SQL).
+        plan = {"nodes": [
+            {"id": "a", "description": "positions-by-symbol+market-value-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>:  +- sink-positions-by-symbol: Committer<br/>+- sink-market-values-by-symbol: Writer<br/>   +- sink-market-values-by-symbol: Committer<br/>",
+             "inputs": [{"id": "s", "ship_strategy": "HASH"}, {"id": "p", "ship_strategy": "BROADCAST"}]},
+            {"id": "s", "description": "Source: orders-source<br/>+- parse<br/>", "inputs": []},
+            {"id": "p", "description": "Source: prices-source<br/>+- parse-prices<br/>", "inputs": []}]}
+        ctx = {"inputs": [{"topic": "orders", "partitions": 8, "source": "orders-source"}, {"topic": "prices"}],
+               "outputs": [{"topic": "positions-by-symbol", "keys": 4096},
+                           {"topic": "market-values-by-symbol", "every": "10 s"},
+                           {"topic": "nobody-writes-this"}],
+               "keyed": {"positions-by-symbol": 4096}}
+        g = L.graph_mermaid(plan, ctx)
+        for want in ('in0(["orders<br/>8 partitions"])', "in0 --> v1o0", '("parse")',
+                     "-- keyBy positions-by-symbol, 4,096 keys -->", "-. broadcast .->",
+                     'out0(["positions-by-symbol<br/>4,096 keys"])', "v0o0 --> out0",
+                     'out1(["market-values-by-symbol<br/>4,096 keys"])', "v0o0 -- every 10 s --> out1"):
+            assert want in g, f"missing {want!r} in:\n{g}"
+        assert "Writer" not in g and "Committer" not in g, "sink plumbing was drawn"
+        assert "--> out2" not in g, "a topic no step names was connected by guess"
+        # SQL names are shortened the same way for every job
+        for raw, want in (("[38]:TableSourceScan(table=[[default_catalog, default_database, orders]], fields=[a])", "read orders"),
+                          ("[52]:WindowAggregate(groupBy=[symbol], window=[TUMBLE(time_col=[pt], size=[10 s])], select=[x])",
+                           "window by symbol, every 10 s"),
+                          ("[62]:Join(joinType=[InnerJoin], where=[(symbol = symbol0)], select=[x])", "join on symbol"),
+                          ("[59]:Rank(strategy=[AppendFastStrategy], rankType=[ROW_NUMBER], rankRange=[rankStart=1, rankEnd=1], partitionBy=[symbol], orderBy=[ts DESC], select=[x])", "latest by symbol"),
+                          ("[39]:Calc(select=[symbol, qty])", None)):
+            got = L._op_name(raw)
+            assert got == want, f"{raw[:40]} read as {got!r}, expected {want!r}"
+    expect("diagram: steps, keys, interval and partitions from the configuration (must not fire)",
+           diagram, "", should_fire=False)
     def pinned(props, want):
         def go():
             got = L.pin_collector(props).get("env.java.opts.taskmanager")
@@ -1217,7 +1251,8 @@ def cmd_selftest(live=True, topic=None):
 
     def graph_renders():
         m = L.graph_mermaid(RUN36_PLAN)
-        for needle in ("flowchart LR", "HASH", "BROADCAST", "parse-order"):
+        # edges say how records cross, in the words a reader uses (issue #76)
+        for needle in ("flowchart LR", "keyBy", "broadcast", "parse-order"):
             if needle not in m:
                 raise Exception(f"the rendered graph has no {needle}: {m}")
         if "<br/>:-" in m or "+-" in m:
@@ -1944,6 +1979,19 @@ def cmd_preflight():
             raise Exception(f"{c.jar} does not exist")
         return f"build {build_hash()}"
 
+    def every_declared():
+        """Outputs written outside topics.out are the throttled or windowed ones,
+        and only the build knows how often they are written. Reported, not
+        enforced: a build may have none (issue #76)."""
+        every = (c.raw.get("design") or {}).get("every") or {}
+        missing = [t for t in c.topics_also if t not in every]
+        if not c.topics_also:
+            return "no output is written outside topics.out, so there is no interval to show"
+        if not missing:
+            return "design.every gives an interval for " + ", ".join(f"{t} ({every[t]})" for t in c.topics_also)
+        return (f"no interval declared for {', '.join(missing)}: add design.every "
+                f"{{\"{missing[0]}\": \"10 s\"}} (with the real interval) so the job graph shows how often it is written")
+
     def either_kafka():
         """The same build should run on Apache Kafka or Confluent with a config
         change. Reported, not enforced: an interview can ask for a Confluent-only
@@ -2003,6 +2051,7 @@ def cmd_preflight():
     check("the VM trim command is known", trim)
     check("the job jar exists and hashes", jar)
     check("the build runs on either Kafka (reported)", either_kafka)
+    check("the diagram can show how often each output is written (reported)", every_declared)
     save_json("preflight.json", {"checks": [{"check": a, "result": b, "detail": d} for a, b, d in rows],
                                  **extra})
     fails = [r for r in rows if r[1] == "FAIL"]

@@ -615,8 +615,15 @@ def cmd_selftest(live=True, topic=None):
            pinned({}, "-XX:+UseG1GC"), "", should_fire=False)
     expect("collector: other options kept, G1 added (must not fire)",
            pinned({"env.java.opts.taskmanager": "-Xss1m"}, "-Xss1m -XX:+UseG1GC"), "", should_fire=False)
-    expect("collector: one the config names is left alone (must not fire)",
-           pinned({"env.java.opts.taskmanager": "-XX:+UseParallelGC"}, "-XX:+UseParallelGC"), "", should_fire=False)
+    expect("collector: G1 already named is kept as it is (must not fire)",
+           pinned({"env.java.opts.taskmanager": "-XX:+UseG1GC -Xss1m"}, "-XX:+UseG1GC -Xss1m"), "", should_fire=False)
+    def other_gc():
+        L.pin_collector({"env.java.opts.taskmanager": "-XX:+UseParallelGC"})
+    expect("collector: any collector but G1 in the config stops the run", other_gc, "G1 only")
+    expect("collector: a pass that reported Serial stops the suite",
+           case(gcNames=["All", "Copy", "MarkSweepCompact"]), "not G1")
+    expect("collector: a pass that reported G1 is fine (must not fire)",
+           case(gcNames=["All", "G1 Young Generation", "G1 Old Generation"]), "", should_fire=False)
     def mixed_gc():
         def run(c, p, rate, gc):
             return dict(cores=c, **{"pass": p}, recordsPerSec=rate, status="OK", gcNames=["All"] + gc)

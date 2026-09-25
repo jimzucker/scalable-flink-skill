@@ -414,10 +414,10 @@ makes the JVM see one processor and pick the **serial** collector, while every
 case above it runs G1. Clean-room run 35 measured it. Pinning the collector
 gave the one-core case **+19%** and moved 1→2 from **2.364× to 1.997×** — the
 superlinear first step that three runs had reported was the baseline running
-different code, not the pipeline scaling. **The harness now pins G1 on every
-case itself** unless `flinkProperties` names a collector, reads each case's
-collector back off the engine, and does not count a step between two cases that
-ran different ones. Measured again on 2026-09-24, on two builds in opposite
+different code, not the pipeline scaling. **G1 is required.** The harness sets
+it on every case, stops the run if `flinkProperties` asks for any other
+collector, reads each case's collector back off the engine, and stops the suite
+if a case ran anything else. Measured again on 2026-09-24, on two builds in opposite
 directions: the published demo's own build read 1→2 at 2.01× with a serial
 baseline and 1.91× with G1 on every case; clean-room run 48's read 1.82× with G1
 and 1.96× with a serial baseline. The published 2.06× came from the first.

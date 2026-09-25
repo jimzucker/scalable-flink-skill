@@ -735,8 +735,10 @@ def cmd_selftest(live=True, topic=None):
     expect("source: no vertex matching sourceVertexMatch names the setting and the vertices",
            case(sourceIdle=None, backpressure={"orders[38] -> Calc[39]": {"idle": 0.1}}),
            "sourceVertexMatch")
+    # the vertex name comes from whatever config is loaded: CI's example says
+    # 'kafka-source', a local one may say 'Source' (#99 hardcoded the latter)
     expect("source: a matching vertex with no reading keeps the plain message",
-           case(sourceIdle=None, backpressure={"Source: orders[38] -> Calc[39]": {}}),
+           case(sourceIdle=None, backpressure={f"{L.cfg().source_match}[38] -> Calc[39]": {}}),
            "no way to tell whether")
     expect("the broker was starved of page cache (cores off their cap)",
            case(brokerLimitHits=310423, brokerRefaults=6270562, tmCapFrac=0.93), "hit its memory limit", ceiling=True)

@@ -606,6 +606,30 @@ def cmd_selftest(live=True, topic=None):
            tools("/usr/bin/kafka-topics\n", ("/usr/bin", "")), "", should_fire=False)
     expect("kafka tools: nothing found is not guessed at (must not fire)",
            tools("", None), "", should_fire=False)
+    # Clean-room run 50: cases 1, 2, 4; every 1-core pass thrown out for GC.
+    def gaps(runs, cases, want_steps):
+        def go():
+            table = L.build_table(runs, cases)
+            got = [g["step"] for g in L.missing_steps(cases, table, runs)]
+            assert got == want_steps, f"missing {got!r}, expected {want_steps!r}"
+        return go
+    def pas(c, p, rate, status="OK", ceiling=None):
+        return dict(cores=c, **{"pass": p}, recordsPerSec=rate, status=status, ceiling=ceiling)
+    gc = "garbage collection used 9.2% of this case's time and the limit is 5.5%. The pipeline ran short"
+    run50 = [pas(1, "p1-asc", 28012, "CEILING", gc), pas(2, "p1-asc", 54514), pas(4, "p1-asc", 102706),
+             pas(4, "p2-desc", 106728), pas(2, "p2-desc", 55378), pas(1, "p2-desc", 27249, "CEILING", gc),
+             pas(1, "p3-asc", 28874, "CEILING", gc), pas(2, "p3-asc", 58802), pas(4, "p3-asc", 106517),
+             pas(1, "sentinel", 29292, "CEILING", gc)]
+    expect("claim: run 50's thrown-out baseline leaves 1->2 missing (must not fire)",
+           gaps(run50, [1, 2, 4], ["1->2"]), "", should_fire=False)
+    expect("claim: every case counted, nothing missing (must not fire)",
+           gaps([dict(r, status="OK") for r in run50], [1, 2, 4], []), "", should_fire=False)
+    def why50():
+        table = L.build_table(run50, [1, 2, 4])
+        g = L.missing_steps([1, 2, 4], table, run50)[0]["why"]
+        assert "every 1-core pass was thrown out (4 of 4)" in g and "garbage collection used 9.2%" in g, g
+    expect("claim: the missing step says why, in the harness's own words (must not fire)",
+           why50, "", should_fire=False)
     def pinned(props, want):
         def go():
             got = L.pin_collector(props).get("env.java.opts.taskmanager")
@@ -2556,6 +2580,23 @@ def cmd_report():
         print("  minutes, and neither changes the pipeline.\n")
         return 1
 
+    # A step the configuration asks for with no counted number is not a pass,
+    # however well the other step did (clean-room run 50: every 1-core pass
+    # thrown out, 2->4 met, DONE said PASS).
+    gaps = L.missing_steps(c.cases, out["table"], out["runs"])
+    if gaps:
+        out["reportVerdict"] = "step-missing"
+        out["missingSteps"] = gaps
+        save_json("suite.json", out)
+        print("\nA STEP THE CLAIM NEEDS HAS NO NUMBER\n")
+        for g in gaps:
+            print(f"  {g['step'].replace('->', '→')} cores: not measured — {g['why']}.")
+        met = [r["step"].replace("->", "→") for r in steps if r.get("reportable") and r.get("meetsClaim")]
+        if met:
+            print(f"  {', '.join(met)} met the target, but the claim covers every step in cases, so it is not met.")
+        print("  Fix what threw that case out, or take the case out of `cases` and claim only the steps")
+        print("  you can measure. Either way it is a new claim, and it is said next to the numbers.\n")
+        return 1
     if short:
         t = out["table"]
         need = 2 * T["scalingFloor"]
@@ -2783,7 +2824,11 @@ def cmd_all(steps=None, results=None):
             verdict = ({"no-result": "STOPPED at report: no scaling result — too many cases were "
                                      "thrown out to compare one core count with another",
                         "claim-not-met": "STOPPED at report: the table is good, the pipeline did "
-                                         "not meet the target"}.get(why,
+                                         "not meet the target",
+                        "step-missing": "STOPPED at report: a step the claim needs was not measured"
+                                        + ("".join(f" — {g['step'].replace('->', '→')}: {g['why']}"
+                                                   for g in ((load_json("suite.json") or {}).get("missingSteps") or []))
+                                           )}.get(why,
                         "STOPPED at report: the table could not be reported")
                        if name == "report" else f"STOPPED at {name}")
             break

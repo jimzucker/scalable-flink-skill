@@ -2381,6 +2381,40 @@ def no_result_reason(table, runs):
                          f"usable readings at {where}.")}
 
 
+def missing_steps(case_list, table, runs):
+    """Pure. The steps the configuration asks for that have no counted number.
+
+    no_result_reason catches a run with no step at all. This catches the run
+    that lost one of them: clean-room run 50 asked for 1, 2 and 4 cores, every
+    1-core pass was thrown out, and the report judged 2->4 alone and said PASS.
+    Returns [{"step": "1->2", "why": "..."}], empty when every step counted."""
+    want = sorted(set(int(c) for c in case_list or []))
+    have = {st.get("step"): st for st in (table.get("stepRatios") or [])}
+    cases = {int(k): v for k, v in (table.get("cases") or {}).items()}
+    out = []
+    for a, b in zip(want, want[1:]):
+        name = f"{a}->{b}"
+        st = have.get(name)
+        if st and st.get("reportable"):
+            continue
+        why = []
+        for c in (a, b):
+            cs = cases.get(c)
+            if cs is None:
+                gone = [r for r in runs if int(r.get("cores", 0)) == c]
+                first = next((r.get("ceiling") or r.get("refusal") for r in gone
+                              if r.get("status") != "OK" and (r.get("ceiling") or r.get("refusal"))), "")
+                reason = re.split(r"(?<=[a-z%)])\. ", first, maxsplit=1)[0].rstrip(".")
+                why.append(f"every {c}-core pass was thrown out ({len(gone)} of {len(gone)})"
+                           + (f": {reason}" if reason else ""))
+            elif not cs.get("reportable"):
+                why.append(f"the {c}-core case does not count: {cs.get('unreportableReason')}")
+        if not why and st:
+            why.append((st.get("reason") or "").replace("voided: ", ""))
+        out.append({"step": name, "why": "; ".join(w for w in why if w) or "no number"})
+    return out
+
+
 def broker_held_back(cases):
     """The case the broker could have held back, or None: the one with the most
     broker limit hits among cases whose worker was under its cap floor. A case
@@ -2666,7 +2700,9 @@ def scorecard(out):
     kmem = getattr(c, "kafka_mem", "") or "?"
     # the step that ends at each case, so the advice can ask whether it doubled
     step_into = {r["to"]: r for r in (t.get("stepRatios") or []) if r.get("to") is not None}
-    lowest = min((cs["cores"] for cs in t.get("cases", {}).values()), default=None)
+    # The configured baseline, not the lowest case left in the table: run 50 lost
+    # every 1-core pass and was told "2 cores is the baseline. Do not tune it".
+    lowest = out.get("baseline") or min((cs["cores"] for cs in t.get("cases", {}).values()), default=None)
     # Each column is what it was given, then how much of it was used, so a
     # reader sees the size and the utilisation without looking anything up.
     # One definition of the widths, used by the header and by every row, so the
@@ -3735,7 +3771,9 @@ def render_markdown(out):
             L.append(f"**{r['step'].replace('->', '→')} cores: not reported — {r['reason']}.**")
     kcap = getattr(c, "kafka_cap", 0) or 0
     step_into = {r["to"]: r for r in (t.get("stepRatios") or []) if r.get("to") is not None}
-    lowest = min((cs["cores"] for cs in t.get("cases", {}).values()), default=None)
+    # The configured baseline, not the lowest case left in the table: run 50 lost
+    # every 1-core pass and was told "2 cores is the baseline. Do not tune it".
+    lowest = out.get("baseline") or min((cs["cores"] for cs in t.get("cases", {}).values()), default=None)
     L += ["", "| cores | speed | scaling | pipeline CPU | pipeline memory | Kafka CPU | Kafka memory | "
           "blocked by | what to do |", "|---:|---:|---:|---|---|---|---|---|---|",
           "| | | what the step into it gave | cores it could use / how much it used | memory it could use / share of the time "

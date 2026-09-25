@@ -218,11 +218,11 @@ def cmd_replay():
     for b in bad:
         print("  DISAGREES:", b)
     if bad:
-        print("REPLAY FAILED: a threshold disagrees with the record. Fix the threshold, not the record.")
+        print("REPLAY STOPPED: a threshold disagrees with the record. Fix the threshold, not the record.")
         return 1
     if (replay_names() or replay_cases() or replay_configs() or replay_sizing()
             or replay_broker_memory()):
-        print("REPLAY FAILED: a guard disagrees with a recorded configuration. Fix the guard, not the record.")
+        print("REPLAY STOPPED: a guard disagrees with a recorded configuration. Fix the guard, not the record.")
         return 1
     print("REPLAY OK: no recorded valid table would fail, no recorded invalid one reported, "
           "and every recorded configuration still gets its recorded verdict")
@@ -265,7 +265,7 @@ def cmd_selftest(live=True, topic=None):
                        result="CEILING", message=e.msg[:200])
         except (Refusal, CaseRefused) as e:
             msg = e.msg if isinstance(e, Refusal) else e.refusal.msg
-            res = dict(guard=name, ok=should_fire and needle.lower() in msg.lower(), result="FAILED", message=msg[:200])
+            res = dict(guard=name, ok=should_fire and needle.lower() in msg.lower(), result="FIRED", message=msg[:200])
         except Exception as e:
             res = dict(guard=name, ok=False, result=f"WRONG ERROR {type(e).__name__}: {e}"[:200])
         results.append(res)
@@ -732,6 +732,12 @@ def cmd_selftest(live=True, topic=None):
            held([(1, 1.002, 381), (2, 0.992, 0), (4, 1.001, 0)], None), "", should_fire=False)
     expect("broker advice: a case under its cap with hits is the one named (must not fire)",
            held([(1, 0.99, 2000), (4, 0.93, 30927)], 4), "", should_fire=False)
+    expect("source: no vertex matching sourceVertexMatch names the setting and the vertices",
+           case(sourceIdle=None, backpressure={"orders[38] -> Calc[39]": {"idle": 0.1}}),
+           "sourceVertexMatch")
+    expect("source: a matching vertex with no reading keeps the plain message",
+           case(sourceIdle=None, backpressure={"Source: orders[38] -> Calc[39]": {}}),
+           "no way to tell whether")
     expect("the broker was starved of page cache (cores off their cap)",
            case(brokerLimitHits=310423, brokerRefaults=6270562, tmCapFrac=0.93), "hit its memory limit", ceiling=True)
     expect("cores off their cap with no broker hits still says something else held it back",
@@ -875,7 +881,7 @@ def cmd_selftest(live=True, topic=None):
                 {"cores": 2, "pass": "sentinel", "recordsPerSec": 370.0}]
         t = build_table(runs)
         if not t["cases"][2]["reportable"] or t["sentinel"]["drift"] > 0:
-            raise Exception(f"an 8% drift (inside the 10% noise floor) was refused: {t['sentinel']}")
+            raise Exception(f"an 8% drift (inside the 10% noise floor) was thrown out: {t['sentinel']}")
     expect("sentinel: drift inside the noise floor (must not fire)", sentinel_ok, "", should_fire=False)
 
     def watcher():
@@ -1842,7 +1848,7 @@ def cmd_preflight():
             raise Exception(
                 f"no memory keys are set, so every case runs on {flat} from the image's "
                 f"config.yaml -- one flat figure for 1, 2 and 4 cores, which is exactly what "
-                f"this check refuses when it is written down. Set caps.tmMemoryBase and "
+                f"this check stops the run when it is written down. Set caps.tmMemoryBase and "
                 f"caps.tmMemoryPerCore so each subtask gets the same memory. The GC ceiling "
                 f"does not catch this: run 36 measured GC at its lowest on the starved case.")
         if not c.tm_mem_per_core:
@@ -2061,7 +2067,7 @@ def cmd_tinyproof():
                     log(f"  keeping it: a case that is not the constraint is reported and left out "
                         f"of the steps, not a reason to stop.")
                 else:
-                    log(f"  FAILED ({e.refusal.scope}): {e.refusal.msg}")
+                    log(f"  STOPPED ({e.refusal.scope}): {e.refusal.msg}")
                     out["result"] = "FAIL"
                     rc = 1
         # Every case that produced a rate, whether it was accepted or was a
@@ -2094,7 +2100,7 @@ def cmd_tinyproof():
             except Refusal as e:
                 out["disk"] = getattr(e, "detail", None)
                 out["result"] = "FAIL"
-                log(f"  FAILED ({e.scope}): {e.msg}")
+                log(f"  STOPPED ({e.scope}): {e.msg}")
                 rc = 1
         if rc == 0:
             d = out["disk"]
@@ -2116,7 +2122,7 @@ def cmd_tinyproof():
             out["backlogConfigured"] = c.backlog
             if c.backlog < want:
                 out["result"] = "FAIL"
-                log(f"  FAILED (rig): backlog {c.backlog:,} is short of the {want:,} records the "
+                log(f"  STOPPED (rig): backlog {c.backlog:,} is short of the {want:,} records the "
                     f"{top['cores']}-core case needs at its measured {top['recordsPerSec']:,.0f} rec/s "
                     f"(warm-up + window + headroom, x1.5); set backlog.count to at least that")
                 rc = 1
@@ -2260,7 +2266,7 @@ def cmd_tinyproof():
         out["selftest"] = "PASS" if rc == 0 else "FAIL"
         save_json("tinyproof.json", out)
     L.delete_topic(topic)  # the disk budget did not include it
-    print("TINY PROOF " + ("PASSED" if rc == 0 else "FAILED"))
+    print("TINY PROOF " + ("PASSED" if rc == 0 else "STOPPED"))
     return rc
 
 
@@ -2364,7 +2370,7 @@ def cmd_completeness():
         print(r.stdout)
         if r.returncode != 0:
             print(r.stderr[-3000:])
-            raise Refusal("rig", f"COMPLETENESS FAILED ({label}): verifier exit {r.returncode}")
+            raise Refusal("rig", f"the completeness check did not pass ({label}): the verifier exited with {r.returncode}")
         return r.stdout
 
     try:
@@ -2406,7 +2412,7 @@ def cmd_completeness():
     except Refusal as e:
         out["result"] = "FAIL"; out["error"] = e.msg
         save_json("completeness.json", out)
-        print("COMPLETENESS FAILED:", e.msg)
+        print("COMPLETENESS STOPPED:", e.msg)
         return 1
     finally:
         L._CFG.topic_in = c.raw["topics"]["in"]
@@ -2544,6 +2550,10 @@ def cmd_ceiling():
     """Hold the component under test at its largest size; cap the broker in
     steps. The handover is where the broker pins and the worker falls off its cap."""
     c = cfg()
+    if not os.path.exists(os.path.join(c.results, "manifest.json")):
+        # clean-room run 51 (S10): a chain stopped at the tiny proof never fills
+        raise Refusal("rig", "ceiling drains the full test data set, and there is none yet: results/manifest.json "
+                             "is written by `prove.py fill`. Run that first, then ceiling.")
     man = load_json("manifest.json")
     top = max(c.cases)
     steps = [float(x) for x in c.raw.get("ceilingBrokerCaps", [c.kafka_cap, 1.0, 0.5])]
@@ -2870,7 +2880,7 @@ def cmd_all(steps=None, results=None):
         try:
             rc = fn()
         except Refusal as e:
-            log(f"FAILED ({e.scope}): {e.msg}")
+            log(f"STOPPED ({e.scope}): {e.msg}")
             rc = 1
         finally:
             if name in ("completeness", "tinyproof", "suite"):
@@ -3025,7 +3035,7 @@ if __name__ == "__main__":
     try:
         rc = COMMANDS[name]()
     except Refusal as e:
-        print(f"FAILED ({e.scope}): {e.msg}")
+        print(f"STOPPED ({e.scope}): {e.msg}")
         rc = 1
     except KeyboardInterrupt:
         rc = 130

@@ -156,8 +156,8 @@ A reader can then see what was assumed rather than agreed.
    *Default: positions and market values must be published in order. At the end
    the positions, at both symbol and account / sub-account / symbol, must match
    the input, and market values — **at both of those key levels** — must be
-   final position × latest price. Duplicates have to be handled and not double
-   counted, in all cases.*
+   final position × latest price. Duplicates — a record delivered twice after a
+   failure, when a restart replays it — are counted once.*
 
    Ordering holds **per key** within a keyed stream — not across keys, and not
    across a rebalance. Say so if the user's answer assumes otherwise. It is
@@ -366,6 +366,7 @@ compared to that. Assert, with no tolerances:
 | **each key's published values never go backwards** | order within a key is the one ordering guarantee a keyed stream makes, and the interview asked for it. A key that goes backwards on a clean run means the sink is not keyed by the aggregation key, or a rebalance sits between the aggregation and the sink |
 | **each key appears in exactly one partition** | per-key order cannot survive a key split across partitions, whatever the pipeline does. This is what makes the assertion above mean anything end to end |
 | after killing the pipeline mid-run, all of the above still hold | the guarantee you configured is not the one you have |
+| **the input repeats a small share of its records on purpose**, the way a producer that retries would, and every total still matches the manifest, which counts each record once | a duplicate was counted twice. The kill tests the replay a restart makes; this tests the one a retrying producer makes. Clean-room run 48 repeated 0.5% and passed. Keep it small: the dropped repeats make the output count trail the input count by that share, and the two are compared within 5% |
 
 **The killed arm is where the ordering rule earns its keep, and it needs
 stating carefully.** A restart replays, so a key may step backwards **once**

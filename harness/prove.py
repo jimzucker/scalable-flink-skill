@@ -2419,7 +2419,14 @@ def cmd_completeness():
     finally:
         L._CFG.topic_in = c.raw["topics"]["in"]
     save_json("completeness.json", out)
-    print(f"COMPLETENESS PASSED FOR BUILD {out['build']} (a clean run, and one killed and restarted at {c.kill_frac:.0%})")
+    # Where the kill actually landed, not where it was asked to (run 47: asked
+    # 35%, landed 42.6%, the line said 35%).
+    landed = next((a.get("killedAtCommitted") for a in out.get("arms") or [] if a.get("killed")), None)
+    at = f"{landed / c.small:.0%}" if landed and c.small else f"{c.kill_frac:.0%}"
+    dups = (man or {}).get("duplicateRecords")
+    also = (f"; the input repeated {dups:,} records on purpose and each was counted once" if dups else
+            "; the input repeated nothing on purpose, so only the kill tested double counting")
+    print(f"COMPLETENESS PASSED FOR BUILD {out['build']} (a clean run, and one killed and restarted at {at}{also})")
     return 0
 
 

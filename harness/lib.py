@@ -3477,6 +3477,16 @@ def gc_judgement(runs):
     Sets status CEILING with the reason on a ruled case's passes, and gcKept on
     a kept case's, so the scorecard does not blame memory for it."""
     slow_floor = 1 - 1.96 * T["ratioSdFallback"]
+    # Recomputed from scratch every time. The suite saves its table after every
+    # pass, so the first call sees only the first case, with nothing larger to
+    # compare against; a ruling made then must not stick. Clean-room run 51's
+    # 1-core passes were ruled out "with no larger case under the limit to
+    # compare it with" on a finished table that had two.
+    for r in runs:
+        if r.pop("gcRuled", False):
+            r["status"] = "OK"
+            r.pop("ceiling", None)
+        r.pop("gcKept", None)
     byc = {}
     for r in runs:
         if r.get("status", "OK") == "OK" and r.get("recordsPerSec"):
@@ -3501,6 +3511,7 @@ def gc_judgement(runs):
                f"{head}, with no larger case under the limit to compare it with")
         for r in rs:
             r["status"] = "CEILING"
+            r["gcRuled"] = True
             r["ceiling"] = (f"{why}. The pipeline ran short of memory, not cores. Give it more memory "
                             f"instead of more cores.")
 

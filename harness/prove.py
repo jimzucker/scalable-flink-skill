@@ -552,6 +552,22 @@ def cmd_selftest(live=True, topic=None):
     expect("gc: run 21's 1-core case is judged against the 4-core case, not a 2-core case also over (must not fire)",
            gcj([(1, 198930, 0.132), (2, 389594, 0.068), (4, 726636, 0.043)], {1: "OK", 2: "OK", 4: "OK"}),
            "", should_fire=False)
+    def gc_as_saved():
+        # the suite saves after every pass: judge after the first 1-core pass alone,
+        # then again once the larger cases exist -- run 50's figures, which pass
+        runs = [dict(cores=1, **{"pass": "p1-asc"}, recordsPerSec=28357, status="OK",
+                     gcFracOfCapacity=0.091, gcAboveLimit=True)]
+        L.build_table(runs)
+        assert runs[0]["status"] == "CEILING", runs[0]
+        for c, rate, gcf in ((2, 56231, 0.033), (4, 105317, 0.010), (2, 55800, 0.033), (4, 104900, 0.010)):
+            runs.append(dict(cores=c, **{"pass": "p"}, recordsPerSec=rate, status="OK", gcFracOfCapacity=gcf))
+        runs.append(dict(cores=1, **{"pass": "p2-desc"}, recordsPerSec=28100, status="OK",
+                         gcFracOfCapacity=0.090, gcAboveLimit=True))
+        L.build_table(runs)
+        got = {r["status"] for r in runs if r["cores"] == 1}
+        assert got == {"OK"}, f"the first 1-core pass stayed ruled out: {[r['status'] for r in runs if r['cores']==1]}"
+    expect("gc: a ruling made before the larger cases exist does not stick (must not fire)",
+           gc_as_saved, "", should_fire=False)
     expect("gc: the largest case over the limit has nothing to compare with and is a ceiling (must not fire)",
            gcj([(1, 130000, 0.030), (2, 255000, 0.030), (4, 470000, 0.070)], {1: "OK", 2: "OK", 4: "CEILING"}),
            "", should_fire=False)
@@ -2619,7 +2635,10 @@ def cmd_report():
         print("\nA STEP THE CLAIM NEEDS HAS NO NUMBER\n")
         for g in gaps:
             print(f"  {g['step'].replace('->', '→')} cores: not measured — {g['why']}.")
-        met = [r["step"].replace("->", "→") for r in steps if r.get("reportable") and r.get("meetsClaim")]
+        # Not "met" when its low end is above the ideal: that says the smaller case
+        # reads low (run 51 printed both about the same step).
+        met = [r["step"].replace("->", "→") for r in steps if r.get("reportable") and r.get("meetsClaim")
+               and not (r.get("ratioLowCI") or 0) > r.get("idealRatio", 2)]
         if met:
             print(f"  {', '.join(met)} met the target, but the claim covers every step in cases, so it is not met.")
         print("  Fix what threw that case out, or take the case out of `cases` and claim only the steps")

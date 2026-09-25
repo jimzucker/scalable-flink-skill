@@ -555,20 +555,33 @@ _KAFKA_TOOLS = {}
 
 
 def pin_collector(props):
-    """Every case runs the same garbage collector unless the config names one.
+    """Every case runs G1. The skill requires it (2026-09-24, the author's call).
 
     Left to itself Java picks the Serial collector in a one-CPU container and
     G1 at two or more, so the one-core baseline runs a different program from
     every case above it. Measured 2026-09-24 on the published demo's own build
     at 4,096 keys: the 1-core case ran Copy + MarkSweepCompact (Serial) and the
     rest G1, and 1->2 read 2.01x; with G1 on every case, nothing else changed,
-    1->2 read 1.91x. The published 2.06x came from the first configuration."""
+    1->2 read 1.91x. The published 2.06x came from the first configuration.
+    No collector named: G1 is added. Another one named: the run is stopped."""
     props = dict(props)
     both = " ".join(str(props.get(k, "")) for k in ("env.java.opts.taskmanager", "env.java.opts.all"))
-    if not re.search(r"-XX:\+Use\w*GC\b", both):
+    named = re.findall(r"-XX:\+Use(\w*GC)\b", both)
+    other = [n for n in named if n != "G1GC"]
+    if other:
+        raise Refusal("rig", f"flinkProperties asks for the {', '.join(other)} garbage collector. The skill "
+                             f"measures on G1 only: a different collector is a different program, and Java's "
+                             f"own pick differs between one core and two, which made one published step read "
+                             f"2.01x where G1 on every case reads 1.91x. Remove it; the harness sets G1 itself.")
+    if not named:
         cur = str(props.get("env.java.opts.taskmanager", "")).strip()
         props["env.java.opts.taskmanager"] = (cur + " -XX:+UseG1GC").strip()
     return props
+
+
+def not_g1(gc_names):
+    """The collectors a pass reported that are not G1, without the 'All' total."""
+    return sorted(n for n in (gc_names or []) if n != "All" and not n.startswith("G1 "))
 
 
 def case_collectors(runs):
@@ -3157,6 +3170,13 @@ def check_case(rec, cores, is_baseline):
         raise Refusal("case", f"only {rec.get('bpSamples') or 0} back-pressure readings landed inside the "
                               f"window and {T['minBpSamples']} are needed. Without enough of them there is "
                               f"no way to tell whether the pipeline was working or waiting on Kafka.")
+    # Read back, not assumed: the setting is only what was asked for.
+    odd = not_g1(rec.get("gcNames"))
+    if odd:
+        raise Refusal("rig", f"the case at {n_cores(cores)} ran the {', '.join(odd)} garbage collector, not G1. "
+                             f"The skill measures on G1 only, and the harness sets it; something in the image "
+                             f"or the configuration overrode it. Every case would run the same way, so the "
+                             f"suite stops here.")
     floor = T["capFloorBaseline"] if is_baseline else T["capFloorOther"]
     if rec["tmCapFrac"] < floor:
         why = "Something else was holding it back"

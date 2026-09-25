@@ -2171,6 +2171,34 @@ def cmd_tinyproof():
             pairs = list(zip(tiny_cases, tiny_cases[1:]))
             if (lo, hi) not in pairs:
                 pairs.append((lo, hi))
+            # Measure an out-of-bounds step once more before stopping on it. One
+            # pass per case is noisier than the bounds it is judged against:
+            # clean-room run 51's unchanged build read 2->4 at 1.49x, 1.91x and
+            # 2.14x in three tiny proofs, and stopped the chain twice on noise.
+            # The two recorded out-of-bounds tiny proofs were both that noise;
+            # the failure the bounds exist for (a 3.73x from a baseline running
+            # its tasks on one core) is built into the rig and reads the same
+            # twice. So the second reading decides, and both are kept.
+            first = {k: v["recordsPerSec"] for k, v in recs.items()}
+            def in_bounds(a, b):
+                r = recs[b]["recordsPerSec"] / recs[a]["recordsPerSec"]
+                return T["tinyRatioLo"] * (b / a) / 2 <= r <= T["tinyRatioHi"] * (b / a) / 2
+            odd = sorted({x for a, b in pairs if a in recs and b in recs and not in_bounds(a, b) for x in (a, b)})
+            if odd:
+                log(f"  out of bounds on the first reading; measuring {', '.join(f'{x}c' for x in odd)} once more")
+                for cores in odd:
+                    try:
+                        rec2, _ = L.run_case_retrying(
+                            lambda cores=cores: L.run_case(cores, "tiny", "tiny-again", shape_ref, cores == lo, man,
+                                                           warmup_max_s=120.0, reporter_s=2))
+                        rec2["firstReading"] = first[cores]
+                        recs[cores] = rec2
+                        out["cases"].append(rec2)
+                        log(f"  {cores}c again: {rec2['recordsPerSec']:,.0f} rec/s (first {first[cores]:,.0f})")
+                    except CaseRefused as e:
+                        out["cases"].append(e.rec)
+                        log(f"  {cores}c again: thrown out -- {e}")
+                out["remeasured"] = {str(k): {"first": first[k], "second": recs[k]["recordsPerSec"]} for k in odd}
             out["steps"] = []
             print()
             for a, b in pairs:
@@ -2206,8 +2234,12 @@ def cmd_tinyproof():
                 else:
                     print(f"STOPPING: {b} cores did only {ratio:.2f}x the work of {a}. "
                           f"It should be about {ideal:.0f}x.")
-                    print(f"  The rig is not set up the way you think. Check three things:")
-                    print(f"  the CPU cap, the partition count, and the backlog size.")
+                    again = out.get("remeasured") or {}
+                    if str(a) in again or str(b) in again:
+                        print(f"  Measured twice: " + "; ".join(
+                            f"{k} cores {v['first']:,.0f} then {v['second']:,.0f} rec/s" for k, v in again.items()) + ".")
+                    print(f"  The CPU cap, partitions and backlog were already checked, so look at")
+                    print(f"  what else ran on the machine while the larger case measured.")
                 print(f"  Fix this before running the suite. The suite reports this step, so a")
                 print(f"  suite run now would spend 45 minutes arriving at the same number.")
             # the span, kept for anything that reads one ratio

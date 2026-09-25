@@ -172,6 +172,26 @@ A reader can then see what was assumed rather than agreed.
 
    *Default: DataStream.*
 
+   **If the answer is SQL**, the default business case is built differently, and
+   none of the DataStream advice below about broadcasts, side outputs or timers
+   applies. Clean-room run 50 built it this way and passed completeness three
+   times, killed arm included:
+
+   | the business case needs | in SQL |
+   |---|---|
+   | read the input once | every `INSERT` in **one** `STATEMENT SET`; check with `EXPLAIN` that the plan scans the source once |
+   | one position row per allocation | `CROSS JOIN UNNEST` over the order's allocations |
+   | a sink made idempotent by the absolute value | `upsert-kafka` sinks, `PRIMARY KEY` = the aggregation key |
+   | one output per input | a `COUNT(*)` column in every aggregate: a running `SUM` can come back unchanged, and a row that did not change is not guaranteed to be written |
+   | the market value throttled to 10 s | a 10-second processing-time `TUMBLE` window of the position changes, a running `SUM` of those per key, then the latest price |
+   | the price joined to both key levels | a regular join on symbol, not a broadcast (SQL has none). Every account key carries exactly one symbol, so per-key order holds |
+
+   What to expect, measured once: about **a quarter of the DataStream builds'
+   throughput per core**, and a 1-core case that spent 7–10% of its time on
+   garbage collection, over the 5.5% limit, so 1→2 had no number. The key-spread
+   check in preflight hashes keys the way DataStream does, which is not how a SQL
+   job lays out its keys: treat its PASS as unchecked for SQL.
+
 6. **Which Kafka do you want to use?** Apache or Confluent.
 
    *Default: Apache.*

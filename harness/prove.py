@@ -1077,6 +1077,75 @@ def cmd_selftest(live=True, topic=None):
            sql_keys_not_judged, "", should_fire=False)
     expect("api names something other than datastream or sql",
            lambda: L.api_kind({"api": "table"}), "must be")
+
+    # ---- platforms: a managed service is asked, Docker never is
+    class FakeService(L.P.Platform):
+        kind, unit = "fake", "CFU"
+        def __init__(self, raw, under=0):
+            self.calls, self.size, self.under = [], 0, under
+        def up(self): self.calls.append("up")
+        def down(self): self.calls.append("down")
+        def set_size(self, units): self.calls.append(f"size {units}"); self.size = units - self.under
+        def read_size(self): return self.size
+        def clear_size(self): self.calls.append("clear"); self.size = 0
+        def cpu_stat(self, comp): self.calls.append(f"cpu {comp}"); return dict(usage_usec=1, nr_periods=1, nr_throttled=0)
+        def mem_stat(self, comp): self.calls.append(f"mem {comp}"); return dict(limitHits=0, refaults=0, fileCache=0, limitBytes=1)
+        def submit(self, par, group, ckpt_ms=None): self.calls.append(f"submit {par}"); return "job-1"
+        def surviving(self): self.calls.append("surviving"); return []
+
+    def on_fake_service(body, under=0):
+        import copy
+        raw = copy.deepcopy(c.raw)
+        raw["platform"] = {"kind": "fake"}
+        tmp = tempfile.mkdtemp(prefix="platform-selftest-")
+        saved_cfg, saved_sh = L._CFG, L.sh
+        L.P.register("fake", lambda r: FakeService(r, under))
+        def no_docker(cmd, *a, **k):
+            raise Exception(f"Docker or the host was called on a managed service: {cmd[:80]!r}")
+        try:
+            path = os.path.join(tmp, "pipeline.json")
+            with open(path, "w") as f:
+                json.dump(raw, f)
+            L._CFG = L.Cfg(path)
+            L.sh = no_docker
+            return body(L._CFG)
+        finally:
+            L._CFG, L.sh = saved_cfg, saved_sh
+            L.P.unregister("fake")
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def every_operation_goes_to_the_service():
+        def body(fc):
+            L.stack_up(); L.start_tm(2); L.assert_cap(fc.tm, 2)
+            L.cgroup_cpu(fc.tm); L.cgroup_cpu(fc.kafka); L.cgroup_mem(fc.kafka)
+            L.submit_job(2, "g"); L.stop_tm(); L.surviving(); L.stack_down()
+            want = ["up", "size 2", "cpu engine", "cpu broker", "mem broker", "submit 2", "clear",
+                    "surviving", "down"]
+            if fc.plat.calls != want:
+                raise Exception(f"the service was asked {fc.plat.calls}, expected {want}")
+        on_fake_service(body)
+    expect("platform: a managed service is asked for every stack step, Docker never (must not fire)",
+           every_operation_goes_to_the_service, "", should_fire=False)
+    expect("platform: a size the service did not apply stops the case",
+           lambda: on_fake_service(lambda fc: L.start_tm(4), under=1), "did not apply")
+    expect("platform: a service that is named but not built stops before anything is paid for",
+           lambda: L.P.platform_for(L.P.platform_kind({"platform": "confluent-cloud"})),
+           "cannot run on it yet")
+    expect("platform: a name that is not a platform",
+           lambda: L.P.platform_kind({"platform": "azure"}), "must be one of")
+
+    def laptop_rows_are_real_rows():
+        import re as _re
+        rows_here = set(_re.findall(r'^    check\("([^"]+)"', open(__file__).read(), _re.M))
+        stale = sorted(set(L.P.LAPTOP_ONLY) - rows_here)
+        if stale:
+            raise Exception(f"LAPTOP_ONLY names rows preflight no longer has: {stale}")
+        if any(L.P.not_checked("local", r) for r in rows_here):
+            raise Exception("a row is skipped on the laptop")
+        if not all(L.P.not_checked("aws", r) for r in L.P.LAPTOP_ONLY):
+            raise Exception("a laptop-only row is still judged on a managed service")
+    expect("platform: every laptop-only row is a real row, judged locally, reported elsewhere (must not fire)",
+           laptop_rows_are_real_rows, "", should_fire=False)
     # clean-room run 36's own measured shape (its results/tinyproof.json): 172.3 B
     # per input record, a 220M backlog = 37.9 GB, sinks capped by retention at
     # 34.4 GB, so the suite needs 92.3 GB. Re-running the tiny proof after the fill
@@ -1645,6 +1714,13 @@ def cmd_preflight():
     extra = {}
 
     def check(name, fn):
+        # A check that describes the laptop says so on any other platform,
+        # rather than passing about a machine the run does not use.
+        why = L.P.not_checked(c.platform, name)
+        if why:
+            name = name if name.endswith("(reported)") else name + " (reported)"
+            rows.append((name, "PASS", why)); print(f"PASS  {name:52s} {why}", flush=True)
+            return
         try:
             detail = fn()
             rows.append((name, "PASS", detail)); print(f"PASS  {name:52s} {detail}", flush=True)

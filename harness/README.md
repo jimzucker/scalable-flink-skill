@@ -315,6 +315,7 @@ self-test) and `completeness` have passed **for the same build hash**.
 | `settleS` | optional. How long completeness keeps the job running after the last input is committed, so a throttled output emits its final value before the job is cancelled. Default: one checkpoint interval plus 2 s, enough for a throttle no slower than the checkpoint. Set it for a slower one |
 | `jdk` | the host JDK home; preflight checks its major version matches the engine image |
 | `axis`, `apiLevel`, `guarantee.state`, `guarantee.sink`, `checkpointMs` | the header fields of §9, verbatim into the report |
+| `platform` | optional. `"local"` (the default: Docker on this machine, what every recorded run used), or an object `{"kind": …, "credentials": "<path to a file outside every repository>"}` for a managed service. `confluent-cloud`, `aws` and `gcp` are named but not built: the run stops at load with what each still needs. On any platform but `local`, the preflight rows that describe the laptop (architecture, host disk, the Docker VM, host cores) report "not checked" with the reason. The contract a platform fills is `harness/platforms.py` |
 | `api` | optional. `"datastream"` (the default) or `"sql"`. For SQL, preflight reports the key-spread row as not checked: it hashes keys the way DataStream does, and a SQL job hashes the whole key row. `apiLevel` is free text for the report and is never read for this |
 
 ### The broker's CPU, for the dashboard

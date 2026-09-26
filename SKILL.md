@@ -222,6 +222,12 @@ A reader can then see what was assumed rather than agreed.
    The harness finds the broker's own tools wherever the image keeps them, and
    preflight reports whether the job jar carries anything Confluent-only.
 
+   **A managed service — Confluent Cloud, Amazon MSK with Managed Service for
+   Apache Flink, Google Cloud — cannot be measured yet.** `platform` in
+   `pipeline.json` names one, and the harness stops before anything is created
+   and says what that service still needs. If the user asks for one, say so and
+   build for the laptop with the same pipeline.
+
 ## 1a. Then the plan, and stop
 
 **Before building anything, describe the test, show the plan, and ask to run

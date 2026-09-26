@@ -2695,6 +2695,20 @@ def tm_mem_of(cores):
     return c.tm_mem
 
 
+def reads_low(step):
+    """A step whose low end is above its ideal: more than double the work on
+    double the cores, so the smaller case read low. Never reported as met. One
+    test for every place that says so -- run 51's report said one step both
+    "met the target" and "reads low" when two places judged it differently."""
+    return (step.get("ratioLowCI") or 0) > step.get("idealRatio", 2)
+
+
+def met_steps(steps):
+    """Steps to call met: reportable, meeting the claim, and not reading low."""
+    return [r["step"] for r in steps
+            if r.get("reportable") and r.get("meetsClaim") and not reads_low(r)]
+
+
 def bottleneck(rec):
     """What was holding this case back, in words, from what was measured.
 
@@ -2816,7 +2830,7 @@ def corrective_action(rec, step=None, is_baseline=False):
             return "check it matches"
         if not step or not step.get("reportable"):
             return "no usable step"
-        if (step.get("ratioLowCI") or 0) > step["idealRatio"]:
+        if reads_low(step):
             return "baseline reads low"
         if not step.get("meetsClaim"):
             # Run 44 was told "investigate" twice while every column beside it
@@ -2845,7 +2859,7 @@ def action_detail(rec, cores, step=None, is_baseline=False):
             return f"{n_cores(cores)}: no usable step into this case, so there is nothing to judge it by."
         ratio, ideal = step["ratio"], step["idealRatio"]
         need = ideal * T["scalingFloor"]
-        if (step.get("ratioLowCI") or 0) > ideal:
+        if reads_low(step):
             return (f"{n_cores(cores)}: doubling gave {ratio:.2f}x, more than the {ideal:.2f}x a doubling "
                     f"can give, so the smaller case reads too low.")
         if not step.get("meetsClaim"):
@@ -3003,7 +3017,7 @@ def scorecard(out):
         # floor -- but reporting that as a plain "met" contradicts the note
         # above it saying the smaller case reads low. Say what it is instead.
         lo = r.get("ratioLowCI")
-        if (lo or 0) > r["idealRatio"]:
+        if reads_low(r):
             verdict = f"above {r['idealRatio']:.2f}x, so the smaller case reads low"
         elif r.get("meetsClaim"):
             verdict = "met"

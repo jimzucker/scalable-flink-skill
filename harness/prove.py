@@ -495,7 +495,26 @@ def cmd_selftest(live=True, topic=None):
            acts(dict(tmCapFrac=0.93, brokerLimitHits=12780, brokerLimitBytes=4096 * 1048576),
                 "raise kafkaMemory"), "", should_fire=False)
     expect("action: more memory for the pipeline (must not fire)",
-           acts(dict(tmCapFrac=0.99, gcFracOfCapacity=0.064), "more memory"), "", should_fire=False)
+           acts(dict(tmCapFrac=0.99, gcFracOfCapacity=0.064), "try more memory"), "", should_fire=False)
+
+    def gc_states_no_cause():
+        # A garbage-collection ceiling says what was measured. "Ran short of
+        # memory" and "give it more memory" were causes nobody measured: run 51
+        # followed that advice (+30% at 1 core) and its GC did not move.
+        runs = [dict(cores=1, status="OK", recordsPerSec=50_000, gcFracOfCapacity=0.08),
+                dict(cores=2, status="OK", recordsPerSec=120_000, gcFracOfCapacity=0.02)]
+        L.gc_judgement(runs)
+        text = runs[0].get("ceiling") or ""
+        label = L.bottleneck(dict(tmCapFrac=0.99, gcFracOfCapacity=0.064, cores=1))
+        for said in (text, label):
+            if "ran short of memory" in said or "Give it more memory" in said:
+                raise Exception(f"states a cause that was not measured: {said!r}")
+            if "not been measured" not in said:
+                raise Exception(f"does not say the remedy is untested: {said!r}")
+        if "less work per core" not in text:
+            raise Exception(f"the ceiling no longer says what was measured: {text!r}")
+    expect("GC ceiling: what was measured, not a cause (must not fire)", gc_states_no_cause, "",
+           should_fire=False)
     expect("action: compress the writes (must not fire)",
            acts(dict(tmCapFrac=0.9495, sourceBackpressured=0.6738), "compress"), "", should_fire=False)
     expect("bottleneck: CPU is the block (must not fire)",

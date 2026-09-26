@@ -2717,7 +2717,8 @@ def bottleneck(rec):
                 f"pipeline was waiting on Kafka rather than using its CPU.")
     if (rec.get("gcFracOfCapacity") or 0) > T["gcCeil"] and not rec.get("gcKept"):
         return (f"Memory, blocking higher throughput. The pipeline spent {rec['gcFracOfCapacity']:.0%} "
-                f"of the time cleaning up memory instead of working. Give it more memory, not more CPU.")
+                f"of the time cleaning up memory instead of working. More memory may help, but that "
+                f"has not been measured here: try it on this case and compare.")
     if (rec.get("sourceIdle") or 0) > T["sourceIdleCeil"]:
         return (f"Nothing to read, blocking higher throughput. The pipeline sat idle "
                 f"{rec['sourceIdle']:.0%} of the time waiting for input, so whatever feeds it is the "
@@ -2824,7 +2825,7 @@ def corrective_action(rec, step=None, is_baseline=False):
             # the step is the pipeline's, or the host's.
             return "check the host"
         return "add cores for more"
-    return {"Pipeline memory": "more memory",
+    return {"Pipeline memory": "try more memory",
             "Kafka CPU": "more Kafka cores",
             "Kafka memory": "raise kafkaMemory",
             "Kafka writes": "compress the writes",
@@ -3696,8 +3697,10 @@ def gc_judgement(runs):
         for r in rs:
             r["status"] = "CEILING"
             r["gcRuled"] = True
-            r["ceiling"] = (f"{why}. The pipeline ran short of memory, not cores. Give it more memory "
-                            f"instead of more cores.")
+            # What was measured, not a cause: clean-room run 51 gave its 1-core
+            # case 30% more memory on this advice and its GC did not move.
+            r["ceiling"] = (f"{why}. More memory may help, but that has not been measured here: "
+                            f"try it on this case and compare.")
 
 
 def build_table(runs, cases_order=None, quick=False):

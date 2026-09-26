@@ -189,6 +189,7 @@ A reader can then see what was assumed rather than agreed.
    | the latest value of that second input | `ROW_NUMBER() OVER (PARTITION BY <key> ORDER BY <time> DESC) = 1` (the latest price per symbol) |
    | `job.sourceVertexMatch` | `Source: ` and the input table's name — how a SQL job names its source vertex |
    | `design.operators` | the sink tables' short names, not `default_catalog.default_database.…`, which the plan never shows |
+   | `api` | `"sql"` — preflight then reports the key-spread row as not checked instead of judging it |
 
    What to expect, measured in runs 50 and 51: **a quarter to a sixth of the
    DataStream builds' throughput per core**, 2→4 at 1.82–2.12×, and a 1-core case
@@ -198,7 +199,9 @@ A reader can then see what was assumed rather than agreed.
    garbage collection where it was), so there is no memory setting to recommend:
    the one-core SQL case is simply weaker. The key-spread
    check in preflight hashes keys the way DataStream does, which is not how a SQL
-   job lays out its keys: treat its PASS as unchecked for SQL.
+   job lays out its keys, so with `"api": "sql"` it reports "not checked" and
+   never stops the run. An uneven SQL key layout shows up only as the largest
+   case falling short.
 
 6. **Which Kafka do you want to use?** Apache or Confluent.
 
@@ -732,7 +735,7 @@ for it.
 | the component under test is not the constraint | ≥95% of cap at every case, baseline included; external-boundary back-pressure not material. When the cores fall short of 95% and the broker hit its own memory limit inside the window, the broker is named as the likely reason; when the cores are at their cap, the hits are reported and nothing is thrown out. Hits do not separate the two outcomes: across runs 32, 46, 47 and 48, twelve passes at 95–99% of cap were thrown out for them, and every one sat within −4.7% to +5.2% of the passes kept beside it. A broker that really is too small is stopped at setup, by the page-cache floor, before a pass is measured. **Measured first on run 42:** run 42's broker hit its limit 2,771-2,840 times a window, the guard classified the two fastest four-core passes as ceilings on a tenth of a point of the 99% cap exemption, and kept the slowest -- leaving one usable reading where two are needed, so the step was voided. Giving the broker its page cache removed every hit and moved the four-core mean 0.5%, and the two discarded readings sat inside the band the case then produced. The guard found the right thing to change; what it cost was a 40-minute suite's headline number. One run is not a threshold, so nothing moved on it then; runs 46, 47 and 48 made it five, and the 99% exemption was replaced by the 95% cap floor on 2026-09-24. A case that misses is a **ceiling**: measured, reported with its rate as where scaling stops, and excluded from the ratios — never deleted |
 | the input divides evenly across subtasks | partition count divisible by every parallelism under test (8 partitions serves 1, 2, 4; 6 would leave the 4-core case reading 2/2/1/1 and never reaching its cap) |
 | an output the business case asks for was never written | after the completeness drain, every topic named in `topicsAlsoWritten` has records. These are the pipeline's own outputs — the throttled ones, outside `topics.out` — and nothing else looks at them. Two clean-room runs in a row built **one** market value where the default asks for two, and passed every other guard |
-| the keys divide evenly across subtasks | the engine's own key-group assignment says where every key in `keySets` would land at every case. A subtask with **no keys** always stops the run; an uneven one stops it when a `pipeline.max-parallelism` exists that would even it out, and is reported in the row when none does |
+| the keys divide evenly across subtasks | the engine's own key-group assignment says where every key in `keySets` would land at every case. A subtask with **no keys** always stops the run; an uneven one stops it when a `pipeline.max-parallelism` exists that would even it out, and is reported in the row when none does. Not checked for a SQL build (`"api": "sql"`), which places keys differently |
 | memory is not the constraint | **every case gives its subtasks the same memory**, as a base plus a per-core share. Passing nothing does not leave memory to the engine: the image ships a flat figure — `flink:1.20.1` sets 1728m — so every case runs on the same total, which is the configuration this rule exists to catch. Clean-room run 36 measured 2→4 at 1.510 on the image default against 1.743 with memory per subtask, and the GC ceiling did **not** catch it: GC was at its lowest, 1.40%, on the case losing the most. A case whose GC exceeds 5.5% of its capacity is a ceiling **if it also does less work per core than the nearest larger case under that limit**, by more than a step ratio's own noise — or if there is no such case to compare it with. More GC with nothing lost is not a ceiling: clean-room run 50's SQL 1-core case ran 8–10% GC and did as much work per core as its 2-core case, and cutting its GC to 7.4% made it no faster, not a result |
 | the claim itself | each step returns **1.80× or better** on a doubling, judged on the low end of its range, or the chain fails with the per-core, idle, GC and cap figures for both cases — a valid table that does not scale is a result about the pipeline, not a table to publish |
 | a failed case still owns the cluster | job torn down on **every** exit path |

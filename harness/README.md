@@ -313,6 +313,7 @@ self-test) and `completeness` have passed **for the same build hash**.
 | `settleS` | optional. How long completeness keeps the job running after the last input is committed, so a throttled output emits its final value before the job is cancelled. Default: one checkpoint interval plus 2 s, enough for a throttle no slower than the checkpoint. Set it for a slower one |
 | `jdk` | the host JDK home; preflight checks its major version matches the engine image |
 | `axis`, `apiLevel`, `guarantee.state`, `guarantee.sink`, `checkpointMs` | the header fields of §9, verbatim into the report |
+| `api` | optional. `"datastream"` (the default) or `"sql"`. For SQL, preflight reports the key-spread row as not checked: it hashes keys the way DataStream does, and a SQL job hashes the whole key row. `apiLevel` is free text for the report and is never read for this |
 
 ### The broker's CPU, for the dashboard
 

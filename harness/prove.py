@@ -1028,6 +1028,22 @@ def cmd_selftest(live=True, topic=None):
         if bad:
             raise bad
     expect("an even key layout passes (must not fire)", skew_even, "", should_fire=False)
+
+    def sql_keys_not_judged():
+        # the uneven 5/3/4/4 layout that stops a DataStream build above: for SQL
+        # the check does not describe the job, so it reports and never stops
+        note = L.key_spread_skipped(L.api_kind({"api": "sql"}))
+        if not note or "not checked" not in note:
+            raise Exception(f"a SQL build got {note!r} instead of a not-checked note")
+        if L.key_spread_skipped(L.api_kind({})) is not None:
+            raise Exception("a config with no api field was treated as SQL")
+        dstream = L.api_kind({"apiLevel": "Flink DataStream API, hand-written operators (no SQL, no Table API)"})
+        if L.key_spread_skipped(dstream) is not None:
+            raise Exception("a DataStream config that says 'no SQL' was treated as SQL")
+    expect("key spread: a SQL build is reported as not checked, never stopped (must not fire)",
+           sql_keys_not_judged, "", should_fire=False)
+    expect("api names something other than datastream or sql",
+           lambda: L.api_kind({"api": "table"}), "must be")
     # clean-room run 36's own measured shape (its results/tinyproof.json): 172.3 B
     # per input record, a 220M backlog = 37.9 GB, sinks capped by retention at
     # 34.4 GB, so the suite needs 92.3 GB. Re-running the tiny proof after the fill
@@ -1914,6 +1930,9 @@ def cmd_preflight():
         and gives each subtask a contiguous range, so four keys do not spread
         over four subtasks by themselves. The engine's own assignment is asked
         where they would land, out of the image under test."""
+        skipped = L.key_spread_skipped(c.api)
+        if skipped:
+            return skipped
         if not c.key_sets:
             raise Exception("pipeline.json does not say which manifest fields hold the key sets "
                             "(keySets). A small key set does not spread over subtasks by itself, "
@@ -2020,7 +2039,8 @@ def cmd_preflight():
     check("slots >= parallelism x jobs", slots)
     check("partitions divide evenly by every parallelism", partitions_per_subtask)
     check("memory is per subtask, not per container", memory_per_subtask)
-    check("keys divide evenly across subtasks", keys_per_subtask)
+    check("keys divide evenly across subtasks" + (" (reported)" if L.key_spread_skipped(c.api) else ""),
+          keys_per_subtask)
 
     def host_ceiling():
         """No pipeline beats its machine. Measured here so a missed claim can be

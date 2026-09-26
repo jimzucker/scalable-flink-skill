@@ -440,6 +440,7 @@ class Cfg:
         self.java = os.path.join(self.jdk, "bin", "java")
         self.axis = c["axis"]
         self.api_level = c["apiLevel"]
+        self.api = api_kind(c)
         self.guarantee = c["guarantee"]
         self.log_path = os.path.join(self.results, "harness.log")
         # Three ways to run: no worker memory settings at all (the default, and
@@ -1888,6 +1889,27 @@ def suggest_max_parallelism(sets, cases, how_many=3):
     rows = [f"{name}\t{k}" for name, keys in sets.items() for k in keys]
     pars = ",".join(str(n) for n in sorted(set(cases)))
     return [int(x) for x in keycheck(f"suggest {pars} {how_many}", "\n".join(rows) + "\n")]
+
+
+def api_kind(raw):
+    """`api` in pipeline.json: "datastream" (the default) or "sql". `apiLevel` is
+    free text for the report and cannot be searched for it -- 21 of the 26
+    recorded DataStream configs say "no SQL" in theirs."""
+    api = str(raw.get("api", "datastream")).strip().lower()
+    if api not in ("datastream", "sql"):
+        raise Refusal("rig", f'pipeline.json api must be "datastream" or "sql", got {raw.get("api")!r}')
+    return api
+
+
+def key_spread_skipped(api):
+    """Why the key-spread check does not apply, or None when it does. It asks
+    where each key string would land the way a DataStream keyBy hashes it; a SQL
+    job hashes the whole key row, so the check says nothing about it and must not
+    stop the run over a layout nobody measured (clean-room run 51, S3)."""
+    if api == "sql":
+        return ("not checked: a SQL job places each key by hashing the whole key row, not the "
+                "key string this check hashes, so nothing here says where its keys land")
+    return None
 
 
 def key_spread(sets, cases, layout, max_par=None):

@@ -487,6 +487,20 @@ def cmd_selftest(live=True, topic=None):
     # was idle and the GC was at 0.3%. Each of the three now names what it is.
     expect("action: a step short of the target points at the host (must not fire)",
            steps(dict(tmCapFrac=0.99), short, False, "check the host"), "", should_fire=False)
+    def one_verdict_per_step():
+        # Run 51 printed "2→4 met the target" and, twenty lines lower, "2->4 ...
+        # above 2.00x, so the smaller case reads low" about one step. Whatever
+        # calls a step met and whatever says it reads low must never both apply.
+        high = dict(step="2->4", reportable=True, meetsClaim=True, ratio=2.121,
+                    ratioLowCI=2.03, idealRatio=2.0)
+        noisy = dict(high, step="1->2", ratioLowCI=1.95)   # high middle, low end under 2
+        if L.met_steps([high]) or not L.reads_low(high):
+            raise Exception("a step whose low end is above 2.00x is called met")
+        if L.met_steps([noisy]) != ["1->2"] or L.reads_low(noisy):
+            raise Exception("a step whose low end is under 2.00x is not called met")
+        # the scorecard's own "reads low" line is pinned by the test at the top
+    expect("a step is met or reads low, never both (must not fire)", one_verdict_per_step, "",
+           should_fire=False)
     expect("action: a step above 2x says the baseline reads low (must not fire)",
            steps(dict(tmCapFrac=0.99), over, False, "baseline reads low"), "", should_fire=False)
     expect("action: says so when there is no usable step (must not fire)",
@@ -1371,8 +1385,11 @@ def cmd_selftest(live=True, topic=None):
         fake += [("c", lambda: (ran.append("c"), 1)[1]), ("d", lambda: (ran.append("d"), 0)[1])]
         tmp = tempfile.mkdtemp(prefix="prove-all-selftest-")
         try:
+            with open(os.path.join(tmp, "phases.log"), "w") as f:
+                f.write("2026-01-01 00:00:00 phase=b end rc=0 1s\n")   # an earlier chain's line
             rc = cmd_all(steps=fake, results=tmp)
             done = open(os.path.join(tmp, "DONE")).read().strip()
+            phase_lines = open(os.path.join(tmp, "phases.log")).read()
             allj = json.load(open(os.path.join(tmp, "all.json")))
             stray = [f for f in ("DONE", "all.json") if os.path.exists(os.path.join(c.results, f))
                      and os.path.getmtime(os.path.join(c.results, f)) > t_self]
@@ -1382,6 +1399,8 @@ def cmd_selftest(live=True, topic=None):
             raise Exception(f"rc={rc} ran={ran} DONE={done!r} verdict={allj.get('verdict')}")
         if stray:
             raise Exception(f"the self-test wrote into the live results directory: {stray}")
+        if "2026-01-01" in phase_lines:
+            raise Exception("phases.log still holds the previous chain's lines")
         raise Refusal("rig", f"chain stopped at c, d never ran, DONE says {done!r}")
     expect("all: the chain stops at the first failing step", chain, "stopped at c")
 
@@ -2701,8 +2720,7 @@ def cmd_report():
     # too low, and every step it appears in means less than it looks like.
     # Judged on the low end of the interval, so a noisy pair is not called
     # impossible on one bad pass.
-    impossible = [r for r in steps if r.get("reportable")
-                  and (r.get("ratioLowCI") or 0) > r["idealRatio"]]
+    impossible = [r for r in steps if r.get("reportable") and L.reads_low(r)]
     # Render both BEFORE opening anything for writing. open(..., "w") empties
     # the file before the renderer runs, so a renderer that raises destroys the
     # previous run's table as well as failing to write this one. That is how
@@ -2776,8 +2794,7 @@ def cmd_report():
             print(f"  {g['step'].replace('->', '→')} cores: not measured — {g['why']}.")
         # Not "met" when its low end is above the ideal: that says the smaller case
         # reads low (run 51 printed both about the same step).
-        met = [r["step"].replace("->", "→") for r in steps if r.get("reportable") and r.get("meetsClaim")
-               and not (r.get("ratioLowCI") or 0) > r.get("idealRatio", 2)]
+        met = [s.replace("->", "→") for s in L.met_steps(steps)]
         if met:
             print(f"  {', '.join(met)} met the target, but the claim covers every step in cases, so it is not met.")
         print("  Fix what threw that case out, or take the case out of `cases` and claim only the steps")
@@ -2927,6 +2944,11 @@ def cmd_all(steps=None, results=None):
     done = os.path.join(results, "DONE")
     if os.path.exists(done):
         os.remove(done)
+    # A fresh phases.log per chain, like DONE: appended across chains, a wait for
+    # "phase=tinyproof end" matched the previous chain's line and returned at
+    # once (clean-room run 51, S13). Every line is in harness.log as well.
+    if os.path.exists(phases):
+        os.remove(phases)
     # GUARD: sweep before the chain starts, not only at tinyproof and down.
     # A chain that fails restarts from the top, and the attempt before it can
     # still be running: clean-room run 43 restarted three times and left a

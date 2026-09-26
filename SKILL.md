@@ -698,12 +698,15 @@ PROJECT_DIR=/path/to/run sh harness/watch.sh
 **If you are an agent, put the path inside a file, not on a command line.**
 Run 45 lost three shells to the sweep anyway, because the tool that launched
 `watch.sh` put the project path on the wrapper's command line even though the
-script kept it off its own. The form that survives is a two-line script in a
-scratch directory with the path written into it, invoked by its scratch path:
+script kept it off its own. The form that survives is a two-line script with
+the path written into it, run so that the project's absolute path is on no
+command line. The sweep matches that absolute path, so if your scratch
+directory is inside the project, run the script from the project's parent by a
+relative path (run 51 did, and kept its shell):
 
 ```
-printf 'PROJECT_DIR=/path/to/run\nsh /path/to/skill/harness/watch.sh\n' > /tmp/scratch/w.sh
-sh /tmp/scratch/w.sh
+printf 'PROJECT_DIR=/path/to/run\nsh /path/to/skill/harness/watch.sh\n' > /path/to/run/scratch/w.sh
+cd /path/to && sh run/scratch/w.sh
 ```
 
 **Start the fill the moment the tiny proof passes** and build the dashboard's

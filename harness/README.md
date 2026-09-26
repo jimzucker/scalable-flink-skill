@@ -33,7 +33,9 @@ nohup python3 $H all > results/all.log 2>&1 &        # the whole chain below, on
 `all` is `up → preflight → completeness → tinyproof → fill → suite → report`,
 stopping at the first step that does not pass; `results/DONE` holds the
 verdict and the wall time, `results/phases.log` the timestamps the harness
-wrote (run 11 wrote its own by hand and spent 20 minutes between commands).
+wrote for this chain — it starts empty with each `all`, like `DONE`, so a wait
+for a phase line never matches an earlier chain's (run 11 wrote its own by hand
+and spent 20 minutes between commands).
 Wait with `watch.sh`, giving it the run directory in an environment variable:
 `PROJECT_DIR=/path/to/run sh $(dirname $H)/watch.sh`. It prints progress and exits when
 `results/DONE` appears. **Do not wait with** `cd /path/to/run && until [ -f results/DONE ]; do
@@ -268,8 +270,8 @@ Type the steps yourself only when one of them needs re-running:
 python3 $H replay          # thresholds vs the recorded runs — seconds, no stack
 python3 $H up              # stack/compose.yml generated, broker + job manager up, sampler compiled
 python3 $H preflight       # §3, one PASS/FAIL row per check
-PROJECT_DIR=$PWD sh $(dirname $H)/watch.sh   # watch a detached run without being swept up in its teardown
-                           #   PROJECT_DIR=/path/to/run sh harness/watch.sh
+PROJECT_DIR=/path/to/run sh $(dirname $H)/watch.sh   # watch a detached run without being swept up in its teardown
+                           #   an agent: write this into a script and run it by a path that is not the project's (SKILL.md §5)
 python3 $H tinyproof       # every case in `cases`, on a small backlog, ratio bounded, every guard broken on purpose
 nohup python3 $H fill > results/fill.log 2>&1 &        # the full backlog; build the dashboard meanwhile
 python3 $H completeness    # process a small test data set twice (once cleanly, once killed), check

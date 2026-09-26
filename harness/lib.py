@@ -218,6 +218,10 @@ class Refusal(Exception):
         self.msg = msg
 
 
+sys.path.insert(0, HERE)
+import platforms as P  # noqa: E402
+P.Refusal = Refusal     # a platform's refusal is the harness's own
+
 class CaseRefused(Exception):
     def __init__(self, rec, refusal):
         super().__init__(refusal.msg)
@@ -441,6 +445,11 @@ class Cfg:
         self.axis = c["axis"]
         self.api_level = c["apiLevel"]
         self.api = api_kind(c)
+        # Where the stack runs. None is the laptop: every function below that
+        # touches Docker or the host then does exactly what it did before
+        # platforms.py existed. Anything else is asked through the platform.
+        self.platform = P.platform_kind(c)
+        self.plat = P.platform_for(self.platform, c.get("platform") if isinstance(c.get("platform"), dict) else {})
         self.guarantee = c["guarantee"]
         self.log_path = os.path.join(self.results, "harness.log")
         # Three ways to run: no worker memory settings at all (the default, and
@@ -1088,6 +1097,8 @@ def compose_path():
 def stack_up():
     """Bring the stack up from cold. Idempotent. Asserts every effect."""
     c = cfg()
+    if c.plat:
+        return c.plat.up()
     save_json("volumes-before.json", dangling_anonymous_volumes())
     p = compose_path()
     sh(f"docker compose -f {p} up -d", timeout=900)
@@ -1126,6 +1137,8 @@ def dangling_anonymous_volumes():
 def stack_down(trim=True):
     """Tear down everything this project started, and assert nothing survives."""
     c = cfg()
+    if c.plat:
+        return c.plat.down()
     for n in (c.sampler, c.tm, f"{c.project}-capprobe"):
         sh(f"docker rm -f -v {n}", check=False)
     p = os.path.join(c.stack_dir, "compose.yml")
@@ -1242,6 +1255,8 @@ def reap_host_watchers(ignore_children=False, only=None):
 def surviving():
     """No child the run started survives: containers, volumes, networks."""
     c = cfg()
+    if c.plat:
+        return c.plat.surviving()
     out = []
     for kind, cmd in (("container", "docker ps -a --format '{{.Names}}'"),
                       ("volume", "docker volume ls --format '{{.Name}}'"),
@@ -1523,6 +1538,8 @@ def tm_running():
 
 def stop_tm():
     c = cfg()
+    if c.plat:
+        return c.plat.clear_size()
     sh(f"docker rm -f -v {c.tm}", check=False)
     for _ in range(60):
         if not tm_running():
@@ -1555,6 +1572,8 @@ def mem_for(spec, cores, base="0m"):
 
 def start_tm(cores, slots=None, reporter_s=None):
     c = cfg()
+    if c.plat:
+        return P.set_and_read_back(c.plat, cores)
     slots = slots if slots is not None else cores
     over = c.per_case.get(cores, {})
     if not (over.get("tmMemory") or c.tm_mem_per_core or c.raw["caps"].get("tmMemory")):
@@ -1617,6 +1636,8 @@ def start_tm(cores, slots=None, reporter_s=None):
 
 def assert_cap(container, cores):
     """GUARD: read the cap back from the container, never from the env var."""
+    if cfg().plat:
+        return P.read_back(cfg().plat, cores)
     nano = int(sh(f"docker inspect -f '{{{{.HostConfig.NanoCpus}}}}' {container}").stdout.strip())
     if nano != int(round(cores * 1_000_000_000)):
         raise Refusal("rig", f"cpu cap did not apply on {container}: NanoCpus={nano}, wanted {int(cores*1e9)}")
@@ -1777,6 +1798,8 @@ def cgroup_mem(container):
     """Page-cache pressure on a container, as the kernel counts it: how many
     times the cgroup hit its memory limit, and how many file pages it had to
     read back after eviction."""
+    if cfg().plat:
+        return cfg().plat.mem_stat("broker")
     r = sh(f"docker exec {container} sh -c 'cat /sys/fs/cgroup/memory.events; "
            f"cat /sys/fs/cgroup/memory.stat'", check=False)
     d = {"limitHits": 0, "refaults": 0, "fileCache": 0, "limitBytes": 0}
@@ -1798,6 +1821,9 @@ def cgroup_mem(container):
 
 
 def cgroup_cpu(container):
+    c = cfg()
+    if c.plat:
+        return c.plat.cpu_stat("engine" if container == c.tm else "broker")
     r = sh(f"docker exec {container} cat /sys/fs/cgroup/cpu.stat")
     d = {}
     for line in r.stdout.strip().splitlines():
@@ -1988,6 +2014,8 @@ def key_skew_verdict(spread, floor, suggestions=()):
 
 def submit_job(par, group, ckpt_ms=None):
     c = cfg()
+    if c.plat:
+        return c.plat.submit(par, group, ckpt_ms)
     args = c.fmt(c.job_args, par=par, group=group, ckptMs=ckpt_ms or c.ckpt_ms)
     r = sh(f"docker exec {c.jm} flink run -d -p {par} -c {c.main_class} {c.jar_in_ctr} {args}", timeout=300)
     m = re.search(r"JobID\s+([0-9a-f]{32})", r.stdout + r.stderr)

@@ -4455,20 +4455,104 @@ def dashboard_has_data(svc, t0, t1, what):
     return None
 
 
+def grafana_time(value, now=None):
+    """Pure. A Grafana time-range end as epoch seconds: an ISO time, epoch
+    milliseconds, or "now" / "now-90m" relative to `now`. None if unreadable."""
+    if value is None:
+        return None
+    v = str(value).strip()
+    if v.isdigit():
+        return int(v) / 1000.0
+    m = re.match(r"^now(?:-(\d+)([smhdw]))?(?:/\w)?$", v)
+    if m:
+        if now is None:
+            return None
+        n, unit = m.group(1), m.group(2)
+        return now - (int(n) * {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}[unit] if n else 0)
+    try:
+        return calendar.timegm(time.strptime(v.replace("Z", "")[:19], "%Y-%m-%dT%H:%M:%S"))
+    except Exception:
+        return None
+
+
+def range_covers(board, t0, t1):
+    """Pure. Whether a dashboard opens on a range that covers [t0, t1] for
+    anyone who opens it later. A relative range ("now-90m") does not: it
+    covers the suite for an hour and a half and then shows nothing, which is
+    what the reference dashboard did on 2026-09-28."""
+    tr = board.get("dashboard", board).get("time") or {}
+    if str(tr.get("from", "")).startswith("now") or str(tr.get("to", "")).startswith("now"):
+        return False
+    a, b = grafana_time(tr.get("from")), grafana_time(tr.get("to"))
+    return a is not None and b is not None and a <= t0 and b >= t1
+
+
+def with_suite_range(board, t0, t1):
+    """Pure. The dashboard opening on [t0, t1], a minute of margin before and
+    half a minute after, with auto-refresh off: nothing moves once the suite is
+    over, and a refresh keeps a headless screenshot from ever settling."""
+    out = json.loads(json.dumps(board))
+    b = out.get("dashboard", out)
+    iso = lambda t: time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(t))
+    b["time"] = {"from": iso(t0 - 60), "to": iso(t1 + 30)}
+    b["refresh"] = ""
+    return out
+
+
+def dashboard_open_on_suite(svc, t0, t1, wait_s=60):
+    """Writes the suite's range into every provisioned dashboard file as the
+    range it opens on, then reads it back from Grafana. Returns (ok, detail)."""
+    _, boards, problems = dashboard_files(svc)
+    if problems or not boards:
+        return False, "; ".join(problems) or "no dashboard file is provisioned"
+    for path, board in boards.items():
+        tmp = path + ".partial"
+        with open(tmp, "w") as f:
+            json.dump(with_suite_range(board, t0, t1), f, indent=2)
+        os.replace(tmp, path)
+    titles = {b.get("dashboard", b).get("title") for b in boards.values()}
+    deadline = time.time() + wait_s
+    while True:
+        try:
+            late = []
+            for hit in grafana_api(svc["port"], "/api/search?type=dash-db", timeout=5) or []:
+                if hit.get("title") not in titles:
+                    continue
+                live = (grafana_api(svc["port"], f"/api/dashboards/uid/{hit['uid']}", timeout=5) or {})
+                if not range_covers(live.get("dashboard", {}), t0, t1):
+                    late.append(hit["title"])
+        except Exception:
+            late = ["(Grafana did not answer)"]
+        if not late:
+            break
+        if time.time() > deadline:
+            return False, (f"the dashboard files now open on the suite, but after {wait_s} s Grafana still "
+                           f"shows another range for {', '.join(late)}: it reads the files on its own "
+                           "schedule, so reload it or check the provisioner's updateIntervalSeconds")
+        time.sleep(3)
+    hm = lambda t: time.strftime("%H:%M", time.localtime(t))
+    return True, f"opens on the suite, {hm(t0 - 60)}–{hm(t1 + 30)}"
+
+
 def dashboard_report_line(out):
     """The report's one line about the dashboard over the suite, or None when
     the run has no Grafana."""
     svc = dashboard_here()
     if not svc:
         return None
-    try:
-        grafana_api(svc["port"], "/api/health", timeout=3)
-    except Exception:
-        return "not checked: Grafana was not running when the report was written"
     t0, t1 = out.get("startedAtEpoch"), out.get("savedAtEpoch")
     if not (t0 and t1):
         return "not checked: the suite's start and end times are not recorded"
     try:
-        return dashboard_has_data(svc, t0, t1, "the suite") or "every panel shows data over the suite"
+        grafana_api(svc["port"], "/api/health", timeout=3)
+    except Exception:
+        return "not checked: Grafana was not running when the report was written"
+    try:
+        _, opened = dashboard_open_on_suite(svc, t0, t1)
     except Exception as e:
-        return f"could not be read through Grafana: {e}"
+        opened = f"its range could not be set: {e}"
+    try:
+        data = dashboard_has_data(svc, t0, t1, "the suite") or "every panel shows data over the suite"
+    except Exception as e:
+        data = f"could not be read through Grafana: {e}"
+    return f"{opened}; {data}"

@@ -760,6 +760,7 @@ for it.
 | observed cardinality ≠ predicted | distinct keys vs the interview's answer |
 | completeness has not passed for this build | §4, with no tolerances |
 | host free disk is below the next case's write | checked **before** the case — a full disk takes the shell down with it |
+| the dashboard shows nothing | a panel names a data source the stack does not provision, or has no query (preflight); a panel shows no data through Grafana over the completeness run (stops the chain there) or over the suite (named in the report) |
 | a monitor outlived the thing it watched | at teardown, no child the run started survives, and no host process watching `results/`, naming the project, or running `prove.py`-shaped loops from inside it either. **Swept at the start of a chain as well as at the end**: a chain that fails restarts from the top, and the attempt before it can still be running. Clean-room run 43 restarted three times and left a generator writing 400,000,000 records at the broker the next attempt was measuring — load average 9.24 on eight cores with nothing supposed to be running, a warm-up reading 957,976 then 216,896 then 12,697,565 records an interval, and 14.1% of a case spent on garbage collection. All of it was read as the machine being too small |
 
 **When the claim is not met, show the whole picture and ask before iterating.**
@@ -1180,6 +1181,17 @@ can answer neither. Replace them with the same question in its own shape:
 records read per second against rows published per second on a log scale, and
 the parallel subtasks of the one aggregation overlaid. Keep the question, not
 the panel.
+
+**The harness tests the dashboard as it tests the job.** Preflight reads the
+provisioning files and stops if a panel asks for a data source the stack does
+not provision, has no query, or if Grafana has not loaded the dashboard or its
+data source does not answer. Straight after completeness — minutes in, not
+after the suite — it asks Grafana itself for every panel over the completeness
+run, the way a reader's browser does, and stops the chain naming any panel that
+shows no data. The report then repeats that over the whole suite and names any
+panel empty there: a range or retention that does not cover the run. A
+dashboard checked by querying Prometheus directly passed with every panel
+empty, because the panels asked Grafana for a data source that did not exist.
 
 On the first render check five things: the legend fits; nothing is secretly on
 a second axis; the timezone is right; every panel has data (a "No data" panel

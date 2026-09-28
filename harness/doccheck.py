@@ -531,6 +531,8 @@ def check_dashboard_rows(fail):
                   "checkpoint duration", "job restarts", "failed checkpoints"):
         if f"| {panel}" not in sec:
             fail(f"SKILL.md \u00a77 no longer lists the {panel} panel")
+    if "The harness tests the dashboard as it tests the job" not in skill:
+        fail("SKILL.md \u00a77 no longer says the harness tests the dashboard")
     if "docker_container_memory_limit_bytes" not in read(HERE, "dashboard", "docker_cpu_exporter.py"):
         fail("\u00a77 says the exporter serves each container's memory limit, and it does not")
         # Titles name what is measured. "Keeping up and staying up" and "is the

@@ -1085,7 +1085,7 @@ test changes the number being measured. Whatever you add is recorded in the
 results header, so a reader knows what else was on the machine. That is the only
 sanctioned way — the harness is still not to be forked.
 
-**Five of the seven panels need engine metrics, and those need a reporter**: set one through `flinkProperties` in `pipeline.json`, which reaches the job manager and every task manager. On `flink:1.20.x` that is all you need: the reporters ship **already installed** as plugins in `/opt/flink/plugins/metrics-*`, so the factory class resolves with no further help. **Do not set `ENABLE_BUILT_IN_PLUGINS` on these images.** That variable tells the entrypoint to link a jar out of `/opt/flink/opt`, which on `flink:1.20.1-scala_2.12-java17` contains no reporter at all; the entrypoint prints `Plugin … does not exist. Exiting.` and the container dies before the job manager starts. Verified by listing both directories in the image. This paragraph previously said the opposite and gave the variable as the fix — clean-room run 43 followed it verbatim and lost its first `prove.py up` to it, which is worse than the forty minutes run 42 lost having no guidance at all. `flinkEnv` remains for images that do keep reporters in `/opt/flink/opt` (older tags and the slim variants) and for any other environment the engine needs. Clean-room run 32 had no such hook, could not fork the harness, and spent about fifty minutes rebuilding the numbers from outside the engine — Kafka offsets, a tail of each sink, the REST API and the docker socket. The settings the measurement depends on stop the run rather than being silently overridden.
+**Most of the panels below need engine metrics, and those need a reporter**: set one through `flinkProperties` in `pipeline.json`, which reaches the job manager and every task manager. On `flink:1.20.x` that is all you need: the reporters ship **already installed** as plugins in `/opt/flink/plugins/metrics-*`, so the factory class resolves with no further help. **Do not set `ENABLE_BUILT_IN_PLUGINS` on these images.** That variable tells the entrypoint to link a jar out of `/opt/flink/opt`, which on `flink:1.20.1-scala_2.12-java17` contains no reporter at all; the entrypoint prints `Plugin … does not exist. Exiting.` and the container dies before the job manager starts. Verified by listing both directories in the image. This paragraph previously said the opposite and gave the variable as the fix — clean-room run 43 followed it verbatim and lost its first `prove.py up` to it, which is worse than the forty minutes run 42 lost having no guidance at all. `flinkEnv` remains for images that do keep reporters in `/opt/flink/opt` (older tags and the slim variants) and for any other environment the engine needs. Clean-room run 32 had no such hook, could not fork the harness, and spent about fifty minutes rebuilding the numbers from outside the engine — Kafka offsets, a tail of each sink, the REST API and the docker socket. The settings the measurement depends on stop the run rather than being silently overridden.
 
 **The CPU-per-component panel needs the broker, and no reporter can give it to
 you.** `flinkProperties` reaches the job manager and the workers; the panel's
@@ -1119,18 +1119,53 @@ not have to work the span out: the report prints it as `suite span`, as a human
 interval and as the `from=`/`to=` epoch pair a dashboard URL takes, so a range
 that does not cover the suite is visible beside the numbers it failed to show.
 
-| panel | the question it answers |
-|---|---|
-| rate per stage | is the fan-out real? lines a constant factor apart |
-| distinct keys per aggregation | is the predicted cardinality the one you got? |
-| the two paths, overlaid | do two independent aggregations agree? |
-| busiest vs most back-pressured task | at the limit, falling behind, or **starved**? |
-| CPU per component | which one is in the way — including the idle one |
-| backlog remaining | is this a drain, and did it run out? |
-| checkpoint duration | what does the guarantee cost? |
+Lay the panels out in four rows, in this order, so the page reads from what
+the pipeline delivered down to what inside it is responsible: its output
+first, then whether it is keeping up and staying up, then the broker, then the
+engine. The first two rows are what someone checks on a pipeline left running;
+the last two are where they look when one of those is wrong.
 
-**The panel list is for a pipeline with fan-out; yours may not have one.**
-Two of those seven ask a fan-out question — *rate per stage* and *the two
+| row | panel | the question it answers | when |
+|---|---|---|---|
+| 1. The pipeline | rate per stage | is the fan-out real? lines a constant factor apart | always |
+| | distinct keys per aggregation | is the predicted cardinality the one you got? | always |
+| | the two paths, overlaid | do two independent aggregations agree? | always |
+| | latency, input to output | what does a consumer wait for? | when the claim is about latency |
+| 2. Keeping up and staying up | backlog remaining | is this a drain, and did it run out? | always |
+| | lag in seconds | how stale are the outputs? | a pipeline left running; in a drain it only reads the backlog's age |
+| | restarts | is the job failing and recovering between readings? | always |
+| | failed checkpoints | has the guarantee stopped being kept? A failure now would replay further back | always |
+| 3. Kafka | CPU per component | which one is in the way — including the idle one | always |
+| | broker memory against its limit | is the broker's page cache full? The rate falls while the worker still reads 96% of its cap | always |
+| 4. Flink | busiest, most back-pressured and most idle task | at the limit, falling behind, or **starved**? | always |
+| | garbage collection, share of time | is memory the constraint? The harness calls a case over 5.5% a ceiling | always |
+| | checkpoint duration and size | what does the guarantee cost, and is the state growing without limit? | always |
+| | network bytes and buffers | is the network between workers in the way? | when workers multiply (§1, question 8) |
+| | late records dropped | is a window throwing data away as too late? | windowed pipelines, with a caveat below |
+| | free slots, threads | can the job restart or rescale; is something leaking threads? | a pipeline left running |
+
+CPU per component opens the Kafka row because it shows the broker and the
+pipeline side by side, which is how you see which of the two is the
+constraint before reading the detail on either. Broker memory comes from the
+same exporter, which serves each container's memory and its limit beside its
+CPU.
+
+**Flink counts late records only in its own window operators**
+(`numLateRecordsDropped`). A window written by hand — a process function that
+buckets on a timestamp and drops what arrives after its bucket closed — has no
+such counter, and the panel reads "No data". Measured on the reference
+pipeline, which does exactly that. Count the drops in the job and publish the
+counter, or leave the panel out and say why.
+
+**Two broker panels are not in the list because the stack cannot feed them
+yet:** the broker's write load (bytes in, produce request time) and its disk
+in use. §5's broker "ran out of write throughput, not CPU", and only those
+two would show it, but both need the broker's own metrics and the harness
+has no way to add them to the broker it starts. Do not fork it to get them;
+say in the report that they are missing.
+
+**The first row is for a pipeline with fan-out; yours may not have one.**
+Two of its panels ask a fan-out question — *rate per stage* and *the two
 paths overlaid* — and a pipeline with one aggregation and a throttled output
 can answer neither. Replace them with the same question in its own shape:
 records read per second against rows published per second on a log scale, and

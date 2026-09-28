@@ -509,6 +509,34 @@ def check_broker_cpu_hook(fail):
     return "the CPU per component panel has a broker source, and it needs a name prefix"
 
 
+def check_dashboard_rows(fail):
+    """Section 7 lays the dashboard out in four rows: what the pipeline
+    delivered, whether it is keeping up, the broker, then the engine. The demo's
+    dashboard put the broker last and mixed lag in with the engine's busy
+    panels; the skill's old list put the backlog after the engine's internals.
+    The order is the argument, so it is held here, and so is the one panel
+    whose source this directory has to provide."""
+    skill = read(ROOT, "SKILL.md")
+    sec = skill[skill.index("## 7."):skill.index("## 8.")]
+    rows = ["| 1. The pipeline |", "| 2. Keeping up and staying up |", "| 3. Kafka |", "| 4. Flink |"]
+    at = [sec.find(r) for r in rows]
+    if -1 in at:
+        fail("SKILL.md \u00a77 is missing a dashboard row: "
+             + ", ".join(r.strip("| ") for r, i in zip(rows, at) if i == -1))
+        return "dashboard rows: missing"
+    if at != sorted(at):
+        fail("SKILL.md \u00a77's dashboard rows are out of order: pipeline, keeping up and staying up, Kafka, Flink")
+    for panel in ("rate per stage", "backlog remaining", "CPU per component",
+                  "broker memory against its limit", "garbage collection",
+                  "checkpoint duration and size", "restarts",
+                  "failed checkpoints"):
+        if f"| {panel}" not in sec:
+            fail(f"SKILL.md \u00a77 no longer lists the {panel} panel")
+    if "docker_container_memory_limit_bytes" not in read(HERE, "dashboard", "docker_cpu_exporter.py"):
+        fail("\u00a77 says the exporter serves each container's memory limit, and it does not")
+    return "the dashboard reads pipeline, keeping up and staying up, Kafka, Flink, and broker memory has a source"
+
+
 def check_target_not_needed(fail):
     """Section 6 says "target", not "needed". There are three renderings of the
     same figures -- the scorecard, the suite table and suite.md -- and the rule
@@ -829,7 +857,7 @@ def check_run41_lessons(fail):
         "Two of these rows do not apply": "\u00a76a does not say which levers a given pipeline cannot use",
         "assertion with nothing to compare is written down": "\u00a74 does not say what to do when an "
                                                              "assertion has nothing to compare",
-        "panel list is for a pipeline with fan-out": "\u00a77 does not say the panels assume a fan-out",
+        "row is for a pipeline with fan-out": "\u00a77 does not say the first row assumes a fan-out",
     }
     for needle, why in wanted.items():
         if why and needle not in skill:
@@ -861,7 +889,7 @@ def main():
                   check_chain_sweeps_on_start,
                   check_example_broker_memory, check_example_comments,
                   check_key_layout, check_tinyproof_reruns,
-                  check_broker_cpu_hook, check_target_not_needed,
+                  check_broker_cpu_hook, check_dashboard_rows, check_target_not_needed,
                   check_probe_advice,
                   check_calls_are_grouped,
                   check_no_duplicate_keys,

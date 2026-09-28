@@ -358,7 +358,7 @@ bad window voids one case — so anything checkable now is checked now.
 
 Anything that can void the whole table is tested before the table exists.
 
-## 4. Prove nothing was lost, separately from proving it is fast
+## 4. Completeness: proving no record was lost
 
 A pipeline that drops one record in ten thousand looks fine in every throughput
 column. Completeness is a separate run on a test data set small enough to **process
@@ -889,6 +889,11 @@ Two more rules that cost a reader the same way:
   stopped a run that would have fitted six times over.
 - **Say what happened, give the numbers, say what to do** — short sentences,
   no stacked clauses.
+- **Titles name what is measured.** A heading, a row, a panel or a column
+  says what it holds and in what unit; a panel may add what to look for after
+  a dash (*"Job restarts — 0"*). No questions and no slogans: *"Keeping up and
+  staying up"* and *"is the broker in the way?"* had to be renamed *"Lag and
+  job health"* and *"Kafka"*.
 
 Internal names in the code are not covered: `class Refusal` is fine, because
 nobody reads it. `harness/doccheck.py` enforces the table above against every
@@ -1074,7 +1079,7 @@ makes the pipeline *slower* and makes the measurement *valid*: a case that is
 waiting on its sink is not measuring cores at all, so its number answers no
 question. A slower table that means something beats a faster one that does not.
 
-## 7. The dashboard explains; the harness measures
+## 7. The dashboard
 
 **Add it through `extraServices` in `pipeline.json`** — a map of service name to
 a compose service body, spliced into the stack the harness generates. Two rules,
@@ -1119,32 +1124,36 @@ not have to work the span out: the report prints it as `suite span`, as a human
 interval and as the `from=`/`to=` epoch pair a dashboard URL takes, so a range
 that does not cover the suite is visible beside the numbers it failed to show.
 
-Lay the panels out in four rows, in this order, so the page reads from what
-the pipeline delivered down to what inside it is responsible: its output
-first, then whether it is keeping up and staying up, then the broker, then the
-engine. The first two rows are what someone checks on a pipeline left running;
-the last two are where they look when one of those is wrong.
+Lay the panels out in four rows, in this order: the pipeline's output, then
+lag and job health, then Kafka, then Flink. The first two rows are what
+someone checks on a pipeline left running; the last two are where they look
+when one of those is wrong.
 
-| row | panel | the question it answers | when |
+**A panel title is what it measures, then what to look for** — *"Checkpoint
+size — levels off"*, *"Job restarts — 0"*. No questions and no clever
+phrases. Why it matters goes in the panel's description, the text shown when
+the reader hovers over it.
+
+| row | panel title: what it measures — what to look for | why it matters (its description) | when |
 |---|---|---|---|
-| 1. The pipeline | rate per stage | is the fan-out real? lines a constant factor apart | always |
-| | distinct keys per aggregation | is the predicted cardinality the one you got? | always |
-| | the two paths, overlaid | do two independent aggregations agree? | always |
-| | latency, input to output | what does a consumer wait for? | when the claim is about latency |
-| 2. Keeping up and staying up | backlog remaining | is this a drain, and did it run out? | always |
-| | lag in seconds | how stale are the outputs? | a pipeline left running; in a drain it only reads the backlog's age |
-| | restarts | is the job failing and recovering between readings? | always |
-| | failed checkpoints | has the guarantee stopped being kept? A failure now would replay further back | always |
-| 3. Kafka | CPU per component | which one is in the way — including the idle one | always |
-| | broker memory against its limit | is the broker's page cache full? The rate falls while the worker still reads 96% of its cap | always |
-| 4. Flink | busiest, most back-pressured and most idle task | at the limit, falling behind, or **starved**? | always |
-| | garbage collection, share of time | is memory the constraint? The harness calls a case over 5.5% a ceiling | always |
-| | checkpoint duration and size | what does the guarantee cost, and is the state growing without limit? | always |
-| | network bytes and buffers | is the network between workers in the way? | when workers multiply (§1, question 8) |
-| | late records dropped | is a window throwing data away as too late? | windowed pipelines, with a caveat below |
-| | free slots, threads | can the job restart or rescale; is something leaking threads? | a pipeline left running |
+| 1. Pipeline output | input and output rate per stage — lines a constant factor apart | a fan-out that is not constant is not the one the interview predicted | always |
+| | distinct keys per aggregation — equal to the interview's answer | a key count that differs means keys you did not intend, or ones that never arrived | always |
+| | the two paths' totals — lines on top of each other | two independent aggregations that disagree have lost or duplicated a record | always |
+| | end-to-end latency — flat, under the target | this is what a consumer waits for | when the claim is about latency |
+| 2. Lag and job health | records waiting in Kafka — falls steadily in each case | flat at zero means the case ran out of input and measured nothing | always |
+| | event-time lag, seconds — flat | how stale the outputs are; in a drain it only reads the backlog's age | a pipeline left running |
+| | job restarts — 0 | readings taken across a failure are not a measurement | always |
+| | failed checkpoints — 0 | while they fail, a crash replays from further back | always |
+| 3. Kafka | CPU by container, cores — the pipeline at its cap, the rest low | shows which component is the constraint, including an idle one | always |
+| | broker memory and limit — page cache fills to the limit, which is normal | the harness's own broker-memory check says whether reads went to disk | always |
+| 4. Flink | task busy, back-pressured and idle time — busy near 100% | busy is at the limit, back-pressured is falling behind, idle with no back-pressure is **starved** | always |
+| | garbage collection, % of cores — under 5.5% | above 5.5% the harness calls the case a ceiling | always |
+| | checkpoint duration — flat; checkpoint size — levels off | the cost of the guarantee, and state growing without limit | always |
+| | network bytes and buffer use — below saturation | the network between workers becomes a constraint | when workers multiply (§1, question 8) |
+| | late records dropped — 0 | a window is throwing data away as too late | windowed pipelines, with a caveat below |
+| | free slots; threads — not climbing | spare slots let a job restart (a measured case has none, on purpose); climbing threads are a leak | a pipeline left running |
 
-CPU per component opens the Kafka row because it shows the broker and the
+CPU by container opens the Kafka row because it shows the broker and the
 pipeline side by side, which is how you see which of the two is the
 constraint before reading the detail on either. Broker memory comes from the
 same exporter, which serves each container's memory and its limit beside its
@@ -1183,7 +1192,7 @@ a signed sum, because both are unstable for reasons unrelated to the pipeline.
 **A panel you cannot explain is a liability** — either it says what the number
 means or it goes.
 
-## 8. An explanation is a measurement, not a story
+## 8. Explaining a result
 
 A number short of expectation invites a reason, and a plausible reason is cheap
 to produce and expensive to be wrong about. A mechanism is a claim about cause,

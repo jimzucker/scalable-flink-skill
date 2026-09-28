@@ -518,7 +518,7 @@ def check_dashboard_rows(fail):
     whose source this directory has to provide."""
     skill = read(ROOT, "SKILL.md")
     sec = skill[skill.index("## 7."):skill.index("## 8.")]
-    rows = ["| 1. The pipeline |", "| 2. Keeping up and staying up |", "| 3. Kafka |", "| 4. Flink |"]
+    rows = ["| 1. Pipeline output |", "| 2. Lag and job health |", "| 3. Kafka |", "| 4. Flink |"]
     at = [sec.find(r) for r in rows]
     if -1 in at:
         fail("SKILL.md \u00a77 is missing a dashboard row: "
@@ -526,15 +526,28 @@ def check_dashboard_rows(fail):
         return "dashboard rows: missing"
     if at != sorted(at):
         fail("SKILL.md \u00a77's dashboard rows are out of order: pipeline, keeping up and staying up, Kafka, Flink")
-    for panel in ("rate per stage", "backlog remaining", "CPU per component",
-                  "broker memory against its limit", "garbage collection",
-                  "checkpoint duration and size", "restarts",
-                  "failed checkpoints"):
+    for panel in ("input and output rate per stage", "records waiting in Kafka", "CPU by container",
+                  "broker memory and limit", "garbage collection",
+                  "checkpoint duration", "job restarts", "failed checkpoints"):
         if f"| {panel}" not in sec:
             fail(f"SKILL.md \u00a77 no longer lists the {panel} panel")
     if "docker_container_memory_limit_bytes" not in read(HERE, "dashboard", "docker_cpu_exporter.py"):
         fail("\u00a77 says the exporter serves each container's memory limit, and it does not")
-    return "the dashboard reads pipeline, keeping up and staying up, Kafka, Flink, and broker memory has a source"
+        # Titles name what is measured. "Keeping up and staying up" and "is the
+    # broker in the way?" reached the dashboard and had to be renamed
+    # (2026-09-28); a title is what it measures, then what to look for.
+    table = [l for l in sec.splitlines() if l.startswith("| ") and not l.startswith("| row ")]
+    for line in table:
+        cells = [x.strip() for x in line.strip("|").split("|")]
+        if len(cells) < 4:
+            continue
+        for title in cells[:2]:
+            if "?" in title:
+                fail(f"SKILL.md \u00a77 titles a row or panel with a question: {title!r}")
+    for h in re.findall(r"^#{1,4} (.+)$", skill, re.M):
+        if "?" in h or ";" in h:
+            fail(f"SKILL.md heading reads as a slogan, not a name: {h!r}")
+    return "the dashboard reads pipeline output, lag and job health, Kafka, Flink; titles name what they measure"
 
 
 def check_target_not_needed(fail):

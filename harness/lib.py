@@ -4145,3 +4145,330 @@ def render_markdown(out):
               "configuration and the run's own manifest; an interval on an output is what the build "
               "declared in design.every, not something the harness measured.", "", "```mermaid", graph, "```"]
     return "\n".join(L) + "\n"
+
+
+# ------------------------------------------------------------ the dashboard
+#
+# The dashboard is something the agent builds, and until 2026-09-28 nothing
+# tested it. That day a dashboard asked for a data source named "prometheus"
+# where the stack provisioned "st44prom": Grafana loaded it, every panel read
+# "No data", and the only check that ran had queried Prometheus directly and
+# passed. So the harness asks Grafana itself, the way a reader's browser does.
+
+GRAFANA_BUILTIN_DS = {"grafana", "-- grafana --", "-- mixed --", "-- dashboard --", "__expr__"}
+
+
+def dashboard_service(extra):
+    """Pure. The Grafana service among extraServices and where its files are:
+    {"service", "container", "port", "mounts"} or None when there is none."""
+    for name, body in (extra or {}).items():
+        body = body or {}
+        if "grafana" not in str(body.get("image", "")).split(":")[0]:
+            continue
+        mounts = {}
+        for v in body.get("volumes") or []:
+            parts = str(v).strip('"').split(":")
+            if len(parts) >= 2:
+                mounts[parts[1]] = parts[0]
+        port = None
+        for p in body.get("ports") or []:
+            bits = str(p).strip('"').split(":")
+            if len(bits) >= 2 and bits[-1].split("/")[0] == "3000":
+                port = int(bits[-2])
+        return {"service": name, "container": body.get("container_name", name),
+                "port": port, "mounts": mounts}
+    return None
+
+
+def host_path(mounts, container_path):
+    """Pure. The host file behind a path inside the container, through the
+    longest bind mount that covers it; None when nothing does."""
+    best = None
+    for c, h in mounts.items():
+        if container_path == c or container_path.startswith(c.rstrip("/") + "/"):
+            if best is None or len(c) > len(best[0]):
+                best = (c, h)
+    return None if best is None else best[1] + container_path[len(best[0]):]
+
+
+def parse_provisioning(text, keys):
+    """Pure. The list items of a provisioning file, each a dict of the scalar
+    keys asked for. Standard library only, so no YAML parser: provisioning
+    files are flat enough that a key per line is all they use."""
+    items, cur = [], None
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].rstrip()
+        m = re.match(r"^\s*(-\s+)?([A-Za-z_]+):\s*(.*)$", line)
+        if not m:
+            continue
+        if m.group(1):
+            cur = {}
+            items.append(cur)
+        key, val = m.group(2), m.group(3).strip().strip('"').strip("'")
+        if cur is not None and key in keys and val:
+            cur.setdefault(key, val)
+    return items
+
+
+def dashboard_files(svc):
+    """What Grafana will load: (datasources, {file: dashboard json}, problems).
+    Reads the provisioning directory on the host through the service's mounts."""
+    problems = []
+    # Either the whole provisioning directory is mounted or its two parts are,
+    # one by one (clean-room run 36); ask for each part through the mounts.
+    dirs = {sub: host_path(svc["mounts"], f"/etc/grafana/provisioning/{sub}")
+            for sub in ("datasources", "dashboards")}
+    if not any(d and os.path.isdir(d) for d in dirs.values()):
+        return [], {}, [f"{svc['service']} mounts nothing at /etc/grafana/provisioning, so Grafana "
+                        "starts with no data source and no dashboard"]
+    datasources, paths = [], []
+    for sub, d in dirs.items():
+        if not d or not os.path.isdir(d):
+            continue
+        for f in sorted(os.listdir(d)):
+            if not f.endswith((".yml", ".yaml")):
+                continue
+            text = open(os.path.join(d, f)).read()
+            if sub == "datasources":
+                datasources += [it for it in parse_provisioning(text, ("name", "uid", "type", "isDefault"))
+                                if it.get("name")]
+            else:
+                paths += [it["path"] for it in parse_provisioning(text, ("path",)) if it.get("path")]
+    boards = {}
+    for p in paths:
+        hp = host_path(svc["mounts"], p)
+        if not hp or not os.path.isdir(hp):
+            problems.append(f"the dashboards are provisioned from {p}, and nothing is mounted there")
+            continue
+        for root, _, files in os.walk(hp):
+            for f in sorted(files):
+                if f.endswith(".json"):
+                    full = os.path.join(root, f)
+                    try:
+                        boards[full] = json.load(open(full))
+                    except Exception as e:
+                        problems.append(f"{f} is not valid JSON, so Grafana skips it: {e}")
+    return datasources, boards, problems
+
+
+def dashboard_panels(board):
+    """Pure. Every panel that shows data: rows opened up, text panels left out."""
+    board = board.get("dashboard", board)
+    out = []
+
+    def walk(ps):
+        for p in ps or []:
+            if p.get("type") == "row":
+                walk(p.get("panels"))
+            elif p.get("type") not in ("text", "news", "dashlist"):
+                out.append(p)
+    walk(board.get("panels"))
+    return out
+
+
+def dashboard_wiring(datasources, boards):
+    """Pure. Every problem Grafana would show as an empty panel, found from
+    the files alone: a data source nobody provisioned, a panel with no query,
+    no dashboard at all. Returns (problems, summary)."""
+    problems = []
+    uids = {d.get("uid") for d in datasources if d.get("uid")}
+    names = {d.get("name") for d in datasources}
+    if not datasources:
+        problems.append("no data source is provisioned, so every panel reads \"No data\"")
+    if not boards:
+        problems.append("no dashboard file is provisioned")
+    n = 0
+    for path, board in boards.items():
+        b = board.get("dashboard", board)
+        title = b.get("title") or os.path.basename(path)
+        tvars = {v.get("name") for v in (b.get("templating") or {}).get("list", [])
+                 if v.get("type") == "datasource"}
+        for p in dashboard_panels(board):
+            n += 1
+            ptitle = p.get("title") or "(untitled panel)"
+            targets = p.get("targets") or []
+            if not [t for t in targets if (t.get("expr") or t.get("query") or t.get("rawSql") or "").strip()]:
+                problems.append(f"{title}: \"{ptitle}\" has no query")
+            for ds in [p.get("datasource")] + [t.get("datasource") for t in targets]:
+                ref = ds.get("uid") if isinstance(ds, dict) else ds
+                if ref in (None, "") or str(ref).lower() in GRAFANA_BUILTIN_DS:
+                    continue
+                ref = str(ref)
+                if ref.startswith("$"):
+                    if ref.strip("${}") in tvars:
+                        continue
+                    problems.append(f"{title}: \"{ptitle}\" names a data source variable {ref} "
+                                    "the dashboard does not define")
+                elif ref not in uids and ref not in names:
+                    problems.append(f"{title}: \"{ptitle}\" asks for data source \"{ref}\"; the stack "
+                                    f"provisions {', '.join(sorted(uids | names)) or 'none'}")
+                    break
+    # One line per panel is too many when a whole dashboard names the wrong
+    # source; say it once with the count.
+    seen = {}
+    for p in problems:
+        key = p.split(" asks for data source ", 1)[-1] if " asks for data source " in p else p
+        seen.setdefault(key, []).append(p)
+    merged = []
+    for key, group in seen.items():
+        merged.append(group[0] if len(group) == 1 else
+                      f"{len(group)} panels ask for data source {key}")
+    return merged, f"{len(boards)} dashboard(s), {n} panels, data source(s) {', '.join(sorted(uids | names))}"
+
+
+def grafana_api(port, path, body=None, timeout=15):
+    """GET or POST against Grafana on the host. Anonymous first, then the
+    default admin login a fresh container starts with."""
+    import urllib.request
+    import urllib.error
+    url = f"http://localhost:{port}{path}"
+    data = json.dumps(body).encode() if body is not None else None
+    for auth in (None, "admin:admin"):
+        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+        if auth:
+            req.add_header("Authorization", "Basic " + base64.b64encode(auth.encode()).decode())
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403) and auth is None:
+                continue
+            raise
+    return None
+
+
+def panel_points(port, panel, t0, t1):
+    """How many points a panel's queries return through Grafana over [t0, t1]
+    (epoch seconds), and the first error Grafana reported, if any."""
+    queries = []
+    for t in panel.get("targets") or []:
+        q = dict(t)
+        q.setdefault("datasource", panel.get("datasource"))
+        q.update({"intervalMs": 15000, "maxDataPoints": 300})
+        queries.append(q)
+    try:
+        r = grafana_api(port, "/api/ds/query", {"queries": queries, "from": str(int(t0 * 1000)),
+                                                "to": str(int(t1 * 1000))})
+    except urllib.error.HTTPError as e:
+        try:
+            said = json.loads(e.read().decode()).get("message")
+        except Exception:
+            said = None
+        return 0, ("Grafana has no data source by that name" if e.code == 404
+                   else f"Grafana would not run the query: {said or e.reason}")
+    points, err = 0, None
+    for res in (r or {}).get("results", {}).values():
+        err = err or res.get("error")
+        for f in res.get("frames") or []:
+            vals = (f.get("data") or {}).get("values") or []
+            if len(vals) >= 2:
+                points += sum(1 for v in vals[-1] if v is not None)
+    return points, err
+
+
+def empty_panels(readings):
+    """Pure. readings: [(dashboard, panel, points, error)]. The panels a reader
+    would see as "No data", one phrase each."""
+    return [f"\"{p}\"" + (f" ({e})" if e else "") for _, p, n, e in readings if n == 0 or e]
+
+
+def dashboard_readings(svc, t0, t1):
+    """Every panel of every provisioned dashboard, queried through Grafana."""
+    out = []
+    for hit in grafana_api(svc["port"], "/api/search?type=dash-db") or []:
+        board = (grafana_api(svc["port"], f"/api/dashboards/uid/{hit['uid']}") or {}).get("dashboard", {})
+        for p in dashboard_panels(board):
+            try:
+                n, err = panel_points(svc["port"], p, t0, t1)
+            except Exception as e:
+                n, err = 0, str(e)[:120]
+            out.append((board.get("title"), p.get("title") or "(untitled panel)", n, err))
+    return out
+
+
+def dashboard_here():
+    """This run's Grafana service, with each mount as an absolute host path.
+    Compose resolves a relative host path against the compose file's own
+    directory, so this does the same."""
+    c = cfg()
+    svc = dashboard_service(c.raw.get("extraServices"))
+    if svc:
+        svc["mounts"] = {k: (v if os.path.isabs(v) else os.path.normpath(os.path.join(c.stack_dir, v)))
+                         for k, v in svc["mounts"].items()}
+    return svc
+
+
+def dashboard_loaded(svc, datasources, boards, wait_s=90):
+    """Grafana answers, has loaded every provisioned dashboard, and each data
+    source it was given answers its own health check. Returns a one-line
+    detail; raises with what is wrong."""
+    if not svc.get("port"):
+        raise Exception(f"{svc['service']} publishes no host port for Grafana's 3000, so nothing "
+                        "outside the stack can open the dashboard")
+    deadline, last = time.time() + wait_s, None
+    while True:
+        try:
+            if (grafana_api(svc["port"], "/api/health") or {}).get("database") == "ok":
+                break
+        except Exception as e:
+            last = e
+        if time.time() > deadline:
+            raise Exception(f"Grafana on port {svc['port']} did not answer in {wait_s} s: {last}")
+        time.sleep(3)
+    want = {(b.get("dashboard", b).get("title") or "") for b in boards.values()}
+    # Grafana reads provisioned files on its own schedule; give it a moment.
+    for _ in range(10):
+        have = {h.get("title") for h in grafana_api(svc["port"], "/api/search?type=dash-db") or []}
+        if want <= have:
+            break
+        time.sleep(3)
+    missing = sorted(want - have)
+    if missing:
+        raise Exception(f"Grafana has not loaded {', '.join(missing)}; it shows {', '.join(sorted(have)) or 'none'}")
+    sick = []
+    for d in datasources:
+        uid = d.get("uid")
+        if not uid:
+            uid = (grafana_api(svc["port"], f"/api/datasources/name/{d['name']}") or {}).get("uid")
+        try:
+            h = grafana_api(svc["port"], f"/api/datasources/uid/{uid}/health") or {}
+            if str(h.get("status", "")).upper() != "OK":
+                sick.append(f"{d['name']}: {h.get('message', h)}")
+        except Exception as e:
+            sick.append(f"{d['name']}: {e}")
+    if sick:
+        raise Exception("a data source does not answer: " + "; ".join(sick))
+    return (f"Grafana on port {svc['port']} has loaded {len(want)} dashboard(s); "
+            f"data source(s) {', '.join(d['name'] for d in datasources)} answer")
+
+
+def dashboard_has_data(svc, t0, t1, what):
+    """None when every panel shows data through Grafana over [t0, t1];
+    otherwise one plain sentence naming the panels that do not."""
+    readings = dashboard_readings(svc, t0, t1)
+    empty = empty_panels(readings)
+    if not readings:
+        return f"the dashboard has no panels to show {what}"
+    if empty:
+        return (f"{len(empty)} of {len(readings)} dashboard panels show no data over {what}: "
+                + ", ".join(empty) + ". Fix the panel's query or remove the panel.")
+    return None
+
+
+def dashboard_report_line(out):
+    """The report's one line about the dashboard over the suite, or None when
+    the run has no Grafana."""
+    svc = dashboard_here()
+    if not svc:
+        return None
+    try:
+        grafana_api(svc["port"], "/api/health", timeout=3)
+    except Exception:
+        return "not checked: Grafana was not running when the report was written"
+    t0, t1 = out.get("startedAtEpoch"), out.get("savedAtEpoch")
+    if not (t0 and t1):
+        return "not checked: the suite's start and end times are not recorded"
+    try:
+        return dashboard_has_data(svc, t0, t1, "the suite") or "every panel shows data over the suite"
+    except Exception as e:
+        return f"could not be read through Grafana: {e}"

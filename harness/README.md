@@ -43,6 +43,12 @@ sleep 30; done`: the chain stops any process that names the run directory on its
 or sits in it, and that includes the shell you are waiting in (runs 36, 44, 47, 48 and 49 each
 lost one this way).
 
+If `extraServices` has a Grafana service, the dashboard is tested too:
+preflight reads its provisioning files and asks Grafana whether it loaded them,
+the chain stops after completeness if any panel shows no data through Grafana,
+and `suite.txt` ends with a `dashboard` line for the whole suite. Grafana must
+publish a host port for its 3000 and allow anonymous or `admin:admin` access.
+
 While it runs, `results/PROGRESS.txt` holds one sentence, overwritten — which
 step of seven, which case of ten, a bar and an estimate of what is left:
 

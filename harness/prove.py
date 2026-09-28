@@ -668,6 +668,84 @@ def cmd_selftest(live=True, topic=None):
     expect("fill: a 4-minute pause after writing runs on (must not fire)",
            stall([(0, 0), (30, 4_000_000)] + [(30 + i * 30, 4_000_000) for i in range(1, 9)], 270, None),
            "", should_fire=False)
+    # The dashboard (2026-09-28): a dashboard asking for data source
+    # "prometheus" where the stack provisioned "st44prom" loaded in Grafana with
+    # every panel empty, and the check that ran queried Prometheus directly.
+    def panel(uid="st44prom", expr="up", title="p"):
+        t = {"refId": "A", "expr": expr}
+        return {"type": "timeseries", "title": title, "targets": [t],
+                "datasource": None if uid is None else ({"type": "prometheus", "uid": uid}
+                                                        if not uid.startswith("$") else uid)}
+    DS = [{"name": "Prometheus", "uid": "st44prom", "type": "prometheus"}]
+
+    def wiring(boards, want, ds=DS):
+        def go():
+            problems, _ = L.dashboard_wiring(ds, boards)
+            if want is None:
+                assert not problems, f"stopped a good dashboard: {problems}"
+            else:
+                assert problems and want in " ".join(problems), f"said {problems}, expected {want!r}"
+        return go
+    row = {"type": "row", "title": "r", "panels": []}
+    expect("dashboard: the 2026-09-28 mistake, a data source nobody provisioned, is found (must not fire)",
+           wiring({"d.json": {"title": "d", "panels": [row, panel("prometheus"), panel("prometheus", title="q")]}},
+                  '2 panels ask for data source "prometheus"; the stack provisions Prometheus, st44prom'),
+           "", should_fire=False)
+    expect("dashboard: panels naming the provisioned source pass (must not fire)",
+           wiring({"d.json": {"title": "d", "panels": [panel(), {"type": "text", "title": "notes"}]}}, None),
+           "", should_fire=False)
+    expect("dashboard: a panel with no data source uses the default and passes (must not fire)",
+           wiring({"d.json": {"title": "d", "panels": [panel(None)]}}, None), "", should_fire=False)
+    expect("dashboard: a data source variable the dashboard defines passes (must not fire)",
+           wiring({"d.json": {"title": "d", "panels": [panel("${DS}")],
+                              "templating": {"list": [{"name": "DS", "type": "datasource"}]}}}, None),
+           "", should_fire=False)
+    expect("dashboard: a data source variable nobody defines is found (must not fire)",
+           wiring({"d.json": {"title": "d", "panels": [panel("${DS}")]}}, "variable ${DS}"),
+           "", should_fire=False)
+    expect("dashboard: a panel with no query is found (must not fire)",
+           wiring({"d.json": {"title": "d", "panels": [panel(expr="  ", title="empty one")]}},
+                  '"empty one" has no query'), "", should_fire=False)
+    expect("dashboard: no data source provisioned is found (must not fire)",
+           wiring({"d.json": {"title": "d", "panels": [panel(None)]}}, "no data source is provisioned", ds=[]),
+           "", should_fire=False)
+
+    def files(split):
+        def go():
+            with tempfile.TemporaryDirectory() as tdir:
+                prov = os.path.join(tdir, "prov")
+                os.makedirs(os.path.join(prov, "datasources")); os.makedirs(os.path.join(prov, "dashboards", "json"))
+                open(os.path.join(prov, "datasources", "ds.yml"), "w").write(
+                    "apiVersion: 1\ndatasources:\n  - name: Prometheus\n    uid: st44prom\n    type: prometheus\n")
+                open(os.path.join(prov, "dashboards", "p.yml"), "w").write(
+                    "apiVersion: 1\nproviders:\n  - name: x\n    options:\n      path: /etc/grafana/provisioning/dashboards/json\n")
+                json.dump({"title": "d", "panels": [panel()]}, open(os.path.join(prov, "dashboards", "json", "d.json"), "w"))
+                mounts = ({"/etc/grafana/provisioning/datasources": prov + "/datasources",
+                           "/etc/grafana/provisioning/dashboards": prov + "/dashboards"} if split
+                          else {"/etc/grafana/provisioning": prov})
+                ds, boards, found = L.dashboard_files({"service": "grafana", "mounts": mounts})
+                assert not found, found
+                assert [d["uid"] for d in ds] == ["st44prom"], ds
+                assert len(boards) == 1, boards
+        return go
+    expect("dashboard: provisioning mounted whole is read (must not fire)", files(False), "", should_fire=False)
+    expect("dashboard: provisioning mounted in two parts, like run 36, is read (must not fire)",
+           files(True), "", should_fire=False)
+
+    def service():
+        svc = L.dashboard_service({"exporter": {"image": "python:3.12-alpine"},
+                                   "grafana": {"image": "grafana/grafana:11.2.0", "ports": ['"13000:3000"'],
+                                               "volumes": ["/r/dash/prov:/etc/grafana/provisioning:ro"]}})
+        assert svc and svc["port"] == 13000 and svc["mounts"] == {"/etc/grafana/provisioning": "/r/dash/prov"}, svc
+    expect("dashboard: the Grafana service and its port are found among extraServices (must not fire)",
+           service, "", should_fire=False)
+
+    def empties():
+        got = L.empty_panels([("d", "full", 40, None), ("d", "empty", 0, None), ("d", "broken", 0, "bad query")])
+        assert got == ['"empty"', '"broken" (bad query)'], got
+        assert L.empty_panels([("d", "full", 40, None)]) == []
+    expect("dashboard: panels with no points or an error are named (must not fire)", empties, "",
+           should_fire=False)
     # Confluent's broker image keeps its tools in /usr/bin with no .sh; the
     # harness sent every command to Apache's /opt/kafka/bin (cp-kafka:7.7.0).
     def tools(found, want):
@@ -2186,6 +2264,30 @@ def cmd_preflight():
     check("the job jar exists and hashes", jar)
     check("the build runs on either Kafka (reported)", either_kafka)
     check("the diagram can show how often each output is written (reported)", every_declared)
+
+    # The dashboard is built by the agent like the job is, and is tested like
+    # it: from its files here, through Grafana after completeness, and over
+    # the suite in the report (see lib.dashboard_wiring).
+    def dash_wiring():
+        svc = L.dashboard_here()
+        if not svc:
+            return "no Grafana among extraServices; nothing to check"
+        ds, boards, found = L.dashboard_files(svc)
+        problems, summary = L.dashboard_wiring(ds, boards)
+        if found + problems:
+            raise Exception("; ".join(found + problems))
+        extra["dashboard"] = summary
+        return summary
+
+    def dash_loaded():
+        svc = L.dashboard_here()
+        if not svc:
+            return "no Grafana among extraServices; nothing to check"
+        ds, boards, _ = L.dashboard_files(svc)
+        return L.dashboard_loaded(svc, ds, boards)
+
+    check("the dashboard's panels name a data source that exists", dash_wiring)
+    check("the dashboard is loaded and its data source answers", dash_loaded)
     save_json("preflight.json", {"checks": [{"check": a, "result": b, "detail": d} for a, b, d in rows],
                                  **extra})
     fails = [r for r in rows if r[1] == "FAIL"]
@@ -2803,6 +2905,13 @@ def cmd_report():
     # clean-room run 42 ended with a 0-byte suite.txt: two separate losses from
     # one bug.
     text, markdown = render_table(out) + "\n", render_markdown(out)
+    # The dashboard over the whole suite. A panel full while the suite ran and
+    # empty afterwards is a time range or a retention too short, and the
+    # dashboard is looked at afterwards. Reported, never a reason to stop.
+    dash = L.dashboard_report_line(out)
+    if dash:
+        out["dashboard"] = dash
+        text += f"dashboard            : {dash}\n"
     for name, body in (("suite.txt", text), ("suite.md", markdown)):
         # Written whole, then moved into place. Rendering first already stops a
         # renderer crash from destroying the previous run's table; this also
@@ -3083,6 +3192,18 @@ def cmd_all(steps=None, results=None):
                     L.stop_sampler(); L.stop_tm()
                 except Exception:
                     pass
+        # Every dashboard panel shows data through Grafana, checked as soon as
+        # a job has run -- minutes in, not after the hour-long suite.
+        stop_why = None
+        if name == "completeness" and not rc and results == c.results:
+            try:
+                svc = L.dashboard_here()
+                stop_why = svc and L.dashboard_has_data(svc, t0, time.time(), "the completeness run")
+            except Exception as e:
+                stop_why = f"the dashboard could not be read through Grafana: {e}"
+            if stop_why:
+                log(f"STOPPED: {stop_why}")
+                rc = 1
         if L.QUICK != quick0:
             log(f"phase {name} left the quick flag {L.QUICK} (it was {quick0}); restoring")
             L.QUICK = quick0
@@ -3114,7 +3235,7 @@ def cmd_all(steps=None, results=None):
                                                    for g in ((load_json("suite.json") or {}).get("missingSteps") or []))
                                            )}.get(why,
                         "STOPPED at report: the table could not be reported")
-                       if name == "report" else f"STOPPED at {name}")
+                       if name == "report" else f"STOPPED at {name}" + (f": {stop_why}" if stop_why else ""))
             break
     out["verdict"] = verdict
     out["seconds"] = round(time.time() - t_all, 1)

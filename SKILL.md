@@ -1116,14 +1116,18 @@ metric service starves at exactly the load you care about. Render images
 server-side, with the timezone passed explicitly, so the picture in the
 write-up is the window the number came from.
 
-**Set the default time range to cover the whole suite, and the metrics store's
-retention to outlast it.** What is being measured is a drain: the producer is
-stopped, the backlog empties, and every panel goes flat the moment the last
-case ends. A dashboard left on a five-minute default is therefore empty for
-everyone who opens it afterwards — which is everyone except the run. You do
-not have to work the span out: the report prints it as `suite span`, as a human
-interval and as the `from=`/`to=` epoch pair a dashboard URL takes, so a range
-that does not cover the suite is visible beside the numbers it failed to show.
+**The dashboard opens on the suite; the metrics store's retention must
+outlast it.** What is being measured is a drain: the producer is stopped, the
+backlog empties, and every panel goes flat the moment the last case ends. A
+dashboard left on a relative default — "last 5 minutes", "last 90 minutes" —
+is therefore empty for everyone who opens it afterwards, which is everyone
+except the run: the reference dashboard opened on the last 90 minutes and,
+two hours after its suite, showed "No data" on every Flink panel. So the
+harness does it: at the report it writes the suite's start and end into each
+provisioned dashboard file as the range it opens on, turns auto-refresh off,
+reads the range back from Grafana, and says so on the report's `dashboard`
+line. Build the dashboard with any default; keep Prometheus's retention
+longer than the time between the run and whoever reads it.
 
 Lay the panels out in four rows, in this order: the pipeline's output, then
 lag and job health, then Kafka, then Flink. The first two rows are what

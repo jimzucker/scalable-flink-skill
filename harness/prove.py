@@ -746,6 +746,37 @@ def cmd_selftest(live=True, topic=None):
         assert L.empty_panels([("d", "full", 40, None)]) == []
     expect("dashboard: panels with no points or an error are named (must not fire)", empties, "",
            should_fire=False)
+    # 2026-09-28: the reference dashboard opened on "now-90m". It covered the
+    # suite for 90 minutes and then showed "No data" on every Flink panel.
+    T0, T1 = 1_790_605_140, 1_790_607_300
+
+    def opens(board, want):
+        def go():
+            got = L.range_covers(board, T0, T1)
+            assert got == want, f"range {board.get('time')} judged {got}, expected {want}"
+        return go
+    iso = lambda t: time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(t))
+    expect("dashboard: opening on the last 90 minutes does not cover the suite later (must not fire)",
+           opens({"time": {"from": "now-90m", "to": "now"}}, False), "", should_fire=False)
+    expect("dashboard: a fixed range around the suite covers it (must not fire)",
+           opens({"time": {"from": iso(T0 - 60), "to": iso(T1 + 30)}}, True), "", should_fire=False)
+    expect("dashboard: a fixed range in epoch milliseconds covers it (must not fire)",
+           opens({"time": {"from": str((T0 - 5) * 1000), "to": str((T1 + 5) * 1000)}}, True), "",
+           should_fire=False)
+    expect("dashboard: a range that ends before the suite does does not cover it (must not fire)",
+           opens({"time": {"from": iso(T0 - 60), "to": iso(T1 - 600)}}, False), "", should_fire=False)
+
+    def rewrite():
+        for wrapped in (False, True):
+            b = {"title": "d", "time": {"from": "now-90m", "to": "now"}, "refresh": "10s", "panels": [panel()]}
+            b = {"dashboard": b} if wrapped else b
+            got = L.with_suite_range(b, T0, T1)
+            assert L.range_covers(got, T0, T1), got
+            inner = got.get("dashboard", got)
+            assert inner["refresh"] == "" and inner["panels"] == [panel()], inner
+            assert b.get("dashboard", b)["time"]["from"] == "now-90m", "changed the board it was given"
+    expect("dashboard: the suite's range is written in, refresh off, panels untouched (must not fire)",
+           rewrite, "", should_fire=False)
     # Confluent's broker image keeps its tools in /usr/bin with no .sh; the
     # harness sent every command to Apache's /opt/kafka/bin (cp-kafka:7.7.0).
     def tools(found, want):

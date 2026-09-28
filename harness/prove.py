@@ -460,6 +460,54 @@ def cmd_selftest(live=True, topic=None):
     met = dict(reportable=True, meetsClaim=True, ratio=1.95, idealRatio=2.0, ratioLowCI=1.91)
     short = dict(reportable=True, meetsClaim=False, ratio=1.53, idealRatio=2.0, ratioLowCI=1.41)
     over = dict(reportable=True, meetsClaim=True, ratio=2.76, idealRatio=2.0, ratioLowCI=2.41)
+    # 2026-09-28: three reference runs printed "missed" for a step whose range
+    # spanned the target. Replayed over 63 recorded suites: 33 of 36 "missed"
+    # steps spanned it, 3 were wholly under, and no "met" step changed.
+    def verdict_of(step, want):
+        def go():
+            got = L.step_verdict(step)
+            assert got == want, f"judged {got!r}, expected {want!r}"
+        return go
+    run4 = dict(reportable=True, meetsClaim=False, ratio=1.779, idealRatio=2.0,
+                ratioLowCI=1.645, ratioHighCI=1.823, adjacentPairs=[1.734, 1.734, 1.87],
+                step="2->4", **{"from": 2, "to": 4})
+    expect("verdict: reference run 4's 2->4, 1.65-1.82x, is not settled (must not fire)",
+           verdict_of(run4, "not settled"), "", should_fire=False)
+    expect("verdict: run 37's 2->4, 1.75-1.78x, wholly under 1.80x, is missed (must not fire)",
+           verdict_of(dict(run4, ratio=1.77, ratioLowCI=1.752, ratioHighCI=1.776), "missed"), "",
+           should_fire=False)
+    expect("verdict: a range wholly above 1.80x is met (must not fire)",
+           verdict_of(dict(run4, meetsClaim=True, ratio=1.90, ratioLowCI=1.88, ratioHighCI=1.94), "met"), "",
+           should_fire=False)
+    expect("verdict: one pair and no range is judged on the point, and under is missed (must not fire)",
+           verdict_of(dict(reportable=True, meetsClaim=False, ratio=1.70, idealRatio=2.0), "missed"), "",
+           should_fire=False)
+    expect("verdict: a step not reported has no verdict (must not fire)",
+           verdict_of(dict(reportable=False), None), "", should_fire=False)
+    def settles(runs_path_rates, want_seq):
+        """Extra cases chosen one after another settle toward the open step."""
+        def go():
+            runs = [dict(cores=c, recordsPerSec=r, status="OK", pass_=p) for c, r, p in runs_path_rates]
+            got = []
+            for _ in range(len(want_seq)):
+                nxt = L.settle_next(runs, [run4])
+                assert nxt, "stopped before the step settled"
+                got.append(nxt[0])
+                runs.append(dict(cores=nxt[0], recordsPerSec=1.0, status="OK"))
+            assert got == want_seq, f"ran {got}, expected {want_seq}"
+            assert L.settle_next(runs, [dict(run4, meetsClaim=True)]) is None, "kept going on a settled step"
+        return go
+    # Reference run 4's order ended on the 1-core sentinel.
+    RUN4 = [(1, 838186, "p1"), (2, 1574122, "p1"), (4, 2728757, "p1"), (4, 2846468, "p2"),
+            (2, 1522041, "p2"), (1, 768518, "p2"), (1, 776678, "p3"), (2, 1558714, "p3"),
+            (4, 2703505, "p3"), (1, 835127, "sentinel")]
+    expect("settle: after the sentinel, 2->4 alternates 2, 4, 2, 4 (must not fire)",
+           settles(RUN4, [2, 4, 2, 4]), "", should_fire=False)
+    expect("settle: after a 2-core case, 2->4 starts at 4 (must not fire)",
+           settles(RUN4[:8], [4, 2, 4]), "", should_fire=False)
+    expect("scorecard: a step that is not settled asks for more passes, not tuning (must not fire)",
+           steps({}, run4, False, "more passes"), "", should_fire=False)
+
     def detail(kw, cores, step, baseline, want):
         r = dict(good); r.update(kw)
 
@@ -2815,45 +2863,78 @@ def cmd_suite():
     run_id = time.strftime("%m%d%H%M")
     total_cases = sum(len(order) for _, order in plan)
     done_cases, t_suite = 0, time.time()
+
+    def run_one(cores, pass_id):
+        """One case, logged and recorded. Returns a (reason, message) pair
+        when a check about the rig says to stop the suite, else None."""
+        nonlocal shape_ref, done_cases
+        found = None
+        log(f"---- case {cores} cores, pass {pass_id} ----")
+        per = (time.time() - t_suite) / done_cases if done_cases else None
+        log(L.progress(f"suite: case {done_cases + 1} of {total_cases} "
+                       f"({cores} cores, pass {pass_id})",
+                       pct=min(done_cases / total_cases, 0.99),
+                       eta_s=per * max(total_cases - done_cases, 1) if per else None))
+        try:
+            def once(cores=cores, pass_id=pass_id):
+                return L.run_case(cores, pass_id, run_id, shape_ref, cores == c.baseline, man)
+
+            def again(e, attempt):
+                log(f"  {cores}c {pass_id} failed on its own data, retrying once "
+                    f"(section 6): {e.refusal.msg}")
+                out.setdefault("retries", []).append(
+                    {"case": cores, "pass": pass_id, "message": e.refusal.msg})
+
+            rec, shape_ref = L.run_case_retrying(once, on_retry=again)
+            out["runs"].append(rec)
+            log(f"  {cores}c {pass_id}: {rec['recordsPerSec']:,.0f} rec/s  tm {rec['tmCores']:.2f}/{cores} "
+                f"({rec['tmCapFrac']:.1%})  kafka {rec['kafkaCores']:.2f}/{c.kafka_cap:g}  "
+                f"srcIdle {rec['sourceIdle']:.1%}  srcBP {rec['sourceBackpressured']:.1%}  "
+                f"headroom {rec['headroomS']:.0f}s  vantage {rec['vantageDisagreement']:.2%}")
+        except CaseRefused as e:
+            out["runs"].append(e.rec)
+            kind = "CEILING" if e.refusal.scope == "ceiling" else "DROPPED"
+            label = "CEILING" if kind == "CEILING" else "THROWN OUT"
+            out.setdefault("ceilings" if kind == "CEILING" else "refusals", []).append(
+                {"case": cores, "pass": pass_id, "scope": e.refusal.scope, "message": e.refusal.msg})
+            log(f"  {label}: {e.refusal.msg}")
+            if e.refusal.scope == "rig":
+                found = ("a check about the rig stopped it", e.refusal.msg)
+        done_cases += 1
+        save()
+        return found
+
     for pass_id, order in plan:
         for cores in order:
-            log(f"---- case {cores} cores, pass {pass_id} ----")
-            per = (time.time() - t_suite) / done_cases if done_cases else None
-            log(L.progress(f"suite: case {done_cases + 1} of {total_cases} "
-                           f"({cores} cores, pass {pass_id})",
-                           pct=done_cases / total_cases,
-                           eta_s=per * (total_cases - done_cases) if per else None))
-            try:
-                def once(cores=cores, pass_id=pass_id):
-                    return L.run_case(cores, pass_id, run_id, shape_ref, cores == c.baseline, man)
-
-                def again(e, attempt):
-                    log(f"  {cores}c {pass_id} failed on its own data, retrying once "
-                        f"(section 6): {e.refusal.msg}")
-                    out.setdefault("retries", []).append(
-                        {"case": cores, "pass": pass_id, "message": e.refusal.msg})
-
-                rec, shape_ref = L.run_case_retrying(once, on_retry=again)
-                out["runs"].append(rec)
-                log(f"  {cores}c {pass_id}: {rec['recordsPerSec']:,.0f} rec/s  tm {rec['tmCores']:.2f}/{cores} "
-                    f"({rec['tmCapFrac']:.1%})  kafka {rec['kafkaCores']:.2f}/{c.kafka_cap:g}  "
-                    f"srcIdle {rec['sourceIdle']:.1%}  srcBP {rec['sourceBackpressured']:.1%}  "
-                    f"headroom {rec['headroomS']:.0f}s  vantage {rec['vantageDisagreement']:.2%}")
-            except CaseRefused as e:
-                out["runs"].append(e.rec)
-                kind = "CEILING" if e.refusal.scope == "ceiling" else "DROPPED"
-                label = "CEILING" if kind == "CEILING" else "THROWN OUT"
-                out.setdefault("ceilings" if kind == "CEILING" else "refusals", []).append(
-                    {"case": cores, "pass": pass_id, "scope": e.refusal.scope, "message": e.refusal.msg})
-                log(f"  {label}: {e.refusal.msg}")
-                if e.refusal.scope == "rig":
-                    stop = ("a check about the rig stopped it", e.refusal.msg)
-            done_cases += 1
-            save()
+            stop = run_one(cores, pass_id)
             if stop:
                 break
         if stop:
             break
+    # A step whose interval spans the target is not settled by the planned
+    # passes. Run its two cases alternately -- each case after the first adds a
+    # pair of neighbours in time -- until it settles or the budget is spent.
+    # Reference run 4 (2026-09-28) read 2->4 at 1.65-1.82x from three pairs.
+    extra, announced = 0, None
+    while not stop and not L.QUICK and extra < T["settleExtraCases"]:
+        nxt = L.settle_next(out["runs"], build_table(out["runs"], quick=False)["stepRatios"])
+        if not nxt:
+            break
+        cores, step = nxt
+        # Said again whenever the open step changes: reference run 5 settled
+        # 1->2 with one case and went on to 2->4 under a line naming 1 and 2.
+        if step["step"] != announced:
+            left = T["settleExtraCases"] - extra
+            log(f"  {step['step']} is not settled: {step['ratioLowCI']:.2f}x to {step['ratioHighCI']:.2f}x "
+                f"spans the target. Running up to {left} more case(s) of "
+                f"{step['from']} and {step['to']} cores to decide it.")
+            announced = step["step"]
+        total_cases += 1
+        extra += 1
+        stop = run_one(cores, f"settle-{extra}")
+    if extra:
+        out["settleCases"] = extra
+        save()
     if stop:
         out["stoppedEarly"] = {"reason": stop[0], "message": stop[1],
                                "note": "stopping here: the remaining cases would fail the same way"}
@@ -3016,9 +3097,34 @@ def cmd_report():
         print("  Fix what threw that case out, or take the case out of `cases` and claim only the steps")
         print("  you can measure. Either way it is a new claim, and it is said next to the numbers.\n")
         return 1
+    # A step whose interval spans the target is not a shortfall: the passes
+    # cannot tell met from missed. Said as such, and never sent to tuning.
+    unsettled = [r for r in short if L.step_verdict(r) == "not settled"]
+    short = [r for r in short if L.step_verdict(r) != "not settled"]
+    if unsettled and not short:
+        out["reportVerdict"] = "not-settled"
+        out["unsettledSteps"] = [{"step": r["step"], "ratio": r["ratio"], "low": r["ratioLowCI"],
+                                  "high": r["ratioHighCI"], "need": r["idealRatio"] * T["scalingFloor"],
+                                  "pairs": len(r.get("adjacentPairs") or [])}
+                                 for r in unsettled]
+        save_json("suite.json", out)
+        print("\nNOT SETTLED\n")
+        for u in out["unsettledSteps"]:
+            print(f"  {u['step'].replace('->', '→')} cores reads {u['ratio']:.2f}x. Its {u['pairs']} pairs of "
+                  f"passes put it between {u['low']:.2f}x and {u['high']:.2f}x, which spans the "
+                  f"{u['need']:.2f}x target.")
+        ran = out.get("settleCases") or 0
+        print("  That is not a shortfall: the passes cannot tell met from missed."
+              + (f" The suite ran {ran} extra case(s) to settle it and it is still open." if ran else ""))
+        print("  Run the suite again, or raise `passes` in pipeline.json, before changing anything")
+        print("  in the pipeline.\n")
+        return 1
     if short:
         t = out["table"]
         need = 2 * T["scalingFloor"]
+        for r in unsettled:
+            print(f"  ({r['step']} cores is not settled: {r['ratioLowCI']:.2f}x to {r['ratioHighCI']:.2f}x "
+                  f"spans the target.)")
 
         def why(r, pad):
             """What changed across one step, for whoever has to chase it."""
@@ -3259,6 +3365,12 @@ def cmd_all(steps=None, results=None):
                     why = None
             verdict = ({"no-result": "STOPPED at report: no scaling result — too many cases were "
                                      "thrown out to compare one core count with another",
+                        "not-settled": "STOPPED at report: not settled — "
+                                       + "; ".join(f"{u['step'].replace('->', '→')} reads {u['ratio']:.2f}x, "
+                                                   f"between {u['low']:.2f}x and {u['high']:.2f}x, which spans "
+                                                   f"the {u['need']:.2f}x target"
+                                                   for u in ((load_json("suite.json") or {}).get("unsettledSteps") or []))
+                                       + ". More passes would decide it",
                         "claim-not-met": "STOPPED at report: the table is good, the pipeline did "
                                          "not meet the target",
                         "step-missing": "STOPPED at report: a step the claim needs was not measured"

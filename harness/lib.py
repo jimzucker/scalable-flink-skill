@@ -125,6 +125,10 @@ T = {
     # Mac's own cores return 1.48-1.82x on memory-heavy work over the same steps,
     # and replayed against the 22 recorded steps it passes 7 where 1.90 passed 3.
     "scalingFloor": 0.90,
+    # Extra cases the suite may run to settle a step whose interval spans the
+    # target: each one adds a pair of neighbours in time. Six is about 25
+    # minutes on the reference pipeline and takes three pairs to nine.
+    "settleExtraCases": 6,
     # Memory is not capped by default: this repository's own demo caps none and
     # reads 1.99x, while every memory cap we chose starved something. What the
     # claim needs is that CPU is the constraint, so instead of fixing memory's
@@ -2731,6 +2735,37 @@ def reads_low(step):
     return (step.get("ratioLowCI") or 0) > step.get("idealRatio", 2)
 
 
+def step_verdict(step):
+    """Pure. "met" when the whole interval clears the target, "missed" when
+    the whole interval is under it, "not settled" when it spans the target,
+    None when the step was not reported. Three reference runs of one build on
+    2026-09-26 and 09-28 printed "missed" for a step whose interval spanned the
+    target: 1.78x with a range of 1.65-1.82x is not a shortfall, it is too few
+    pairs to say."""
+    if not step or not step.get("reportable") or step.get("meetsClaim") is None:
+        return None
+    if step.get("meetsClaim"):
+        return "met"
+    need = step.get("idealRatio", 2) * T["scalingFloor"]
+    hi = step.get("ratioHighCI")
+    if step.get("ratioLowCI") and hi and hi >= need:
+        return "not settled"
+    return "missed"
+
+
+def settle_next(runs, steps):
+    """Pure. The next case to run to settle a step whose interval spans the
+    target: the other end of the first such step from the case that ran last,
+    so each new case makes a pair with its neighbour in time. Returns
+    (cores, step) or None when every step is settled."""
+    open_steps = [r for r in steps if step_verdict(r) == "not settled"]
+    if not open_steps:
+        return None
+    step = open_steps[0]
+    last = next((int(x["cores"]) for x in reversed(runs) if x.get("status", "OK") == "OK"), None)
+    return (step["to"] if last == step["from"] else step["from"]), step
+
+
 def met_steps(steps):
     """Steps to call met: reportable, meeting the claim, and not reading low."""
     return [r["step"] for r in steps
@@ -2860,6 +2895,8 @@ def corrective_action(rec, step=None, is_baseline=False):
             return "no usable step"
         if reads_low(step):
             return "baseline reads low"
+        if step_verdict(step) == "not settled":
+            return "more passes"
         if not step.get("meetsClaim"):
             # Run 44 was told "investigate" twice while every column beside it
             # said the pipeline was the constraint, the broker was idle and the
@@ -2890,6 +2927,11 @@ def action_detail(rec, cores, step=None, is_baseline=False):
         if reads_low(step):
             return (f"{n_cores(cores)}: doubling gave {ratio:.2f}x, more than the {ideal:.2f}x a doubling "
                     f"can give, so the smaller case reads too low.")
+        if step_verdict(step) == "not settled":
+            return (f"{n_cores(cores)}: doubling gave {ratio:.2f}x. The passes put it anywhere from "
+                    f"{step['ratioLowCI']:.2f}x to {step['ratioHighCI']:.2f}x, which spans the "
+                    f"{need:.2f}x target, so this step is not settled either way; more passes of "
+                    f"these two cases would decide it.")
         if not step.get("meetsClaim"):
             lo = step.get("ratioLowCI")
             # 1.93x is not short of 1.90x. What is short is the lower bound the
@@ -3049,6 +3091,9 @@ def scorecard(out):
             verdict = f"above {r['idealRatio']:.2f}x, so the smaller case reads low"
         elif r.get("meetsClaim"):
             verdict = "met"
+        elif step_verdict(r) == "not settled":
+            verdict = (f"not settled — the passes put it between {lo:.2f}x and "
+                       f"{r['ratioHighCI']:.2f}x, which spans the target; more passes would decide it")
         elif lo and r["ratio"] >= need:
             # the number shown clears the target and the verdict says missed,
             # which reads as a broken tool unless it says what was judged
@@ -3881,6 +3926,7 @@ def build_table(runs, cases_order=None, quick=False):
             r["claimEfficiencyLow"] = round(eff_lo, 4)
             if not r["meetsClaim"]:
                 r["claimShortfall"] = round(1 - eff_lo, 4)
+            r["claimVerdict"] = step_verdict(r)
     return {"cases": cases, "stepRatios": ratios, "orderEffect": order, "sentinel": sentinel,
             "ceilings": ceilings,
             "quickLook": quick, "publishable": not quick}

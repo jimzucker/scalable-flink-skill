@@ -531,6 +531,8 @@ def check_dashboard_rows(fail):
                   "checkpoint duration", "job restarts", "failed checkpoints"):
         if f"| {panel}" not in sec:
             fail(f"SKILL.md \u00a77 no longer lists the {panel} panel")
+    if "**not settled** when it spans 1.80" not in skill:
+        fail("SKILL.md \u00a76 no longer gives the claim its three outcomes: met, missed, not settled")
     if "The dashboard opens on the suite" not in skill:
         fail("SKILL.md \u00a77 no longer says the harness sets the dashboard's range to the suite")
     if "The harness tests the dashboard as it tests the job" not in skill:

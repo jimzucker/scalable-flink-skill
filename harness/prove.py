@@ -2915,16 +2915,20 @@ def cmd_suite():
     # passes. Run its two cases alternately -- each case after the first adds a
     # pair of neighbours in time -- until it settles or the budget is spent.
     # Reference run 4 (2026-09-28) read 2->4 at 1.65-1.82x from three pairs.
-    extra = 0
+    extra, announced = 0, None
     while not stop and not L.QUICK and extra < T["settleExtraCases"]:
         nxt = L.settle_next(out["runs"], build_table(out["runs"], quick=False)["stepRatios"])
         if not nxt:
             break
         cores, step = nxt
-        if extra == 0:
+        # Said again whenever the open step changes: reference run 5 settled
+        # 1->2 with one case and went on to 2->4 under a line naming 1 and 2.
+        if step["step"] != announced:
+            left = T["settleExtraCases"] - extra
             log(f"  {step['step']} is not settled: {step['ratioLowCI']:.2f}x to {step['ratioHighCI']:.2f}x "
-                f"spans the target. Running up to {T['settleExtraCases']} more cases of "
+                f"spans the target. Running up to {left} more case(s) of "
                 f"{step['from']} and {step['to']} cores to decide it.")
+            announced = step["step"]
         total_cases += 1
         extra += 1
         stop = run_one(cores, f"settle-{extra}")

@@ -358,7 +358,7 @@ bad window voids one case — so anything checkable now is checked now.
 
 Anything that can void the whole table is tested before the table exists.
 
-## 4. Prove nothing was lost, separately from proving it is fast
+## 4. Completeness: proving no record was lost
 
 A pipeline that drops one record in ten thousand looks fine in every throughput
 column. Completeness is a separate run on a test data set small enough to **process
@@ -889,6 +889,11 @@ Two more rules that cost a reader the same way:
   stopped a run that would have fitted six times over.
 - **Say what happened, give the numbers, say what to do** — short sentences,
   no stacked clauses.
+- **Titles name what is measured.** A heading, a row, a panel or a column
+  says what it holds and in what unit; a panel may add what to look for after
+  a dash (*"Job restarts — 0"*). No questions and no slogans: *"Keeping up and
+  staying up"* and *"is the broker in the way?"* had to be renamed *"Lag and
+  job health"* and *"Kafka"*.
 
 Internal names in the code are not covered: `class Refusal` is fine, because
 nobody reads it. `harness/doccheck.py` enforces the table above against every
@@ -1074,7 +1079,7 @@ makes the pipeline *slower* and makes the measurement *valid*: a case that is
 waiting on its sink is not measuring cores at all, so its number answers no
 question. A slower table that means something beats a faster one that does not.
 
-## 7. The dashboard explains; the harness measures
+## 7. The dashboard
 
 **Add it through `extraServices` in `pipeline.json`** — a map of service name to
 a compose service body, spliced into the stack the harness generates. Two rules,
@@ -1085,7 +1090,7 @@ test changes the number being measured. Whatever you add is recorded in the
 results header, so a reader knows what else was on the machine. That is the only
 sanctioned way — the harness is still not to be forked.
 
-**Five of the seven panels need engine metrics, and those need a reporter**: set one through `flinkProperties` in `pipeline.json`, which reaches the job manager and every task manager. On `flink:1.20.x` that is all you need: the reporters ship **already installed** as plugins in `/opt/flink/plugins/metrics-*`, so the factory class resolves with no further help. **Do not set `ENABLE_BUILT_IN_PLUGINS` on these images.** That variable tells the entrypoint to link a jar out of `/opt/flink/opt`, which on `flink:1.20.1-scala_2.12-java17` contains no reporter at all; the entrypoint prints `Plugin … does not exist. Exiting.` and the container dies before the job manager starts. Verified by listing both directories in the image. This paragraph previously said the opposite and gave the variable as the fix — clean-room run 43 followed it verbatim and lost its first `prove.py up` to it, which is worse than the forty minutes run 42 lost having no guidance at all. `flinkEnv` remains for images that do keep reporters in `/opt/flink/opt` (older tags and the slim variants) and for any other environment the engine needs. Clean-room run 32 had no such hook, could not fork the harness, and spent about fifty minutes rebuilding the numbers from outside the engine — Kafka offsets, a tail of each sink, the REST API and the docker socket. The settings the measurement depends on stop the run rather than being silently overridden.
+**Most of the panels below need engine metrics, and those need a reporter**: set one through `flinkProperties` in `pipeline.json`, which reaches the job manager and every task manager. On `flink:1.20.x` that is all you need: the reporters ship **already installed** as plugins in `/opt/flink/plugins/metrics-*`, so the factory class resolves with no further help. **Do not set `ENABLE_BUILT_IN_PLUGINS` on these images.** That variable tells the entrypoint to link a jar out of `/opt/flink/opt`, which on `flink:1.20.1-scala_2.12-java17` contains no reporter at all; the entrypoint prints `Plugin … does not exist. Exiting.` and the container dies before the job manager starts. Verified by listing both directories in the image. This paragraph previously said the opposite and gave the variable as the fix — clean-room run 43 followed it verbatim and lost its first `prove.py up` to it, which is worse than the forty minutes run 42 lost having no guidance at all. `flinkEnv` remains for images that do keep reporters in `/opt/flink/opt` (older tags and the slim variants) and for any other environment the engine needs. Clean-room run 32 had no such hook, could not fork the harness, and spent about fifty minutes rebuilding the numbers from outside the engine — Kafka offsets, a tail of each sink, the REST API and the docker socket. The settings the measurement depends on stop the run rather than being silently overridden.
 
 **The CPU-per-component panel needs the broker, and no reporter can give it to
 you.** `flinkProperties` reaches the job manager and the workers; the panel's
@@ -1119,18 +1124,57 @@ not have to work the span out: the report prints it as `suite span`, as a human
 interval and as the `from=`/`to=` epoch pair a dashboard URL takes, so a range
 that does not cover the suite is visible beside the numbers it failed to show.
 
-| panel | the question it answers |
-|---|---|
-| rate per stage | is the fan-out real? lines a constant factor apart |
-| distinct keys per aggregation | is the predicted cardinality the one you got? |
-| the two paths, overlaid | do two independent aggregations agree? |
-| busiest vs most back-pressured task | at the limit, falling behind, or **starved**? |
-| CPU per component | which one is in the way — including the idle one |
-| backlog remaining | is this a drain, and did it run out? |
-| checkpoint duration | what does the guarantee cost? |
+Lay the panels out in four rows, in this order: the pipeline's output, then
+lag and job health, then Kafka, then Flink. The first two rows are what
+someone checks on a pipeline left running; the last two are where they look
+when one of those is wrong.
 
-**The panel list is for a pipeline with fan-out; yours may not have one.**
-Two of those seven ask a fan-out question — *rate per stage* and *the two
+**A panel title is what it measures, then what to look for** — *"Checkpoint
+size — levels off"*, *"Job restarts — 0"*. No questions and no clever
+phrases. Why it matters goes in the panel's description, the text shown when
+the reader hovers over it.
+
+| row | panel title: what it measures — what to look for | why it matters (its description) | when |
+|---|---|---|---|
+| 1. Pipeline output | input and output rate per stage — lines a constant factor apart | a fan-out that is not constant is not the one the interview predicted | always |
+| | distinct keys per aggregation — equal to the interview's answer | a key count that differs means keys you did not intend, or ones that never arrived | always |
+| | the two paths' totals — lines on top of each other | two independent aggregations that disagree have lost or duplicated a record | always |
+| | end-to-end latency — flat, under the target | this is what a consumer waits for | when the claim is about latency |
+| 2. Lag and job health | records waiting in Kafka — falls steadily in each case | flat at zero means the case ran out of input and measured nothing | always |
+| | event-time lag, seconds — flat | how stale the outputs are; in a drain it only reads the backlog's age | a pipeline left running |
+| | job restarts — 0 | readings taken across a failure are not a measurement | always |
+| | failed checkpoints — 0 | while they fail, a crash replays from further back | always |
+| 3. Kafka | CPU by container, cores — the pipeline at its cap, the rest low | shows which component is the constraint, including an idle one | always |
+| | broker memory and limit — page cache fills to the limit, which is normal | the harness's own broker-memory check says whether reads went to disk | always |
+| 4. Flink | task busy, back-pressured and idle time — busy near 100% | busy is at the limit, back-pressured is falling behind, idle with no back-pressure is **starved** | always |
+| | garbage collection, % of cores — under 5.5% | above 5.5% the harness calls the case a ceiling | always |
+| | checkpoint duration — flat; checkpoint size — levels off | the cost of the guarantee, and state growing without limit | always |
+| | network bytes and buffer use — below saturation | the network between workers becomes a constraint | when workers multiply (§1, question 8) |
+| | late records dropped — 0 | a window is throwing data away as too late | windowed pipelines, with a caveat below |
+| | free slots; threads — not climbing | spare slots let a job restart (a measured case has none, on purpose); climbing threads are a leak | a pipeline left running |
+
+CPU by container opens the Kafka row because it shows the broker and the
+pipeline side by side, which is how you see which of the two is the
+constraint before reading the detail on either. Broker memory comes from the
+same exporter, which serves each container's memory and its limit beside its
+CPU.
+
+**Flink counts late records only in its own window operators**
+(`numLateRecordsDropped`). A window written by hand — a process function that
+buckets on a timestamp and drops what arrives after its bucket closed — has no
+such counter, and the panel reads "No data". Measured on the reference
+pipeline, which does exactly that. Count the drops in the job and publish the
+counter, or leave the panel out and say why.
+
+**Two broker panels are not in the list because the stack cannot feed them
+yet:** the broker's write load (bytes in, produce request time) and its disk
+in use. §5's broker "ran out of write throughput, not CPU", and only those
+two would show it, but both need the broker's own metrics and the harness
+has no way to add them to the broker it starts. Do not fork it to get them;
+say in the report that they are missing.
+
+**The first row is for a pipeline with fan-out; yours may not have one.**
+Two of its panels ask a fan-out question — *rate per stage* and *the two
 paths overlaid* — and a pipeline with one aggregation and a throttled output
 can answer neither. Replace them with the same question in its own shape:
 records read per second against rows published per second on a log scale, and
@@ -1148,7 +1192,7 @@ a signed sum, because both are unstable for reasons unrelated to the pipeline.
 **A panel you cannot explain is a liability** — either it says what the number
 means or it goes.
 
-## 8. An explanation is a measurement, not a story
+## 8. Explaining a result
 
 A number short of expectation invites a reason, and a plausible reason is cheap
 to produce and expensive to be wrong about. A mechanism is a claim about cause,

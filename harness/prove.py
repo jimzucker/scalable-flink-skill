@@ -794,6 +794,17 @@ def cmd_selftest(live=True, topic=None):
         assert L.empty_panels([("d", "full", 40, None)]) == []
     expect("dashboard: panels with no points or an error are named (must not fire)", empties, "",
            should_fire=False)
+
+    def one_query_empty():
+        qs = [{"refId": "A", "expr": "a", "legendFormat": "orders read"},
+              {"refId": "B", "expr": "b", "legendFormat": "rows written"}]
+        frame = lambda n: {"frames": [{"data": {"values": [list(range(n)), [1.0] * n]}}]}
+        n, err = L.points_by_query({"results": {"A": {"frames": []}, "B": frame(40)}}, qs)
+        assert n == 0 and err and "orders read" in err, (n, err)
+        n, err = L.points_by_query({"results": {"A": frame(30), "B": frame(40)}}, qs)
+        assert n == 30 and err is None, (n, err)
+    expect("dashboard: a panel with one empty query is named, not passed on the other's points "
+           "(must not fire)", one_query_empty, "", should_fire=False)
     # 2026-09-28: the reference dashboard opened on "now-90m". It covered the
     # suite for 90 minutes and then showed "No data" on every Flink panel.
     T0, T1 = 1_790_605_140, 1_790_607_300
@@ -1454,6 +1465,24 @@ def cmd_selftest(live=True, topic=None):
     expect("the measured fan-out is not the declared one",
            design_catches_a_constraint, "outputsPerInput = 5, read back 8")
 
+    # Clean-room run 52: 0.26% of input repeated on purpose, as section 4 asks,
+    # read 4.987 against a declared 5 and was stopped although nothing was lost.
+    def fanout(got, should_pass):
+        def go():
+            rows, bad = L.design_diff({"operators": ["parse-order"]}, RUN36_PLAN, {},
+                                      {"outputsPerInput": (5.0, got)})
+            if should_pass and bad:
+                raise bad
+            if not should_pass and not bad:
+                raise Exception(f"a fan-out of {got} against 5 passed")
+        return go
+    expect("fan-out: 4.987 against 5, the repeats section 4 asks for, passes (must not fire)",
+           fanout(4.987, True), "", should_fire=False)
+    expect("fan-out: 4.70 against 5, more than 5% under, still stops (must not fire)",
+           fanout(4.70, False), "", should_fire=False)
+    expect("fan-out: 5.2 against 5, over the declared fan-out, still stops (must not fire)",
+           fanout(5.2, False), "", should_fire=False)
+
     def design_tolerates_an_input_the_fill_has_not_created():
         # The diff runs inside completeness, which is BEFORE the fill, so on a
         # cold stack the suite's own input topic does not exist yet. Both
@@ -1602,6 +1631,12 @@ def cmd_selftest(live=True, topic=None):
     expect("outputsPerInput with no output to count it in",
            fanout_without_anything_to_count, "needs at least one topic in topics.out")
 
+    def read_progress():
+        try:
+            return open(os.path.join(c.results, "PROGRESS.txt")).read()
+        except OSError:
+            return None
+
     def chain():
         # in its own directory: the first version wrote its fake chain into the
         # live results/ (phases.log, all.json and a DONE saying "STOPPED at c")
@@ -1613,12 +1648,15 @@ def cmd_selftest(live=True, topic=None):
         try:
             with open(os.path.join(tmp, "phases.log"), "w") as f:
                 f.write("2026-01-01 00:00:00 phase=b end rc=0 1s\n")   # an earlier chain's line
+            progress_before = read_progress()
             rc = cmd_all(steps=fake, results=tmp)
             done = open(os.path.join(tmp, "DONE")).read().strip()
             phase_lines = open(os.path.join(tmp, "phases.log")).read()
             allj = json.load(open(os.path.join(tmp, "all.json")))
             stray = [f for f in ("DONE", "all.json") if os.path.exists(os.path.join(c.results, f))
                      and os.path.getmtime(os.path.join(c.results, f)) > t_self]
+            if read_progress() != progress_before:
+                stray.append("PROGRESS.txt")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
         if rc != 1 or ran != ["a", "b", "c"] or not done.startswith("STOPPED at c") or allj["verdict"] != "STOPPED at c":
@@ -3105,19 +3143,25 @@ def cmd_report():
         out["reportVerdict"] = "not-settled"
         out["unsettledSteps"] = [{"step": r["step"], "ratio": r["ratio"], "low": r["ratioLowCI"],
                                   "high": r["ratioHighCI"], "need": r["idealRatio"] * T["scalingFloor"],
-                                  "pairs": len(r.get("adjacentPairs") or [])}
+                                  "pairs": len(r.get("adjacentPairs") or []),
+                                  "range": L.settle_range(r)}
                                  for r in unsettled]
         save_json("suite.json", out)
         print("\nNOT SETTLED\n")
         for u in out["unsettledSteps"]:
-            print(f"  {u['step'].replace('->', '→')} cores reads {u['ratio']:.2f}x. Its {u['pairs']} pairs of "
-                  f"passes put it between {u['low']:.2f}x and {u['high']:.2f}x, which spans the "
-                  f"{u['need']:.2f}x target.")
+            for line in textwrap.wrap(f"{u['step'].replace('->', '→')} cores reads {u['ratio']:.2f}x. "
+                                      f"{u['range']}, which spans the {u['need']:.2f}x target.", 86):
+                print(f"  {line}")
         ran = out.get("settleCases") or 0
-        print("  That is not a shortfall: the passes cannot tell met from missed."
-              + (f" The suite ran {ran} extra case(s) to settle it and it is still open." if ran else ""))
-        print("  Run the suite again, or raise `passes` in pipeline.json, before changing anything")
-        print("  in the pipeline.\n")
+        for line in textwrap.wrap("That is not a shortfall: the passes cannot tell met from missed."
+                                  + (f" The suite ran {ran} extra case(s) to settle it and it is still open."
+                                     if ran else ""), 86):
+            print(f"  {line}")
+        print()
+        print("  What to do: change nothing in the pipeline on this step. Report it as not settled,")
+        print("  with the range above; that is a result. If the claim needs it decided, run")
+        print("  `prove.py suite` again — a new suite, with its own passes and settling cases —")
+        print("  or raise `passes` in pipeline.json first. With nobody to ask, stop here and report.\n")
         return 1
     if short:
         t = out["table"]
@@ -3366,11 +3410,11 @@ def cmd_all(steps=None, results=None):
             verdict = ({"no-result": "STOPPED at report: no scaling result — too many cases were "
                                      "thrown out to compare one core count with another",
                         "not-settled": "STOPPED at report: not settled — "
-                                       + "; ".join(f"{u['step'].replace('->', '→')} reads {u['ratio']:.2f}x, "
-                                                   f"between {u['low']:.2f}x and {u['high']:.2f}x, which spans "
-                                                   f"the {u['need']:.2f}x target"
+                                       + "; ".join(f"{u['step'].replace('->', '→')} reads {u['ratio']:.2f}x, and "
+                                                   f"the range its {u['pairs']} pairs support, {u['low']:.2f}x "
+                                                   f"to {u['high']:.2f}x, spans the {u['need']:.2f}x target"
                                                    for u in ((load_json("suite.json") or {}).get("unsettledSteps") or []))
-                                       + ". More passes would decide it",
+                                       + ". Report it as not settled and change nothing in the pipeline",
                         "claim-not-met": "STOPPED at report: the table is good, the pipeline did "
                                          "not meet the target",
                         "step-missing": "STOPPED at report: a step the claim needs was not measured"
@@ -3386,10 +3430,14 @@ def cmd_all(steps=None, results=None):
     mark(f"phase=all end {verdict} {out['seconds']/60:.1f} min")
     # PROGRESS.txt used to stay at "86% ... writing the report" after DONE
     # appeared (runs 48 and 49).
-    try:
-        L.progress(f"finished: {verdict} {out['seconds']/60:.1f} min", pct=1.0)
-    except Exception:
-        pass
+    # Only for the live chain: the guard self-test's fake chain wrote "finished:
+    # STOPPED at c" here in the middle of clean-room run 52's real tiny proof,
+    # an hour before the suite, for anyone relaying the run from this file.
+    if results == c.results:
+        try:
+            L.progress(f"finished: {verdict} {out['seconds']/60:.1f} min", pct=1.0)
+        except Exception:
+            pass
     with open(done, "w") as f:
         f.write(f"{verdict} {out['seconds']/60:.1f} min\n")
     return 0 if verdict == "PASS" else 1

@@ -1166,6 +1166,27 @@ constraint before reading the detail on either. Broker memory comes from the
 same exporter, which serves each container's memory and its limit beside its
 CPU.
 
+**Metric names that returned data on `flink:1.20.1`** with the Prometheus
+reporter and the shipped exporter, read through Grafana on 2026-09-28. Match
+operators by the names your job gives them (`operator_name=~".*parse.*"`):
+
+| panel | Prometheus series |
+|---|---|
+| rate per stage | `flink_taskmanager_job_task_operator_numRecordsOutPerSecond` (and `…numRecordsInPerSecond`) |
+| records waiting in Kafka | `flink_taskmanager_job_task_operator_pendingRecords` (the Kafka source's) |
+| event-time lag | `flink_taskmanager_job_task_operator_currentEmitEventTimeLag`, in ms |
+| job restarts; failed checkpoints | `flink_jobmanager_job_numRestarts`; `flink_jobmanager_job_numberOfFailedCheckpoints` |
+| CPU and memory by container | `docker_container_cpu_seconds_total` (a counter: take `rate`), `docker_container_memory_bytes`, `docker_container_memory_limit_bytes` |
+| task busy, back-pressured, idle | `flink_taskmanager_job_task_busyTimeMsPerSecond`, `…backPressuredTimeMsPerSecond`, `…idleTimeMsPerSecond` |
+| garbage collection | `flink_taskmanager_Status_JVM_GarbageCollector_G1_Young_Generation_TimeMsPerSecond` and `…G1_Old_Generation…` (clean-room run 52 used `…GarbageCollector_All_Time`) |
+| checkpoint duration; size | `flink_jobmanager_job_lastCheckpointDuration`; `flink_jobmanager_job_lastCheckpointSize` |
+| free slots; threads | `flink_jobmanager_taskSlotsAvailable`; `flink_taskmanager_Status_JVM_Threads_Count` |
+
+**Two panels need numbers only the job has.** Flink exports no count of
+distinct keys and no per-path totals, so *distinct keys per aggregation* and
+*the two paths' totals* need gauges or counters the job registers itself
+(clean-room run 52 built both that way). Budget for them when you write the job.
+
 **Flink counts late records only in its own window operators**
 (`numLateRecordsDropped`). A window written by hand — a process function that
 buckets on a timestamp and drops what arrives after its bucket closed — has no

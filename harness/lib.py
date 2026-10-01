@@ -1578,17 +1578,18 @@ def mem_for(spec, cores, base="0m"):
     return f"{int(_mib(base) + _mib(spec) * cores)}m"
 
 
-def start_tm(cores, slots=None, reporter_s=None):
+def tm_memory_for(cores):
+    """The worker's (process size, container limit) at a case, as start_tm
+    applies them; (None, None) when nothing is capped. One function so the
+    memory budget row reports what the container is actually given (clean-room
+    run 52 found the row budgeting the process size, not the 1.25x limit)."""
     c = cfg()
-    if c.plat:
-        return P.set_and_read_back(c.plat, cores)
-    slots = slots if slots is not None else cores
     over = c.per_case.get(cores, {})
     if not (over.get("tmMemory") or c.tm_mem_per_core or c.raw["caps"].get("tmMemory")):
         # the demo's behaviour: no process size, no container limit, so memory
         # can never be the thing that runs out first
-        tm_mem = tm_mem_limit = None
-    elif over.get("tmMemory"):
+        return None, None
+    if over.get("tmMemory"):
         tm_mem = over["tmMemory"]
     else:
         tm_mem = mem_for(c.tm_mem_per_core, cores, c.tm_mem_base) if c.tm_mem_per_core else c.tm_mem
@@ -1601,6 +1602,15 @@ def start_tm(cores, slots=None, reporter_s=None):
         tm_mem_limit = f"{int(int(m.group(1)) * 1.25)}{m.group(2)}"   # headroom over the JVM's own figure
     else:
         tm_mem_limit = c.tm_mem_limit
+    return tm_mem, tm_mem_limit
+
+
+def start_tm(cores, slots=None, reporter_s=None):
+    c = cfg()
+    if c.plat:
+        return P.set_and_read_back(c.plat, cores)
+    slots = slots if slots is not None else cores
+    tm_mem, tm_mem_limit = tm_memory_for(cores)
     reporter_s = reporter_s or T["reporterS"]
     stop_tm()
     props = (f"jobmanager.rpc.address: {c.jm}\n"

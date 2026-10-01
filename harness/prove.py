@@ -795,6 +795,19 @@ def cmd_selftest(live=True, topic=None):
     expect("dashboard: panels with no points or an error are named (must not fire)", empties, "",
            should_fire=False)
 
+    def worker_memory():
+        # Clean-room run 52: the memory row budgeted the worker's process size,
+        # while start_tm gives its container 1.25x that. Both now read one
+        # function; with a per-core figure the limit is 1.25x the process.
+        if not c.tm_mem_per_core or c.tm_mem_limit_per_core:
+            return
+        for n in c.cases:
+            mem, limit = L.tm_memory_for(n)
+            if abs(L._mib(limit) - int(L._mib(mem) * 1.25)) > 1:
+                raise Exception(f"{n} cores: process {mem}, container limit {limit}")
+    expect("memory: the worker's container limit is 1.25x its process size, as started (must not fire)",
+           worker_memory, "", should_fire=False)
+
     def one_query_empty():
         qs = [{"refId": "A", "expr": "a", "legendFormat": "orders read"},
               {"refId": "B", "expr": "b", "legendFormat": "rows written"}]
@@ -1990,7 +2003,10 @@ def cmd_preflight():
         also = [t for t in c.topics_also if L.topic_exists(t)]
         missing = [t for t in also if not L.topic_retention_bytes(t)]
         if missing:
-            return f"FAIL: no retention.bytes on {missing}, which nothing ever drains"
+            # Raised, not returned: a returned string is the row's PASS detail,
+            # so this printed PASS with "FAIL" inside it (clean-room run 52,
+            # read from the code; no recorded run hit it).
+            raise Exception(f"no retention.bytes on {missing}, which nothing ever drains")
         checked = list(c.topics_out) + also
         if not checked:
             # Not the same as "there are none". A windowed pipeline declares
@@ -2155,14 +2171,23 @@ def cmd_preflight():
         vm = int(info) if info.isdigit() else 0
         top = max(c.cases)
         capped = L.tm_memory_capped()
-        worker = (L._mib(L.mem_for(c.tm_mem_per_core, top, c.tm_mem_base)) if c.tm_mem_per_core
-                  else L._mib(c.tm_mem)) if capped else 0.0
+        # Container limits, which is what the VM has to hold: the worker's
+        # limit (1.25x its process size by default), the job manager's
+        # mem_limit (2g in the compose file) and every extra service's own.
+        # Clean-room run 52 found this row budgeting process sizes and leaving
+        # the dashboard out (run 45, earlier: 1024m for a 1600m process).
+        _, limit = L.tm_memory_for(top)
+        worker = L._mib(limit) if capped and limit else 0.0
         broker = L._mib(c.kafka_mem)
-        # what the compose file actually gives it: jobmanager.memory.process.size
-        # is 1600m, and clean-room run 45 found this line budgeting 1024m while
-        # the container it describes gets more than that.
-        jm = 1600.0
-        need = worker + broker + jm
+        jm = 2048.0
+        extras, unread = 0.0, []
+        for name, b in (c.raw.get("extraServices") or {}).items():
+            if isinstance(b, dict) and b.get("mem_limit"):
+                try:
+                    extras += L._mib(str(b["mem_limit"]))
+                except Exception:
+                    unread.append(name)
+        need = worker + broker + jm + extras
         # Reported, not enforced. A rule refusing need > VM - 1 GB was added on
         # 2026-09-07 and removed the same day: runs 20 and 21 both passed with a
         # 6,144m broker on a 7,838 MiB VM, which that rule refuses, and run 22
@@ -2176,9 +2201,11 @@ def cmd_preflight():
         # row above reports the worker as uncapped states a figure that was never
         # applied, and the over-commit warning it produces is then arithmetic on
         # a phantom. Clean-room run 30 reported the contradiction.
-        w = (f"memory {worker:.0f}m at {top} cores" if capped
+        w = (f"worker limit {worker:.0f}m at {top} cores" if capped
              else "memory uncapped (engine default)")
-        return (f"{w} + broker {broker:.0f}m + job manager {jm:.0f}m "
+        ex = (f" + other services {extras:.0f}m" if extras else "") + (
+            f" (could not read the memory limit of {', '.join(unread)})" if unread else "")
+        return (f"{w} + broker {broker:.0f}m + job manager {jm:.0f}m{ex} "
                 f"= {need:.0f}m of {vm / 1048576:.0f}m VM{over}" if vm
                 else f"{need:.0f}m requested, VM size unknown")
 
@@ -2902,15 +2929,15 @@ def cmd_suite():
     total_cases = sum(len(order) for _, order in plan)
     done_cases, t_suite = 0, time.time()
 
-    def run_one(cores, pass_id):
+    def run_one(cores, pass_id, label=None):
         """One case, logged and recorded. Returns a (reason, message) pair
         when a check about the rig says to stop the suite, else None."""
         nonlocal shape_ref, done_cases
         found = None
         log(f"---- case {cores} cores, pass {pass_id} ----")
         per = (time.time() - t_suite) / done_cases if done_cases else None
-        log(L.progress(f"suite: case {done_cases + 1} of {total_cases} "
-                       f"({cores} cores, pass {pass_id})",
+        log(L.progress(label or (f"suite: case {done_cases + 1} of {total_cases} "
+                                 f"({cores} cores, pass {pass_id})"),
                        pct=min(done_cases / total_cases, 0.99),
                        eta_s=per * max(total_cases - done_cases, 1) if per else None))
         try:
@@ -2969,7 +2996,11 @@ def cmd_suite():
             announced = step["step"]
         total_cases += 1
         extra += 1
-        stop = run_one(cores, f"settle-{extra}")
+        # "case 13 of 13", then "case 15 of 15", read as a suite that kept
+        # finishing (clean-room run 52); say what these cases are.
+        stop = run_one(cores, f"settle-{extra}",
+                       label=f"suite: settling {step['step']}, extra case {extra} of up to "
+                             f"{T['settleExtraCases']} ({cores} cores)")
     if extra:
         out["settleCases"] = extra
         save()

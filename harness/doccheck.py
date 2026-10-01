@@ -576,6 +576,16 @@ def check_question_references(fail):
     return f"every question the documents cite exists (the interview asks {asked})"
 
 
+def check_rows_raise_to_fail(fail):
+    """A preflight row fails by raising. One returned the string "FAIL: ..."
+    instead, which the row printed as its PASS detail (clean-room run 52)."""
+    src = read(HERE, "prove.py")
+    bad = re.findall(r'^\s*return f?["\']FAIL[^\n]*', src, re.M)
+    for b in bad:
+        fail(f"prove.py returns a FAIL message instead of raising it, so the row passes: {b.strip()[:80]}")
+    return "every preflight row fails by raising, not by returning a FAIL message"
+
+
 def check_target_not_needed(fail):
     """Section 6 says "target", not "needed". There are three renderings of the
     same figures -- the scorecard, the suite table and suite.md -- and the rule
@@ -929,6 +939,7 @@ def main():
                   check_example_broker_memory, check_example_comments,
                   check_key_layout, check_tinyproof_reruns,
                   check_broker_cpu_hook, check_dashboard_rows, check_question_references,
+                  check_rows_raise_to_fail,
                   check_target_not_needed,
                   check_probe_advice,
                   check_calls_are_grouped,

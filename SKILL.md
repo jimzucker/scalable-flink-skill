@@ -748,7 +748,7 @@ for it.
 | an output the business case asks for was never written | after the completeness drain, every topic named in `topicsAlsoWritten` has records. These are the pipeline's own outputs — the throttled ones, outside `topics.out` — and nothing else looks at them. Two clean-room runs in a row built **one** market value where the default asks for two, and passed every other guard |
 | the keys divide evenly across subtasks | the engine's own key-group assignment says where every key in `keySets` would land at every case. A subtask with **no keys** always stops the run; an uneven one stops it when a `pipeline.max-parallelism` exists that would even it out, and is reported in the row when none does. Not checked for a SQL build (`"api": "sql"`), which places keys differently |
 | memory is not the constraint | **every case gives its subtasks the same memory**, as a base plus a per-core share. Passing nothing does not leave memory to the engine: the image ships a flat figure — `flink:1.20.1` sets 1728m — so every case runs on the same total, which is the configuration this rule exists to catch. Clean-room run 36 measured 2→4 at 1.510 on the image default against 1.743 with memory per subtask, and the GC ceiling did **not** catch it: GC was at its lowest, 1.40%, on the case losing the most. A case whose GC exceeds 5.5% of its capacity is a ceiling **if it also does less work per core than the nearest larger case under that limit**, by more than a step ratio's own noise — or if there is no such case to compare it with. More GC with nothing lost is not a ceiling: clean-room run 50's SQL 1-core case ran 8–10% GC and did as much work per core as its 2-core case, and cutting its GC to 7.4% made it no faster, not a result |
-| the claim itself | each step returns **1.80× or better** on a doubling. Three outcomes, read off the step's range across its pairs of passes: **met** when the whole range clears 1.80×, **missed** when the whole range is under it, **not settled** when it spans 1.80×. A step that is not settled is not a shortfall: the suite runs up to six more cases of its two sizes, alternating so each makes a new pair, and judges again; if it is still open the chain stops saying so, and nothing in the pipeline is changed on it. Three reference runs of one build printed "missed" for 1.78× with a range of 1.65–1.82×; replayed over 63 recorded suites, 33 of 36 "missed" steps spanned the target and 3 were wholly under it. A step that is missed stops the chain with the per-core, idle, GC and cap figures for both cases — a valid table that does not scale is a result about the pipeline, not a table to publish |
+| the claim itself | each step returns **1.80× or better** on a doubling. Three outcomes, read off the step's range across its pairs of passes: **met** when the whole range clears 1.80×, **missed** when the whole range is under it, **not settled** when it spans 1.80×. A step that is not settled is not a shortfall: the suite runs up to six more cases of its two sizes, alternating so each makes a new pair, and judges again; if it is still open the chain stops saying so, and nothing in the pipeline is changed on it. **With nobody to ask, report the step as not settled, with its range, and stop** — that is a result; running the suite again is a new suite with its own passes, worth it only when the claim needs the step decided. Three reference runs of one build printed "missed" for 1.78× with a range of 1.65–1.82×; replayed over 63 recorded suites, 33 of 36 "missed" steps spanned the target and 3 were wholly under it. A step that is missed stops the chain with the per-core, idle, GC and cap figures for both cases — a valid table that does not scale is a result about the pipeline, not a table to publish |
 | a failed case still owns the cluster | job torn down on **every** exit path |
 | no job is actually running | engine reports RUNNING with the expected parallelism |
 | the cluster is still busy from the last case | assert idle by asking the engine, not by killing what you think is there |
@@ -1156,7 +1156,7 @@ the reader hovers over it.
 | 4. Flink | task busy, back-pressured and idle time — busy near 100% | busy is at the limit, back-pressured is falling behind, idle with no back-pressure is **starved** | always |
 | | garbage collection, % of cores — under 5.5% | above 5.5% the harness calls the case a ceiling | always |
 | | checkpoint duration — flat; checkpoint size — levels off | the cost of the guarantee, and state growing without limit | always |
-| | network bytes and buffer use — below saturation | the network between workers becomes a constraint | when workers multiply (§1, question 8) |
+| | network bytes and buffer use — below saturation | the network between workers becomes a constraint | only when a build runs more than one worker — never on this skill's axis, which is one machine with more cores (§1a) |
 | | late records dropped — 0 | a window is throwing data away as too late | windowed pipelines, with a caveat below |
 | | free slots; threads — not climbing | spare slots let a job restart (a measured case has none, on purpose); climbing threads are a leak | a pipeline left running |
 
@@ -1165,6 +1165,27 @@ pipeline side by side, which is how you see which of the two is the
 constraint before reading the detail on either. Broker memory comes from the
 same exporter, which serves each container's memory and its limit beside its
 CPU.
+
+**Metric names that returned data on `flink:1.20.1`** with the Prometheus
+reporter and the shipped exporter, read through Grafana on 2026-09-28. Match
+operators by the names your job gives them (`operator_name=~".*parse.*"`):
+
+| panel | Prometheus series |
+|---|---|
+| rate per stage | `flink_taskmanager_job_task_operator_numRecordsOutPerSecond` (and `…numRecordsInPerSecond`) |
+| records waiting in Kafka | `flink_taskmanager_job_task_operator_pendingRecords` (the Kafka source's) |
+| event-time lag | `flink_taskmanager_job_task_operator_currentEmitEventTimeLag`, in ms |
+| job restarts; failed checkpoints | `flink_jobmanager_job_numRestarts`; `flink_jobmanager_job_numberOfFailedCheckpoints` |
+| CPU and memory by container | `docker_container_cpu_seconds_total` (a counter: take `rate`), `docker_container_memory_bytes`, `docker_container_memory_limit_bytes` |
+| task busy, back-pressured, idle | `flink_taskmanager_job_task_busyTimeMsPerSecond`, `…backPressuredTimeMsPerSecond`, `…idleTimeMsPerSecond` |
+| garbage collection | `flink_taskmanager_Status_JVM_GarbageCollector_G1_Young_Generation_TimeMsPerSecond` and `…G1_Old_Generation…` (clean-room run 52 used `…GarbageCollector_All_Time`) |
+| checkpoint duration; size | `flink_jobmanager_job_lastCheckpointDuration`; `flink_jobmanager_job_lastCheckpointSize` |
+| free slots; threads | `flink_jobmanager_taskSlotsAvailable`; `flink_taskmanager_Status_JVM_Threads_Count` |
+
+**Two panels need numbers only the job has.** Flink exports no count of
+distinct keys and no per-path totals, so *distinct keys per aggregation* and
+*the two paths' totals* need gauges or counters the job registers itself
+(clean-room run 52 built both that way). Budget for them when you write the job.
 
 **Flink counts late records only in its own window operators**
 (`numLateRecordsDropped`). A window written by hand — a process function that

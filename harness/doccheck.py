@@ -531,6 +531,8 @@ def check_dashboard_rows(fail):
                   "checkpoint duration", "job restarts", "failed checkpoints"):
         if f"| {panel}" not in sec:
             fail(f"SKILL.md \u00a77 no longer lists the {panel} panel")
+    if "With nobody to ask, report the step as not settled" not in skill:
+        fail("SKILL.md \u00a76 no longer tells an unattended agent what to do with a step that is not settled")
     if "**not settled** when it spans 1.80" not in skill:
         fail("SKILL.md \u00a76 no longer gives the claim its three outcomes: met, missed, not settled")
     if "The dashboard opens on the suite" not in skill:
@@ -554,6 +556,34 @@ def check_dashboard_rows(fail):
         if "?" in h or ";" in h:
             fail(f"SKILL.md heading reads as a slogan, not a name: {h!r}")
     return "the dashboard reads pipeline output, lag and job health, Kafka, Flink; titles name what they measure"
+
+
+def check_question_references(fail):
+    """Every "question N" the documents cite is a question the interview asks.
+    Section 7 pointed at "\u00a71, question 8" after the interview had shrunk to
+    six questions (clean-room run 52)."""
+    skill = read(ROOT, "SKILL.md")
+    sec = skill[skill.index("## 1."):skill.index("## 1a.")]
+    asked = len(re.findall(r"^\d+\. \*\*", sec, re.M))
+    bad = []
+    for name, text in (("SKILL.md", skill), ("harness/README.md", read(HERE, "README.md")),
+                       ("README.md", read(ROOT, "README.md"))):
+        for n in re.findall(r"question (\d+)", text):
+            if int(n) > asked or int(n) < 1:
+                bad.append(f"{name} cites question {n}")
+    for b in bad:
+        fail(f"{b}; the interview asks {asked} questions")
+    return f"every question the documents cite exists (the interview asks {asked})"
+
+
+def check_rows_raise_to_fail(fail):
+    """A preflight row fails by raising. One returned the string "FAIL: ..."
+    instead, which the row printed as its PASS detail (clean-room run 52)."""
+    src = read(HERE, "prove.py")
+    bad = re.findall(r'^\s*return f?["\']FAIL[^\n]*', src, re.M)
+    for b in bad:
+        fail(f"prove.py returns a FAIL message instead of raising it, so the row passes: {b.strip()[:80]}")
+    return "every preflight row fails by raising, not by returning a FAIL message"
 
 
 def check_target_not_needed(fail):
@@ -908,7 +938,9 @@ def main():
                   check_chain_sweeps_on_start,
                   check_example_broker_memory, check_example_comments,
                   check_key_layout, check_tinyproof_reruns,
-                  check_broker_cpu_hook, check_dashboard_rows, check_target_not_needed,
+                  check_broker_cpu_hook, check_dashboard_rows, check_question_references,
+                  check_rows_raise_to_fail,
+                  check_target_not_needed,
                   check_probe_advice,
                   check_calls_are_grouped,
                   check_no_duplicate_keys,

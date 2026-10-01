@@ -50,9 +50,9 @@ under [Evidence](#evidence).
 
 1. **Interviews you before it builds.** One question at a time, each with a
    default: what goes in and what comes out, whether one input becomes several
-   outputs, how many distinct keys, what has to be exactly right, who is
-   watching, and — written down verbatim — the claim you want to make. Every
-   later decision is judged against that sentence.
+   outputs, how many distinct keys, what has to be exactly right, which Flink
+   API, and which Kafka. Then it writes a plan and stops for a yes. The claim
+   it tests is fixed: every doubling of cores returns 1.80× or better.
 2. **Builds it in reviewable steps.** One branch per step, each ending with the
    system running and measured rather than compiling.
 3. **Verifies the results are correct and complete.** A backlog small enough
@@ -73,7 +73,7 @@ Claude builds these with you; the harness expects them.
 | a job jar | the Flink job, taking bootstrap, topics, parallelism and checkpoint interval as arguments |
 | a generator | deterministic — two fills with one seed are byte-identical — writing a manifest of expected totals per key |
 | a verifier | drains the outputs and exits non-zero on any loss |
-| `pipeline.json` | describes the three, plus cases, passes, backlog and caps; start from [`harness/pipeline.example.json`](harness/pipeline.example.json) |
+| `pipeline.json` | describes the three, plus cases, passes, backlog and caps. Two worked examples ship in `harness/`; read them, but they are not templates — numbers in them are sized for their own pipelines |
 
 The full contract is [`harness/README.md`](harness/README.md).
 
@@ -86,7 +86,9 @@ nohup python3 $H all > results/all.log 2>&1 &
 
 `all` is `up → preflight → completeness → tinyproof → fill → suite → report`,
 stopping at the first step that does not pass. It writes `results/DONE` with
-the verdict and the wall time. A full run takes about an hour on a laptop.
+the verdict and the wall time. On a laptop the chain takes an hour to an
+hour and a half — longer when a step needs settling passes — and building
+the pipeline before it takes longer still.
 
 `--quick` takes about 48 minutes and stamps its table unpublishable — it tells
 you the rig runs clean and roughly how fast, not what the ratio is.

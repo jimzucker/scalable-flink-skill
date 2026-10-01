@@ -794,6 +794,30 @@ def cmd_selftest(live=True, topic=None):
         assert L.empty_panels([("d", "full", 40, None)]) == []
     expect("dashboard: panels with no points or an error are named (must not fire)", empties, "",
            should_fire=False)
+
+    def worker_memory():
+        # Clean-room run 52: the memory row budgeted the worker's process size,
+        # while start_tm gives its container 1.25x that. Both now read one
+        # function; with a per-core figure the limit is 1.25x the process.
+        if not c.tm_mem_per_core or c.tm_mem_limit_per_core:
+            return
+        for n in c.cases:
+            mem, limit = L.tm_memory_for(n)
+            if abs(L._mib(limit) - int(L._mib(mem) * 1.25)) > 1:
+                raise Exception(f"{n} cores: process {mem}, container limit {limit}")
+    expect("memory: the worker's container limit is 1.25x its process size, as started (must not fire)",
+           worker_memory, "", should_fire=False)
+
+    def one_query_empty():
+        qs = [{"refId": "A", "expr": "a", "legendFormat": "orders read"},
+              {"refId": "B", "expr": "b", "legendFormat": "rows written"}]
+        frame = lambda n: {"frames": [{"data": {"values": [list(range(n)), [1.0] * n]}}]}
+        n, err = L.points_by_query({"results": {"A": {"frames": []}, "B": frame(40)}}, qs)
+        assert n == 0 and err and "orders read" in err, (n, err)
+        n, err = L.points_by_query({"results": {"A": frame(30), "B": frame(40)}}, qs)
+        assert n == 30 and err is None, (n, err)
+    expect("dashboard: a panel with one empty query is named, not passed on the other's points "
+           "(must not fire)", one_query_empty, "", should_fire=False)
     # 2026-09-28: the reference dashboard opened on "now-90m". It covered the
     # suite for 90 minutes and then showed "No data" on every Flink panel.
     T0, T1 = 1_790_605_140, 1_790_607_300
@@ -1454,6 +1478,24 @@ def cmd_selftest(live=True, topic=None):
     expect("the measured fan-out is not the declared one",
            design_catches_a_constraint, "outputsPerInput = 5, read back 8")
 
+    # Clean-room run 52: 0.26% of input repeated on purpose, as section 4 asks,
+    # read 4.987 against a declared 5 and was stopped although nothing was lost.
+    def fanout(got, should_pass):
+        def go():
+            rows, bad = L.design_diff({"operators": ["parse-order"]}, RUN36_PLAN, {},
+                                      {"outputsPerInput": (5.0, got)})
+            if should_pass and bad:
+                raise bad
+            if not should_pass and not bad:
+                raise Exception(f"a fan-out of {got} against 5 passed")
+        return go
+    expect("fan-out: 4.987 against 5, the repeats section 4 asks for, passes (must not fire)",
+           fanout(4.987, True), "", should_fire=False)
+    expect("fan-out: 4.70 against 5, more than 5% under, still stops (must not fire)",
+           fanout(4.70, False), "", should_fire=False)
+    expect("fan-out: 5.2 against 5, over the declared fan-out, still stops (must not fire)",
+           fanout(5.2, False), "", should_fire=False)
+
     def design_tolerates_an_input_the_fill_has_not_created():
         # The diff runs inside completeness, which is BEFORE the fill, so on a
         # cold stack the suite's own input topic does not exist yet. Both
@@ -1602,6 +1644,12 @@ def cmd_selftest(live=True, topic=None):
     expect("outputsPerInput with no output to count it in",
            fanout_without_anything_to_count, "needs at least one topic in topics.out")
 
+    def read_progress():
+        try:
+            return open(os.path.join(c.results, "PROGRESS.txt")).read()
+        except OSError:
+            return None
+
     def chain():
         # in its own directory: the first version wrote its fake chain into the
         # live results/ (phases.log, all.json and a DONE saying "STOPPED at c")
@@ -1613,12 +1661,15 @@ def cmd_selftest(live=True, topic=None):
         try:
             with open(os.path.join(tmp, "phases.log"), "w") as f:
                 f.write("2026-01-01 00:00:00 phase=b end rc=0 1s\n")   # an earlier chain's line
+            progress_before = read_progress()
             rc = cmd_all(steps=fake, results=tmp)
             done = open(os.path.join(tmp, "DONE")).read().strip()
             phase_lines = open(os.path.join(tmp, "phases.log")).read()
             allj = json.load(open(os.path.join(tmp, "all.json")))
             stray = [f for f in ("DONE", "all.json") if os.path.exists(os.path.join(c.results, f))
                      and os.path.getmtime(os.path.join(c.results, f)) > t_self]
+            if read_progress() != progress_before:
+                stray.append("PROGRESS.txt")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
         if rc != 1 or ran != ["a", "b", "c"] or not done.startswith("STOPPED at c") or allj["verdict"] != "STOPPED at c":
@@ -1952,7 +2003,10 @@ def cmd_preflight():
         also = [t for t in c.topics_also if L.topic_exists(t)]
         missing = [t for t in also if not L.topic_retention_bytes(t)]
         if missing:
-            return f"FAIL: no retention.bytes on {missing}, which nothing ever drains"
+            # Raised, not returned: a returned string is the row's PASS detail,
+            # so this printed PASS with "FAIL" inside it (clean-room run 52,
+            # read from the code; no recorded run hit it).
+            raise Exception(f"no retention.bytes on {missing}, which nothing ever drains")
         checked = list(c.topics_out) + also
         if not checked:
             # Not the same as "there are none". A windowed pipeline declares
@@ -2117,14 +2171,23 @@ def cmd_preflight():
         vm = int(info) if info.isdigit() else 0
         top = max(c.cases)
         capped = L.tm_memory_capped()
-        worker = (L._mib(L.mem_for(c.tm_mem_per_core, top, c.tm_mem_base)) if c.tm_mem_per_core
-                  else L._mib(c.tm_mem)) if capped else 0.0
+        # Container limits, which is what the VM has to hold: the worker's
+        # limit (1.25x its process size by default), the job manager's
+        # mem_limit (2g in the compose file) and every extra service's own.
+        # Clean-room run 52 found this row budgeting process sizes and leaving
+        # the dashboard out (run 45, earlier: 1024m for a 1600m process).
+        _, limit = L.tm_memory_for(top)
+        worker = L._mib(limit) if capped and limit else 0.0
         broker = L._mib(c.kafka_mem)
-        # what the compose file actually gives it: jobmanager.memory.process.size
-        # is 1600m, and clean-room run 45 found this line budgeting 1024m while
-        # the container it describes gets more than that.
-        jm = 1600.0
-        need = worker + broker + jm
+        jm = 2048.0
+        extras, unread = 0.0, []
+        for name, b in (c.raw.get("extraServices") or {}).items():
+            if isinstance(b, dict) and b.get("mem_limit"):
+                try:
+                    extras += L._mib(str(b["mem_limit"]))
+                except Exception:
+                    unread.append(name)
+        need = worker + broker + jm + extras
         # Reported, not enforced. A rule refusing need > VM - 1 GB was added on
         # 2026-09-07 and removed the same day: runs 20 and 21 both passed with a
         # 6,144m broker on a 7,838 MiB VM, which that rule refuses, and run 22
@@ -2138,9 +2201,11 @@ def cmd_preflight():
         # row above reports the worker as uncapped states a figure that was never
         # applied, and the over-commit warning it produces is then arithmetic on
         # a phantom. Clean-room run 30 reported the contradiction.
-        w = (f"memory {worker:.0f}m at {top} cores" if capped
+        w = (f"worker limit {worker:.0f}m at {top} cores" if capped
              else "memory uncapped (engine default)")
-        return (f"{w} + broker {broker:.0f}m + job manager {jm:.0f}m "
+        ex = (f" + other services {extras:.0f}m" if extras else "") + (
+            f" (could not read the memory limit of {', '.join(unread)})" if unread else "")
+        return (f"{w} + broker {broker:.0f}m + job manager {jm:.0f}m{ex} "
                 f"= {need:.0f}m of {vm / 1048576:.0f}m VM{over}" if vm
                 else f"{need:.0f}m requested, VM size unknown")
 
@@ -2864,15 +2929,15 @@ def cmd_suite():
     total_cases = sum(len(order) for _, order in plan)
     done_cases, t_suite = 0, time.time()
 
-    def run_one(cores, pass_id):
+    def run_one(cores, pass_id, label=None):
         """One case, logged and recorded. Returns a (reason, message) pair
         when a check about the rig says to stop the suite, else None."""
         nonlocal shape_ref, done_cases
         found = None
         log(f"---- case {cores} cores, pass {pass_id} ----")
         per = (time.time() - t_suite) / done_cases if done_cases else None
-        log(L.progress(f"suite: case {done_cases + 1} of {total_cases} "
-                       f"({cores} cores, pass {pass_id})",
+        log(L.progress(label or (f"suite: case {done_cases + 1} of {total_cases} "
+                                 f"({cores} cores, pass {pass_id})"),
                        pct=min(done_cases / total_cases, 0.99),
                        eta_s=per * max(total_cases - done_cases, 1) if per else None))
         try:
@@ -2931,7 +2996,11 @@ def cmd_suite():
             announced = step["step"]
         total_cases += 1
         extra += 1
-        stop = run_one(cores, f"settle-{extra}")
+        # "case 13 of 13", then "case 15 of 15", read as a suite that kept
+        # finishing (clean-room run 52); say what these cases are.
+        stop = run_one(cores, f"settle-{extra}",
+                       label=f"suite: settling {step['step']}, extra case {extra} of up to "
+                             f"{T['settleExtraCases']} ({cores} cores)")
     if extra:
         out["settleCases"] = extra
         save()
@@ -3105,19 +3174,25 @@ def cmd_report():
         out["reportVerdict"] = "not-settled"
         out["unsettledSteps"] = [{"step": r["step"], "ratio": r["ratio"], "low": r["ratioLowCI"],
                                   "high": r["ratioHighCI"], "need": r["idealRatio"] * T["scalingFloor"],
-                                  "pairs": len(r.get("adjacentPairs") or [])}
+                                  "pairs": len(r.get("adjacentPairs") or []),
+                                  "range": L.settle_range(r)}
                                  for r in unsettled]
         save_json("suite.json", out)
         print("\nNOT SETTLED\n")
         for u in out["unsettledSteps"]:
-            print(f"  {u['step'].replace('->', '→')} cores reads {u['ratio']:.2f}x. Its {u['pairs']} pairs of "
-                  f"passes put it between {u['low']:.2f}x and {u['high']:.2f}x, which spans the "
-                  f"{u['need']:.2f}x target.")
+            for line in textwrap.wrap(f"{u['step'].replace('->', '→')} cores reads {u['ratio']:.2f}x. "
+                                      f"{u['range']}, which spans the {u['need']:.2f}x target.", 86):
+                print(f"  {line}")
         ran = out.get("settleCases") or 0
-        print("  That is not a shortfall: the passes cannot tell met from missed."
-              + (f" The suite ran {ran} extra case(s) to settle it and it is still open." if ran else ""))
-        print("  Run the suite again, or raise `passes` in pipeline.json, before changing anything")
-        print("  in the pipeline.\n")
+        for line in textwrap.wrap("That is not a shortfall: the passes cannot tell met from missed."
+                                  + (f" The suite ran {ran} extra case(s) to settle it and it is still open."
+                                     if ran else ""), 86):
+            print(f"  {line}")
+        print()
+        print("  What to do: change nothing in the pipeline on this step. Report it as not settled,")
+        print("  with the range above; that is a result. If the claim needs it decided, run")
+        print("  `prove.py suite` again — a new suite, with its own passes and settling cases —")
+        print("  or raise `passes` in pipeline.json first. With nobody to ask, stop here and report.\n")
         return 1
     if short:
         t = out["table"]
@@ -3366,11 +3441,11 @@ def cmd_all(steps=None, results=None):
             verdict = ({"no-result": "STOPPED at report: no scaling result — too many cases were "
                                      "thrown out to compare one core count with another",
                         "not-settled": "STOPPED at report: not settled — "
-                                       + "; ".join(f"{u['step'].replace('->', '→')} reads {u['ratio']:.2f}x, "
-                                                   f"between {u['low']:.2f}x and {u['high']:.2f}x, which spans "
-                                                   f"the {u['need']:.2f}x target"
+                                       + "; ".join(f"{u['step'].replace('->', '→')} reads {u['ratio']:.2f}x, and "
+                                                   f"the range its {u['pairs']} pairs support, {u['low']:.2f}x "
+                                                   f"to {u['high']:.2f}x, spans the {u['need']:.2f}x target"
                                                    for u in ((load_json("suite.json") or {}).get("unsettledSteps") or []))
-                                       + ". More passes would decide it",
+                                       + ". Report it as not settled and change nothing in the pipeline",
                         "claim-not-met": "STOPPED at report: the table is good, the pipeline did "
                                          "not meet the target",
                         "step-missing": "STOPPED at report: a step the claim needs was not measured"
@@ -3386,10 +3461,14 @@ def cmd_all(steps=None, results=None):
     mark(f"phase=all end {verdict} {out['seconds']/60:.1f} min")
     # PROGRESS.txt used to stay at "86% ... writing the report" after DONE
     # appeared (runs 48 and 49).
-    try:
-        L.progress(f"finished: {verdict} {out['seconds']/60:.1f} min", pct=1.0)
-    except Exception:
-        pass
+    # Only for the live chain: the guard self-test's fake chain wrote "finished:
+    # STOPPED at c" here in the middle of clean-room run 52's real tiny proof,
+    # an hour before the suite, for anyone relaying the run from this file.
+    if results == c.results:
+        try:
+            L.progress(f"finished: {verdict} {out['seconds']/60:.1f} min", pct=1.0)
+        except Exception:
+            pass
     with open(done, "w") as f:
         f.write(f"{verdict} {out['seconds']/60:.1f} min\n")
     return 0 if verdict == "PASS" else 1

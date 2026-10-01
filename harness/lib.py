@@ -125,6 +125,10 @@ T = {
     # Mac's own cores return 1.48-1.82x on memory-heavy work over the same steps,
     # and replayed against the 22 recorded steps it passes 7 where 1.90 passed 3.
     "scalingFloor": 0.90,
+    # How far under the declared fan-out the completeness read-back may sit:
+    # the share of input repeated on purpose (section 4), which the pipeline
+    # drops. Section 4 promises 5%.
+    "fanoutRepeatTolerance": 0.05,
     # Extra cases the suite may run to settle a step whose interval spans the
     # target: each one adds a pair of neighbours in time. Six is about 25
     # minutes on the reference pipeline and takes three pairs to nine.
@@ -1574,17 +1578,18 @@ def mem_for(spec, cores, base="0m"):
     return f"{int(_mib(base) + _mib(spec) * cores)}m"
 
 
-def start_tm(cores, slots=None, reporter_s=None):
+def tm_memory_for(cores):
+    """The worker's (process size, container limit) at a case, as start_tm
+    applies them; (None, None) when nothing is capped. One function so the
+    memory budget row reports what the container is actually given (clean-room
+    run 52 found the row budgeting the process size, not the 1.25x limit)."""
     c = cfg()
-    if c.plat:
-        return P.set_and_read_back(c.plat, cores)
-    slots = slots if slots is not None else cores
     over = c.per_case.get(cores, {})
     if not (over.get("tmMemory") or c.tm_mem_per_core or c.raw["caps"].get("tmMemory")):
         # the demo's behaviour: no process size, no container limit, so memory
         # can never be the thing that runs out first
-        tm_mem = tm_mem_limit = None
-    elif over.get("tmMemory"):
+        return None, None
+    if over.get("tmMemory"):
         tm_mem = over["tmMemory"]
     else:
         tm_mem = mem_for(c.tm_mem_per_core, cores, c.tm_mem_base) if c.tm_mem_per_core else c.tm_mem
@@ -1597,6 +1602,15 @@ def start_tm(cores, slots=None, reporter_s=None):
         tm_mem_limit = f"{int(int(m.group(1)) * 1.25)}{m.group(2)}"   # headroom over the JVM's own figure
     else:
         tm_mem_limit = c.tm_mem_limit
+    return tm_mem, tm_mem_limit
+
+
+def start_tm(cores, slots=None, reporter_s=None):
+    c = cfg()
+    if c.plat:
+        return P.set_and_read_back(c.plat, cores)
+    slots = slots if slots is not None else cores
+    tm_mem, tm_mem_limit = tm_memory_for(cores)
     reporter_s = reporter_s or T["reporterS"]
     stop_tm()
     props = (f"jobmanager.rpc.address: {c.jm}\n"
@@ -2324,6 +2338,17 @@ def design_diff(design, plan, topic_records, built_constraints, before_fill=Fals
              else ("written by nothing -- the topic is empty" if n == 0 else "no such topic"))
     for what, (want, got) in (built_constraints or {}).items():
         ok = str(want) == str(got)
+        if what == "outputsPerInput" and not ok:
+            # Section 4 asks for a few input records repeated on purpose; the
+            # pipeline drops them, so outputs trail inputs by that share and
+            # the read-back sits a little under the declared fan-out.
+            # Clean-room run 52 read 4.987 against 5 with a verifier that had
+            # passed, and was stopped. Under by up to the tolerance section 4
+            # promises passes; over, or further under, is a different fan-out.
+            try:
+                ok = 0 <= (float(want) - float(got)) / float(want) <= T["fanoutRepeatTolerance"]
+            except (TypeError, ValueError, ZeroDivisionError):
+                ok = False
         rows.append({"area": "constraint", "declared": f"{what} = {want}", "built": ok,
                      "detail": f"read back {got}"})
         if not ok:
@@ -2753,6 +2778,19 @@ def step_verdict(step):
     return "missed"
 
 
+def settle_range(step):
+    """Pure. The range a step is judged on, said so it cannot be mistaken for
+    the spread of single pairs: clean-room run 52 read "the passes put it
+    anywhere from 1.77x to 1.90x" beside a table whose single pairs ran
+    1.70x to 1.98x, both called what "the passes" give."""
+    pairs = step.get("adjacentPairs") or []
+    text = (f"The range its {len(pairs)} pairs of passes support is {step['ratioLowCI']:.2f}x to "
+            f"{step['ratioHighCI']:.2f}x")
+    if len(pairs) > 1:
+        text += f" (single pairs ran {min(pairs):.2f}x to {max(pairs):.2f}x)"
+    return text
+
+
 def settle_next(runs, steps):
     """Pure. The next case to run to settle a step whose interval spans the
     target: the other end of the first such step from the case that ran last,
@@ -2928,10 +2966,9 @@ def action_detail(rec, cores, step=None, is_baseline=False):
             return (f"{n_cores(cores)}: doubling gave {ratio:.2f}x, more than the {ideal:.2f}x a doubling "
                     f"can give, so the smaller case reads too low.")
         if step_verdict(step) == "not settled":
-            return (f"{n_cores(cores)}: doubling gave {ratio:.2f}x. The passes put it anywhere from "
-                    f"{step['ratioLowCI']:.2f}x to {step['ratioHighCI']:.2f}x, which spans the "
-                    f"{need:.2f}x target, so this step is not settled either way; more passes of "
-                    f"these two cases would decide it.")
+            return (f"{n_cores(cores)}: doubling gave {ratio:.2f}x. {settle_range(step)}, which "
+                    f"spans the {need:.2f}x target, so this step is not settled either way. Change "
+                    f"nothing in the pipeline on it.")
         if not step.get("meetsClaim"):
             lo = step.get("ratioLowCI")
             # 1.93x is not short of 1.90x. What is short is the lower bound the
@@ -3092,8 +3129,7 @@ def scorecard(out):
         elif r.get("meetsClaim"):
             verdict = "met"
         elif step_verdict(r) == "not settled":
-            verdict = (f"not settled — the passes put it between {lo:.2f}x and "
-                       f"{r['ratioHighCI']:.2f}x, which spans the target; more passes would decide it")
+            verdict = f"not settled — {settle_range(r)[0].lower() + settle_range(r)[1:]}, which spans the target"
         elif lo and r["ratio"] >= need:
             # the number shown clears the target and the verdict says missed,
             # which reads as a broken tool unless it says what was judged
@@ -4402,14 +4438,31 @@ def panel_points(port, panel, t0, t1):
             said = None
         return 0, ("Grafana has no data source by that name" if e.code == 404
                    else f"Grafana would not run the query: {said or e.reason}")
-    points, err = 0, None
-    for res in (r or {}).get("results", {}).values():
-        err = err or res.get("error")
+    return points_by_query(r, queries)
+
+
+def points_by_query(response, queries):
+    """Pure. (points in the emptiest query, what is wrong) from one Grafana
+    /api/ds/query response. Each query is judged on its own: a sum across a
+    panel's queries let a panel with one broken line pass (clean-room run 52's
+    first "orders read" line would have)."""
+    results = (response or {}).get("results", {})
+    least, wrong = None, []
+    for q in queries:
+        ref = q.get("refId")
+        res = results.get(ref) or {}
+        n = 0
         for f in res.get("frames") or []:
             vals = (f.get("data") or {}).get("values") or []
             if len(vals) >= 2:
-                points += sum(1 for v in vals[-1] if v is not None)
-    return points, err
+                n += sum(1 for v in vals[-1] if v is not None)
+        label = q.get("legendFormat") or q.get("expr", "")[:40]
+        if res.get("error"):
+            wrong.append(f"query {ref} ({label}): {res['error']}")
+        elif n == 0:
+            wrong.append(f"query {ref} ({label}) returns nothing")
+        least = n if least is None else min(least, n)
+    return (least or 0), ("; ".join(wrong) or None)
 
 
 def empty_panels(readings):

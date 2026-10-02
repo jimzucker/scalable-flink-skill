@@ -1,0 +1,3888 @@
+{
+ "axis": "one machine, more cores: one task manager container capped at N cores, parallelism N, N slots",
+ "apiLevel": "Flink DataStream API, hand-written operators",
+ "guarantee": {
+  "state": "exactly-once checkpointing",
+  "sink": "at-least-once, idempotent by publishing the absolute position per key"
+ },
+ "checkpointIntervalMs": 10000,
+ "buildHash": "47546d835381037c",
+ "completenessBuild": "47546d835381037c",
+ "passesPerCase": 3,
+ "quickLook": false,
+ "publishable": true,
+ "study": "scaling: every case configured identically",
+ "perCase": null,
+ "cases": [
+  1,
+  2,
+  4
+ ],
+ "baseline": 1,
+ "workload": {
+  "recordCount": 200000000,
+  "uniqueOrders": 199000000,
+  "duplicateRecords": 1000000,
+  "seed": 5201,
+  "symbolCount": 4096,
+  "accountKeyCount": 16384,
+  "outputsPerOrder": 5,
+  "totalAbsQuantity": 99598943957
+ },
+ "backlogRecords": 200000000,
+ "partitions": 8,
+ "outputsPerInput": 4.975,
+ "heldStill": {
+  "kafkaCap": 2.5,
+  "jobManagerCap": 0.5,
+  "partitions": 8,
+  "checkpointMs": 10000,
+  "sinkRetentionBytesPerPartition": 2147483648,
+  "tmProcessMemory": {
+   "perCase": {
+    "1": "1536m",
+    "2": "2048m",
+    "4": "3072m"
+   },
+   "rule": "tmMemoryBase + tmMemoryPerCore x cores, so every subtask gets the same; the container figure is not held still"
+  },
+  "extraServices": [
+   "grafana",
+   "prometheus",
+   "statsexporter"
+  ]
+ },
+ "thresholds": {
+  "capFloorBaseline": 0.95,
+  "capFloorOther": 0.95,
+  "brokerLimitHits": 0,
+  "brokerHitsCapExempt": 0.95,
+  "sourceIdleCeil": 0.2,
+  "vantageTol": 0.05,
+  "spreadCeil": 0.2,
+  "minPasses": 2,
+  "scalingFloor": 0.9,
+  "settleExtraCases": 6,
+  "gcCeil": 0.055,
+  "ratioSdFallback": 0.028,
+  "quickPasses": 2,
+  "warmupIntervals": 4,
+  "warmupFlatTol": 0.1,
+  "warmupScatterTol": 0.2,
+  "warmupMinS": 90.0,
+  "suiteWarmupMinS": 90.0,
+  "sizingWindowS": 30.0,
+  "warmupMaxS": 240.0,
+  "minBoundaries": 6,
+  "minWindowS": 60.0,
+  "windowMaxS": 300.0,
+  "reporterS": 10,
+  "minBpSamples": 3,
+  "tinyRatioLo": 1.5,
+  "tinyRatioHi": 2.5,
+  "diskFloorBytes": 20000000000.0,
+  "fillStartS": 600.0,
+  "fillStallS": 300.0,
+  "sinkRetentionBytes": 2147483648
+ },
+ "harness": {
+  "lib.py": "9ba72062a1f836e2",
+  "prove.py": "4492d6e7fa98574a"
+ },
+ "startedAt": "2026-09-30 22:13:53 EDT",
+ "startedAtEpoch": 1790820833.992424,
+ "runs": [
+  {
+   "cores": 1,
+   "pass": "p1-asc",
+   "group": "st52-09302213-c1-p1-asc",
+   "hostFreeGB": 118.0,
+   "nanoCpus": 1000000000,
+   "reporterS": 10,
+   "parallelism": 1,
+   "slotsTotal": 1,
+   "tSubmit": 1790820857.0649228,
+   "jobId": "227d6a6f977bb66bbb3fb19b1abb4443",
+   "shape": {
+    "vertexCount": 4,
+    "signature": [
+     [
+      "Source: orders-source<br/>+- parse-orders<br/>",
+      []
+     ],
+     [
+      "Source: prices-source<br/>+- parse-prices<br/>",
+      []
+     ],
+     [
+      "position-by-account<br/>:- sink-positions-by-account: Writer<br/>:  +- sink-positions-by-account: Committer<br/>+- sink-market-values-by-account: Writer<br/>   +- sink-market-values-by-account: Committer<br/>",
+      [
+       "BROADCAST",
+       "HASH"
+      ]
+     ],
+     [
+      "position-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>:  +- sink-positions-by-symbol: Committer<br/>+- sink-market-values-by-symbol: Writer<br/>   +- sink-market-values-by-symbol: Committer<br/>",
+      [
+       "BROADCAST",
+       "HASH"
+      ]
+     ]
+    ],
+    "maxParallelism": [
+     128
+    ],
+    "plan": {
+     "jid": "227d6a6f977bb66bbb3fb19b1abb4443",
+     "name": "st52 positions and market values",
+     "type": "STREAMING",
+     "nodes": [
+      {
+       "id": "36d4643082db3c452764d1522f499c91",
+       "parallelism": 1,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "position-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>:  +- sink-positions-by-symbol: Committer<br/>+- sink-market-values-by-symbol: Writer<br/>   +- sink-market-values-by-symbol: Committer<br/>",
+       "inputs": [
+        {
+         "num": 0,
+         "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+         "ship_strategy": "HASH",
+         "exchange": "pipelined_bounded"
+        },
+        {
+         "num": 1,
+         "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+         "ship_strategy": "BROADCAST",
+         "exchange": "pipelined_bounded"
+        }
+       ],
+       "optimizer_properties": {}
+      },
+      {
+       "id": "2ec4b66bbb4aec4aa40e69c0fa20a9fc",
+       "parallelism": 1,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "position-by-account<br/>:- sink-positions-by-account: Writer<br/>:  +- sink-positions-by-account: Committer<br/>+- sink-market-values-by-account: Writer<br/>   +- sink-market-values-by-account: Committer<br/>",
+       "inputs": [
+        {
+         "num": 0,
+         "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+         "ship_strategy": "HASH",
+         "exchange": "pipelined_bounded"
+        },
+        {
+         "num": 1,
+         "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+         "ship_strategy": "BROADCAST",
+         "exchange": "pipelined_bounded"
+        }
+       ],
+       "optimizer_properties": {}
+      },
+      {
+       "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+       "parallelism": 1,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "Source: orders-source<br/>+- parse-orders<br/>",
+       "optimizer_properties": {}
+      },
+      {
+       "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+       "parallelism": 1,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "Source: prices-source<br/>+- parse-prices<br/>",
+       "optimizer_properties": {}
+      }
+     ]
+    }
+   },
+   "warmup": {
+    "rates": [
+     123205.7473558172,
+     120857.81187724194,
+     132940.85378017154,
+     127854.518222666
+    ],
+    "mean": 126214.73280897416,
+    "drift": 0.0619,
+    "scatter": 0.0957,
+    "warmupS": 90.3,
+    "rampFlatAtS": 61.8,
+    "rampFloorS": 90.0,
+    "rampWaitedExtraS": 28.5,
+    "rampFlatAtRates": [
+     111517.7,
+     118940.4,
+     123205.7,
+     120857.8
+    ]
+   },
+   "tSteady": 1790820960.043241,
+   "tOpen": 1790820963.4967098,
+   "open": {
+    "ts": 1790820961127,
+    "committed": 9937938,
+    "committedParts": [
+     1254768,
+     1258679,
+     1259251,
+     1237845,
+     1229485,
+     1218189,
+     1239573,
+     1240148
+    ],
+    "endIn": 200000000,
+    "end_positions-by-symbol": 9926525,
+    "end_positions-by-account": 39706062
+   },
+   "hostLoadOpen": 4.88,
+   "hostCores": 8,
+   "hostSwapOpenMB": 949.8,
+   "brokerLimitHits": 3525,
+   "brokerRefaults": 139328,
+   "brokerFileCacheBytes": 3202793472,
+   "brokerLimitBytes": 4563402752,
+   "tClose": 1790821033.085343,
+   "close": {
+    "ts": 1790821030793,
+    "committed": 18527412,
+    "committedParts": [
+     2322245,
+     2335891,
+     2320664,
+     2306182,
+     2293844,
+     2300536,
+     2334951,
+     2313099
+    ],
+    "endIn": 200000000,
+    "end_positions-by-symbol": 18451672,
+    "end_positions-by-account": 73799266
+   },
+   "hostLoadClose": 11.77,
+   "hostSwapCloseMB": 1346.4,
+   "boundaries": 7,
+   "gcNames": [
+    "All",
+    "G1 Old Generation",
+    "G1 Young Generation"
+   ],
+   "elapsedS": 69.67,
+   "recordsConsumed": 8589474,
+   "rateSource": "kafka committed offsets on orders",
+   "recordsPerSec": 123295.1,
+   "outputRecsPerSec": 613392.9,
+   "vantageSource": "sink rows / 4.975 outputs per input",
+   "vantageSinkRecords": 8566502.7,
+   "vantageDisagreement": 0.0027,
+   "backlogRemaining": 181472588,
+   "headroomS": 1471.9,
+   "tmCores": 0.998,
+   "tmCapFrac": 0.9982,
+   "tmThrottledPeriodsPct": 100.0,
+   "kafkaCores": 0.165,
+   "kafkaCap": 2.5,
+   "kafkaCapFrac": 0.066,
+   "gcMsInWindow": 2081.0,
+   "gcFracOfCapacity": 0.0299,
+   "sourceIdle": 0.0007,
+   "sourceBusy": 0.665,
+   "sourceBackpressured": 0.3343,
+   "bpSamples": 7,
+   "backpressure": {
+    "Source: orders-source -> parse-orders": {
+     "backPressured": 0.3343,
+     "idle": 0.0007,
+     "busy": 0.665,
+     "samples": 7
+    },
+    "Source: prices-source -> parse-prices": {
+     "idle": 0.9991,
+     "busy": 0.0009,
+     "backPressured": 0.0,
+     "samples": 7
+    },
+    "position-by-symbol -> (sink-positions-by-symbol: Writer -> sink-positions-by-symbol: Committer, sink-market-values-by-symbol: Writer -> sink-market-values-by-symbol: Committer)": {
+     "idle": 0.7929,
+     "busy": 0.2071,
+     "backPressured": 0.0,
+     "samples": 7
+    },
+    "position-by-account -> (sink-positions-by-account: Writer -> sink-positions-by-account: Committer, sink-market-values-by-account: Writer -> sink-market-values-by-account: Committer)": {
+     "backPressured": 0.0,
+     "busy": 0.8951,
+     "idle": 0.1049,
+     "samples": 7
+    },
+    "_gcNames": [
+     "All",
+     "G1 Old Generation",
+     "G1 Young Generation"
+    ]
+   },
+   "status": "OK"
+  },
+  {
+   "cores": 2,
+   "pass": "p1-asc",
+   "group": "st52-09302213-c2-p1-asc",
+   "hostFreeGB": 121.3,
+   "nanoCpus": 2000000000,
+   "reporterS": 10,
+   "parallelism": 2,
+   "slotsTotal": 2,
+   "tSubmit": 1790821107.049132,
+   "jobId": "9f285944841b4e7653a836ecd54763d7",
+   "shape": {
+    "vertexCount": 4,
+    "signature": [
+     [
+      "Source: orders-source<br/>+- parse-orders<br/>",
+      []
+     ],
+     [
+      "Source: prices-source<br/>+- parse-prices<br/>",
+      []
+     ],
+     [
+      "position-by-account<br/>:- sink-positions-by-account: Writer<br/>:  +- sink-positions-by-account: Committer<br/>+- sink-market-values-by-account: Writer<br/>   +- sink-market-values-by-account: Committer<br/>",
+      [
+       "BROADCAST",
+       "HASH"
+      ]
+     ],
+     [
+      "position-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>:  +- sink-positions-by-symbol: Committer<br/>+- sink-market-values-by-symbol: Writer<br/>   +- sink-market-values-by-symbol: Committer<br/>",
+      [
+       "BROADCAST",
+       "HASH"
+      ]
+     ]
+    ],
+    "maxParallelism": [
+     128
+    ],
+    "plan": {
+     "jid": "9f285944841b4e7653a836ecd54763d7",
+     "name": "st52 positions and market values",
+     "type": "STREAMING",
+     "nodes": [
+      {
+       "id": "36d4643082db3c452764d1522f499c91",
+       "parallelism": 2,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "position-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>:  +- sink-positions-by-symbol: Committer<br/>+- sink-market-values-by-symbol: Writer<br/>   +- sink-market-values-by-symbol: Committer<br/>",
+       "inputs": [
+        {
+         "num": 0,
+         "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+         "ship_strategy": "HASH",
+         "exchange": "pipelined_bounded"
+        },
+        {
+         "num": 1,
+         "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+         "ship_strategy": "BROADCAST",
+         "exchange": "pipelined_bounded"
+        }
+       ],
+       "optimizer_properties": {}
+      },
+      {
+       "id": "2ec4b66bbb4aec4aa40e69c0fa20a9fc",
+       "parallelism": 2,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "position-by-account<br/>:- sink-positions-by-account: Writer<br/>:  +- sink-positions-by-account: Committer<br/>+- sink-market-values-by-account: Writer<br/>   +- sink-market-values-by-account: Committer<br/>",
+       "inputs": [
+        {
+         "num": 0,
+         "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+         "ship_strategy": "HASH",
+         "exchange": "pipelined_bounded"
+        },
+        {
+         "num": 1,
+         "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+         "ship_strategy": "BROADCAST",
+         "exchange": "pipelined_bounded"
+        }
+       ],
+       "optimizer_properties": {}
+      },
+      {
+       "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+       "parallelism": 2,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "Source: orders-source<br/>+- parse-orders<br/>",
+       "optimizer_properties": {}
+      },
+      {
+       "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+       "parallelism": 2,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "Source: prices-source<br/>+- parse-prices<br/>",
+       "optimizer_properties": {}
+      }
+     ]
+    }
+   },
+   "warmup": {
+    "rates": [
+     246725.04482964735,
+     250123.96281115664,
+     270990.42609153077,
+     253801.7982017982
+    ],
+    "mean": 255410.30798353325,
+    "drift": 0.0494,
+    "scatter": 0.095,
+    "warmupS": 90.0,
+    "rampFlatAtS": 86.8,
+    "rampFloorS": 90.0,
+    "rampWaitedExtraS": 3.2,
+    "rampFlatAtRates": [
+     246725.0,
+     250124.0,
+     270990.4,
+     253801.8
+    ]
+   },
+   "tSteady": 1790821209.0954099,
+   "tOpen": 1790821217.896713,
+   "open": {
+    "ts": 1790821215583,
+    "committed": 21029082,
+    "committedParts": [
+     2628500,
+     2645734,
+     2641285,
+     2622163,
+     2603717,
+     2619280,
+     2651121,
+     2617282
+    ],
+    "endIn": 200000000,
+    "end_positions-by-symbol": 20953445,
+    "end_positions-by-account": 83791059
+   },
+   "hostLoadOpen": 6.62,
+   "hostCores": 8,
+   "hostSwapOpenMB": 1322.4,
+   "brokerLimitHits": 6130,
+   "brokerRefaults": 250848,
+   "brokerFileCacheBytes": 3202351104,
+   "brokerLimitBytes": 4563402752,
+   "tClose": 1790821278.195141,
+   "close": {
+    "ts": 1790821275701,
+    "committed": 36399305,
+    "committedParts": [
+     4546174,
+     4568578,
+     4578224,
+     4530392,
+     4513047,
+     4550973,
+     4584073,
+     4527844
+    ],
+    "endIn": 200000000,
+    "end_positions-by-symbol": 36266848,
+    "end_positions-by-account": 145075213
+   },
+   "hostLoadClose": 4.91,
+   "hostSwapCloseMB": 1322.4,
+   "boundaries": 6,
+   "gcNames": [
+    "All",
+    "G1 Old Generation",
+    "G1 Young Generation"
+   ],
+   "elapsedS": 60.12,
+   "recordsConsumed": 15370223,
+   "rateSource": "kafka committed offsets on orders",
+   "recordsPerSec": 255667.6,
+   "outputRecsPerSec": 1271946.2,
+   "vantageSource": "sink rows / 4.975 outputs per input",
+   "vantageSinkRecords": 15396493.9,
+   "vantageDisagreement": 0.0017,
+   "backlogRemaining": 163600695,
+   "headroomS": 639.9,
+   "tmCores": 2.005,
+   "tmCapFrac": 1.0025,
+   "tmThrottledPeriodsPct": 100.0,
+   "kafkaCores": 0.261,
+   "kafkaCap": 2.5,
+   "kafkaCapFrac": 0.1043,
+   "gcMsInWindow": 1200.0,
+   "gcFracOfCapacity": 0.01,
+   "sourceIdle": 0.0064,
+   "sourceBusy": 0.6733,
+   "sourceBackpressured": 0.3203,
+   "bpSamples": 12,
+   "backpressure": {
+    "position-by-account -> (sink-positions-by-account: Writer -> sink-positions-by-account: Committer, sink-market-values-by-account: Writer -> sink-market-values-by-account: Committer)": {
+     "backPressured": 0.0,
+     "idle": 0.1377,
+     "busy": 0.8623,
+     "samples": 12
+    },
+    "Source: orders-source -> parse-orders": {
+     "backPressured": 0.3203,
+     "busy": 0.6733,
+     "idle": 0.0064,
+     "samples": 12
+    },
+    "Source: prices-source -> parse-prices": {
+     "idle": 0.9998,
+     "busy": 0.0003,
+     "backPressured": 0.0,
+     "samples": 12
+    },
+    "position-by-symbol -> (sink-positions-by-symbol: Writer -> sink-positions-by-symbol: Committer, sink-market-values-by-symbol: Writer -> sink-market-values-by-symbol: Committer)": {
+     "idle": 0.7279,
+     "backPressured": 0.0,
+     "busy": 0.2721,
+     "samples": 12
+    },
+    "_gcNames": [
+     "All",
+     "G1 Old Generation",
+     "G1 Young Generation"
+    ]
+   },
+   "status": "OK"
+  },
+  {
+   "cores": 4,
+   "pass": "p1-asc",
+   "group": "st52-09302213-c4-p1-asc",
+   "hostFreeGB": 118.1,
+   "nanoCpus": 4000000000,
+   "reporterS": 10,
+   "parallelism": 4,
+   "slotsTotal": 4,
+   "tSubmit": 1790821348.788786,
+   "jobId": "bf7b03c2cbb83688c62cdc300d05d553",
+   "shape": {
+    "vertexCount": 4,
+    "signature": [
+     [
+      "Source: orders-source<br/>+- parse-orders<br/>",
+      []
+     ],
+     [
+      "Source: prices-source<br/>+- parse-prices<br/>",
+      []
+     ],
+     [
+      "position-by-account<br/>:- sink-positions-by-account: Writer<br/>:  +- sink-positions-by-account: Committer<br/>+- sink-market-values-by-account: Writer<br/>   +- sink-market-values-by-account: Committer<br/>",
+      [
+       "BROADCAST",
+       "HASH"
+      ]
+     ],
+     [
+      "position-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>:  +- sink-positions-by-symbol: Committer<br/>+- sink-market-values-by-symbol: Writer<br/>   +- sink-market-values-by-symbol: Committer<br/>",
+      [
+       "BROADCAST",
+       "HASH"
+      ]
+     ]
+    ],
+    "maxParallelism": [
+     128
+    ],
+    "plan": {
+     "jid": "bf7b03c2cbb83688c62cdc300d05d553",
+     "name": "st52 positions and market values",
+     "type": "STREAMING",
+     "nodes": [
+      {
+       "id": "36d4643082db3c452764d1522f499c91",
+       "parallelism": 4,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "position-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>:  +- sink-positions-by-symbol: Committer<br/>+- sink-market-values-by-symbol: Writer<br/>   +- sink-market-values-by-symbol: Committer<br/>",
+       "inputs": [
+        {
+         "num": 0,
+         "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+         "ship_strategy": "HASH",
+         "exchange": "pipelined_bounded"
+        },
+        {
+         "num": 1,
+         "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+         "ship_strategy": "BROADCAST",
+         "exchange": "pipelined_bounded"
+        }
+       ],
+       "optimizer_properties": {}
+      },
+      {
+       "id": "2ec4b66bbb4aec4aa40e69c0fa20a9fc",
+       "parallelism": 4,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "position-by-account<br/>:- sink-positions-by-account: Writer<br/>:  +- sink-positions-by-account: Committer<br/>+- sink-market-values-by-account: Writer<br/>   +- sink-market-values-by-account: Committer<br/>",
+       "inputs": [
+        {
+         "num": 0,
+         "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+         "ship_strategy": "HASH",
+         "exchange": "pipelined_bounded"
+        },
+        {
+         "num": 1,
+         "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+         "ship_strategy": "BROADCAST",
+         "exchange": "pipelined_bounded"
+        }
+       ],
+       "optimizer_properties": {}
+      },
+      {
+       "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+       "parallelism": 4,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "Source: orders-source<br/>+- parse-orders<br/>",
+       "optimizer_properties": {}
+      },
+      {
+       "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+       "parallelism": 4,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "Source: prices-source<br/>+- parse-prices<br/>",
+       "optimizer_properties": {}
+      }
+     ]
+    }
+   },
+   "warmup": {
+    "rates": [
+     482905.67920950195,
+     478267.71810740663,
+     458294.8692353763,
+     447277.79996007186
+    ],
+    "mean": 466686.5166280892,
+    "drift": 0.0815,
+    "scatter": 0.0763,
+    "warmupS": 90.3,
+    "rampFlatAtS": 58.0,
+    "rampFloorS": 90.0,
+    "rampWaitedExtraS": 32.3,
+    "rampFlatAtRates": [
+     465566.7,
+     464247.9,
+     474197.7,
+     482905.7
+    ]
+   },
+   "tSteady": 1790821451.420989,
+   "tOpen": 1790821453.615525,
+   "open": {
+    "ts": 1790821448792,
+    "committed": 38260980,
+    "committedParts": [
+     4793067,
+     4782809,
+     4781909,
+     4778258,
+     4772850,
+     4768302,
+     4797673,
+     4786112
+    ],
+    "endIn": 200000000,
+    "end_positions-by-symbol": 38217207,
+    "end_positions-by-account": 152880746
+   },
+   "hostLoadOpen": 6.01,
+   "hostCores": 8,
+   "hostSwapOpenMB": 1298.4,
+   "brokerLimitHits": 0,
+   "brokerRefaults": 442436,
+   "brokerFileCacheBytes": 3080335360,
+   "brokerLimitBytes": 4563402752,
+   "tClose": 1790821511.515506,
+   "close": {
+    "ts": 1790821508934,
+    "committed": 66512639,
+    "committedParts": [
+     8309262,
+     8298648,
+     8318842,
+     8332563,
+     8275248,
+     8321638,
+     8343108,
+     8313330
+    ],
+    "endIn": 200000000,
+    "end_positions-by-symbol": 66400162,
+    "end_positions-by-account": 265614838
+   },
+   "hostLoadClose": 6.02,
+   "hostSwapCloseMB": 1298.4,
+   "boundaries": 6,
+   "gcNames": [
+    "All",
+    "G1 Old Generation",
+    "G1 Young Generation"
+   ],
+   "elapsedS": 60.14,
+   "recordsConsumed": 28251659,
+   "rateSource": "kafka committed offsets on orders",
+   "recordsPerSec": 469749.2,
+   "outputRecsPerSec": 2337002.5,
+   "vantageSource": "sink rows / 4.975 outputs per input",
+   "vantageSinkRecords": 28325034.6,
+   "vantageDisagreement": 0.0026,
+   "backlogRemaining": 133487361,
+   "headroomS": 284.2,
+   "tmCores": 3.839,
+   "tmCapFrac": 0.9597,
+   "tmThrottledPeriodsPct": 99.5,
+   "kafkaCores": 0.468,
+   "kafkaCap": 2.5,
+   "kafkaCapFrac": 0.1871,
+   "gcMsInWindow": 1604.0,
+   "gcFracOfCapacity": 0.0067,
+   "sourceIdle": 0.0117,
+   "sourceBusy": 0.773,
+   "sourceBackpressured": 0.2153,
+   "bpSamples": 24,
+   "backpressure": {
+    "position-by-symbol -> (sink-positions-by-symbol: Writer -> sink-positions-by-symbol: Committer, sink-market-values-by-symbol: Writer -> sink-market-values-by-symbol: Committer)": {
+     "backPressured": 0.0,
+     "idle": 0.6292,
+     "busy": 0.3708,
+     "samples": 24
+    },
+    "Source: orders-source -> parse-orders": {
+     "idle": 0.0117,
+     "backPressured": 0.2153,
+     "busy": 0.773,
+     "samples": 24
+    },
+    "position-by-account -> (sink-positions-by-account: Writer -> sink-positions-by-account: Committer, sink-market-values-by-account: Writer -> sink-market-values-by-account: Committer)": {
+     "busy": 0.942,
+     "idle": 0.058,
+     "backPressured": 0.0,
+     "samples": 24
+    },
+    "Source: prices-source -> parse-prices": {
+     "busy": 0.0,
+     "backPressured": 0.0,
+     "idle": 1.0,
+     "samples": 24
+    },
+    "_gcNames": [
+     "All",
+     "G1 Old Generation",
+     "G1 Young Generation"
+    ]
+   },
+   "status": "OK"
+  },
+  {
+   "cores": 4,
+   "pass": "p2-desc",
+   "group": "st52-09302213-c4-p2-desc",
+   "hostFreeGB": 112.7,
+   "nanoCpus": 4000000000,
+   "reporterS": 10,
+   "parallelism": 4,
+   "slotsTotal": 4,
+   "tSubmit": 1790821587.898867,
+   "jobId": "6832661b78bbbb8d110daf733b5a6456",
+   "shape": {
+    "vertexCount": 4,
+    "signature": [
+     [
+      "Source: orders-source<br/>+- parse-orders<br/>",
+      []
+     ],
+     [
+      "Source: prices-source<br/>+- parse-prices<br/>",
+      []
+     ],
+     [
+      "position-by-account<br/>:- sink-positions-by-account: Writer<br/>:  +- sink-positions-by-account: Committer<br/>+- sink-market-values-by-account: Writer<br/>   +- sink-market-values-by-account: Committer<br/>",
+      [
+       "BROADCAST",
+       "HASH"
+      ]
+     ],
+     [
+      "position-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>:  +- sink-positions-by-symbol: Committer<br/>+- sink-market-values-by-symbol: Writer<br/>   +- sink-market-values-by-symbol: Committer<br/>",
+      [
+       "BROADCAST",
+       "HASH"
+      ]
+     ]
+    ],
+    "maxParallelism": [
+     128
+    ],
+    "plan": {
+     "jid": "6832661b78bbbb8d110daf733b5a6456",
+     "name": "st52 positions and market values",
+     "type": "STREAMING",
+     "nodes": [
+      {
+       "id": "36d4643082db3c452764d1522f499c91",
+       "parallelism": 4,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "position-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>:  +- sink-positions-by-symbol: Committer<br/>+- sink-market-values-by-symbol: Writer<br/>   +- sink-market-values-by-symbol: Committer<br/>",
+       "inputs": [
+        {
+         "num": 0,
+         "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+         "ship_strategy": "HASH",
+         "exchange": "pipelined_bounded"
+        },
+        {
+         "num": 1,
+         "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+         "ship_strategy": "BROADCAST",
+         "exchange": "pipelined_bounded"
+        }
+       ],
+       "optimizer_properties": {}
+      },
+      {
+       "id": "2ec4b66bbb4aec4aa40e69c0fa20a9fc",
+       "parallelism": 4,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "position-by-account<br/>:- sink-positions-by-account: Writer<br/>:  +- sink-positions-by-account: Committer<br/>+- sink-market-values-by-account: Writer<br/>   +- sink-market-values-by-account: Committer<br/>",
+       "inputs": [
+        {
+         "num": 0,
+         "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+         "ship_strategy": "HASH",
+         "exchange": "pipelined_bounded"
+        },
+        {
+         "num": 1,
+         "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+         "ship_strategy": "BROADCAST",
+         "exchange": "pipelined_bounded"
+        }
+       ],
+       "optimizer_properties": {}
+      },
+      {
+       "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+       "parallelism": 4,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "Source: orders-source<br/>+- parse-orders<br/>",
+       "optimizer_properties": {}
+      },
+      {
+       "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+       "parallelism": 4,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "Source: prices-source<br/>+- parse-prices<br/>",
+       "optimizer_properties": {}
+      }
+     ]
+    }
+   },
+   "warmup": {
+    "rates": [
+     477125.07492507494,
+     476598.3827493262,
+     477018.9677548168,
+     485317.8557194101
+    ],
+    "mean": 479015.070287157,
+    "drift": 0.0157,
+    "scatter": 0.0182,
+    "warmupS": 90.1,
+    "rampFlatAtS": 59.9,
+    "rampFloorS": 90.0,
+    "rampWaitedExtraS": 30.2,
+    "rampFlatAtRates": [
+     465131.9,
+     473978.0,
+     480044.9,
+     477125.1
+    ]
+   },
+   "tSteady": 1790821691.217877,
+   "tOpen": 1790821693.385108,
+   "open": {
+    "ts": 1790821691017,
+    "committed": 39819394,
+    "committedParts": [
+     4987444,
+     4982728,
+     4976312,
+     4964046,
+     4971639,
+     4970337,
+     4985813,
+     4981075
+    ],
+    "endIn": 200000000,
+    "end_positions-by-symbol": 39797382,
+    "end_positions-by-account": 159193101
+   },
+   "hostLoadOpen": 6.9,
+   "hostCores": 8,
+   "hostSwapOpenMB": 1298.4,
+   "brokerLimitHits": 0,
+   "brokerRefaults": 463785,
+   "brokerFileCacheBytes": 3022319616,
+   "brokerLimitBytes": 4563402752,
+   "tClose": 1790821753.722601,
+   "close": {
+    "ts": 1790821751107,
+    "committed": 68743730,
+    "committedParts": [
+     8598712,
+     8590884,
+     8586788,
+     8589828,
+     8575122,
+     8608748,
+     8616605,
+     8577043
+    ],
+    "endIn": 200000000,
+    "end_positions-by-symbol": 68588681,
+    "end_positions-by-account": 274362629
+   },
+   "hostLoadClose": 5.95,
+   "hostSwapCloseMB": 1298.4,
+   "boundaries": 6,
+   "gcNames": [
+    "All",
+    "G1 Old Generation",
+    "G1 Young Generation"
+   ],
+   "elapsedS": 60.09,
+   "recordsConsumed": 28924336,
+   "rateSource": "kafka committed offsets on orders",
+   "recordsPerSec": 481350.2,
+   "outputRecsPerSec": 2394717.5,
+   "vantageSource": "sink rows / 4.975 outputs per input",
+   "vantageSinkRecords": 28936849.6,
+   "vantageDisagreement": 0.0004,
+   "backlogRemaining": 131256270,
+   "headroomS": 272.7,
+   "tmCores": 4.011,
+   "tmCapFrac": 1.0027,
+   "tmThrottledPeriodsPct": 99.2,
+   "kafkaCores": 0.52,
+   "kafkaCap": 2.5,
+   "kafkaCapFrac": 0.2081,
+   "gcMsInWindow": 1581.0,
+   "gcFracOfCapacity": 0.0066,
+   "sourceIdle": 0.0142,
+   "sourceBusy": 0.7811,
+   "sourceBackpressured": 0.2047,
+   "bpSamples": 24,
+   "backpressure": {
+    "position-by-account -> (sink-positions-by-account: Writer -> sink-positions-by-account: Committer, sink-market-values-by-account: Writer -> sink-market-values-by-account: Committer)": {
+     "idle": 0.0559,
+     "busy": 0.9441,
+     "backPressured": 0.0,
+     "samples": 24
+    },
+    "Source: prices-source -> parse-prices": {
+     "backPressured": 0.0,
+     "idle": 1.0,
+     "busy": 0.0,
+     "samples": 24
+    },
+    "position-by-symbol -> (sink-positions-by-symbol: Writer -> sink-positions-by-symbol: Committer, sink-market-values-by-symbol: Writer -> sink-market-values-by-symbol: Committer)": {
+     "busy": 0.4093,
+     "backPressured": 0.0,
+     "idle": 0.5907,
+     "samples": 24
+    },
+    "Source: orders-source -> parse-orders": {
+     "idle": 0.0142,
+     "backPressured": 0.2047,
+     "busy": 0.7811,
+     "samples": 24
+    },
+    "_gcNames": [
+     "All",
+     "G1 Old Generation",
+     "G1 Young Generation"
+    ]
+   },
+   "status": "OK"
+  },
+  {
+   "cores": 2,
+   "pass": "p2-desc",
+   "group": "st52-09302213-c2-p2-desc",
+   "hostFreeGB": 112.3,
+   "nanoCpus": 2000000000,
+   "reporterS": 10,
+   "parallelism": 2,
+   "slotsTotal": 2,
+   "tSubmit": 1790821834.297427,
+   "jobId": "02c1fc766eb656eb6d4eec35db3889c8",
+   "shape": {
+    "vertexCount": 4,
+    "signature": [
+     [
+      "Source: orders-source<br/>+- parse-orders<br/>",
+      []
+     ],
+     [
+      "Source: prices-source<br/>+- parse-prices<br/>",
+      []
+     ],
+     [
+      "position-by-account<br/>:- sink-positions-by-account: Writer<br/>:  +- sink-positions-by-account: Committer<br/>+- sink-market-values-by-account: Writer<br/>   +- sink-market-values-by-account: Committer<br/>",
+      [
+       "BROADCAST",
+       "HASH"
+      ]
+     ],
+     [
+      "position-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>:  +- sink-positions-by-symbol: Committer<br/>+- sink-market-values-by-symbol: Writer<br/>   +- sink-market-values-by-symbol: Committer<br/>",
+      [
+       "BROADCAST",
+       "HASH"
+      ]
+     ]
+    ],
+    "maxParallelism": [
+     128
+    ],
+    "plan": {
+     "jid": "02c1fc766eb656eb6d4eec35db3889c8",
+     "name": "st52 positions and market values",
+     "type": "STREAMING",
+     "nodes": [
+      {
+       "id": "36d4643082db3c452764d1522f499c91",
+       "parallelism": 2,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "position-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>:  +- sink-positions-by-symbol: Committer<br/>+- sink-market-values-by-symbol: Writer<br/>   +- sink-market-values-by-symbol: Committer<br/>",
+       "inputs": [
+        {
+         "num": 0,
+         "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+         "ship_strategy": "HASH",
+         "exchange": "pipelined_bounded"
+        },
+        {
+         "num": 1,
+         "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+         "ship_strategy": "BROADCAST",
+         "exchange": "pipelined_bounded"
+        }
+       ],
+       "optimizer_properties": {}
+      },
+      {
+       "id": "2ec4b66bbb4aec4aa40e69c0fa20a9fc",
+       "parallelism": 2,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "position-by-account<br/>:- sink-positions-by-account: Writer<br/>:  +- sink-positions-by-account: Committer<br/>+- sink-market-values-by-account: Writer<br/>   +- sink-market-values-by-account: Committer<br/>",
+       "inputs": [
+        {
+         "num": 0,
+         "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+         "ship_strategy": "HASH",
+         "exchange": "pipelined_bounded"
+        },
+        {
+         "num": 1,
+         "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+         "ship_strategy": "BROADCAST",
+         "exchange": "pipelined_bounded"
+        }
+       ],
+       "optimizer_properties": {}
+      },
+      {
+       "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+       "parallelism": 2,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "Source: orders-source<br/>+- parse-orders<br/>",
+       "optimizer_properties": {}
+      },
+      {
+       "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+       "parallelism": 2,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "Source: prices-source<br/>+- parse-prices<br/>",
+       "optimizer_properties": {}
+      }
+     ]
+    }
+   },
+   "warmup": {
+    "rates": [
+     234761.15380776525,
+     244777.82448765106,
+     234990.92902711325,
+     236171.186440678
+    ],
+    "mean": 237675.2734408019,
+    "drift": 0.007,
+    "scatter": 0.0421,
+    "warmupS": 90.3,
+    "rampFlatAtS": 87.0,
+    "rampFloorS": 90.0,
+    "rampWaitedExtraS": 3.3,
+    "rampFlatAtRates": [
+     234761.2,
+     244777.8,
+     234990.9,
+     236171.2
+    ]
+   },
+   "tSteady": 1790821937.474389,
+   "tOpen": 1790821946.6012511,
+   "open": {
+    "ts": 1790821943994,
+    "committed": 19044437,
+    "committedParts": [
+     2377436,
+     2394351,
+     2388673,
+     2373821,
+     2365255,
+     2372046,
+     2396810,
+     2376045
+    ],
+    "endIn": 200000000,
+    "end_positions-by-symbol": 19002458,
+    "end_positions-by-account": 76012730
+   },
+   "hostLoadOpen": 11.58,
+   "hostCores": 8,
+   "hostSwapOpenMB": 1370.3,
+   "brokerLimitHits": 6081,
+   "brokerRefaults": 210996,
+   "brokerFileCacheBytes": 3203059712,
+   "brokerLimitBytes": 4563402752,
+   "tClose": 1790822006.523565,
+   "close": {
+    "ts": 1790822004147,
+    "committed": 33650276,
+    "committedParts": [
+     4203606,
+     4219520,
+     4230365,
+     4185235,
+     4163227,
+     4203169,
+     4245224,
+     4199930
+    ],
+    "endIn": 200000000,
+    "end_positions-by-symbol": 33565435,
+    "end_positions-by-account": 134243379
+   },
+   "hostLoadClose": 8.93,
+   "hostSwapCloseMB": 1370.3,
+   "boundaries": 6,
+   "gcNames": [
+    "All",
+    "G1 Old Generation",
+    "G1 Young Generation"
+   ],
+   "elapsedS": 60.15,
+   "recordsConsumed": 14605839,
+   "rateSource": "kafka committed offsets on orders",
+   "recordsPerSec": 242811.5,
+   "outputRecsPerSec": 1207987.1,
+   "vantageSource": "sink rows / 4.975 outputs per input",
+   "vantageSinkRecords": 14631884.6,
+   "vantageDisagreement": 0.0018,
+   "backlogRemaining": 166349724,
+   "headroomS": 685.1,
+   "tmCores": 1.993,
+   "tmCapFrac": 0.9965,
+   "tmThrottledPeriodsPct": 99.8,
+   "kafkaCores": 0.275,
+   "kafkaCap": 2.5,
+   "kafkaCapFrac": 0.1102,
+   "gcMsInWindow": 1188.0,
+   "gcFracOfCapacity": 0.0099,
+   "sourceIdle": 0.0066,
+   "sourceBusy": 0.6679,
+   "sourceBackpressured": 0.3255,
+   "bpSamples": 12,
+   "backpressure": {
+    "position-by-account -> (sink-positions-by-account: Writer -> sink-positions-by-account: Committer, sink-market-values-by-account: Writer -> sink-market-values-by-account: Committer)": {
+     "backPressured": 0.0,
+     "idle": 0.0892,
+     "busy": 0.9107,
+     "samples": 12
+    },
+    "Source: orders-source -> parse-orders": {
+     "backPressured": 0.3255,
+     "idle": 0.0066,
+     "busy": 0.6679,
+     "samples": 12
+    },
+    "Source: prices-source -> parse-prices": {
+     "backPressured": 0.0,
+     "busy": 0.0009,
+     "idle": 0.9991,
+     "samples": 12
+    },
+    "position-by-symbol -> (sink-positions-by-symbol: Writer -> sink-positions-by-symbol: Committer, sink-market-values-by-symbol: Writer -> sink-market-values-by-symbol: Committer)": {
+     "backPressured": 0.0,
+     "busy": 0.2987,
+     "idle": 0.7013,
+     "samples": 12
+    },
+    "_gcNames": [
+     "All",
+     "G1 Old Generation",
+     "G1 Young Generation"
+    ]
+   },
+   "status": "OK"
+  },
+  {
+   "cores": 1,
+   "pass": "p2-desc",
+   "group": "st52-09302213-c1-p2-desc",
+   "hostFreeGB": 118.5,
+   "nanoCpus": 1000000000,
+   "reporterS": 10,
+   "parallelism": 1,
+   "slotsTotal": 1,
+   "tSubmit": 1790822087.6053572,
+   "jobId": "4398f457205a9db7330d9ae43549781f",
+   "shape": {
+    "vertexCount": 4,
+    "signature": [
+     [
+      "Source: orders-source<br/>+- parse-orders<br/>",
+      []
+     ],
+     [
+      "Source: prices-source<br/>+- parse-prices<br/>",
+      []
+     ],
+     [
+      "position-by-account<br/>:- sink-positions-by-account: Writer<br/>:  +- sink-positions-by-account: Committer<br/>+- sink-market-values-by-account: Writer<br/>   +- sink-market-values-by-account: Committer<br/>",
+      [
+       "BROADCAST",
+       "HASH"
+      ]
+     ],
+     [
+      "position-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>:  +- sink-positions-by-symbol: Committer<br/>+- sink-market-values-by-symbol: Writer<br/>   +- sink-market-values-by-symbol: Committer<br/>",
+      [
+       "BROADCAST",
+       "HASH"
+      ]
+     ]
+    ],
+    "maxParallelism": [
+     128
+    ],
+    "plan": {
+     "jid": "4398f457205a9db7330d9ae43549781f",
+     "name": "st52 positions and market values",
+     "type": "STREAMING",
+     "nodes": [
+      {
+       "id": "36d4643082db3c452764d1522f499c91",
+       "parallelism": 1,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "position-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>:  +- sink-positions-by-symbol: Committer<br/>+- sink-market-values-by-symbol: Writer<br/>   +- sink-market-values-by-symbol: Committer<br/>",
+       "inputs": [
+        {
+         "num": 0,
+         "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+         "ship_strategy": "HASH",
+         "exchange": "pipelined_bounded"
+        },
+        {
+         "num": 1,
+         "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+         "ship_strategy": "BROADCAST",
+         "exchange": "pipelined_bounded"
+        }
+       ],
+       "optimizer_properties": {}
+      },
+      {
+       "id": "2ec4b66bbb4aec4aa40e69c0fa20a9fc",
+       "parallelism": 1,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "position-by-account<br/>:- sink-positions-by-account: Writer<br/>:  +- sink-positions-by-account: Committer<br/>+- sink-market-values-by-account: Writer<br/>   +- sink-market-values-by-account: Committer<br/>",
+       "inputs": [
+        {
+         "num": 0,
+         "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+         "ship_strategy": "HASH",
+         "exchange": "pipelined_bounded"
+        },
+        {
+         "num": 1,
+         "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+         "ship_strategy": "BROADCAST",
+         "exchange": "pipelined_bounded"
+        }
+       ],
+       "optimizer_properties": {}
+      },
+      {
+       "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+       "parallelism": 1,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "Source: orders-source<br/>+- parse-orders<br/>",
+       "optimizer_properties": {}
+      },
+      {
+       "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+       "parallelism": 1,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "Source: prices-source<br/>+- parse-prices<br/>",
+       "optimizer_properties": {}
+      }
+     ]
+    }
+   },
+   "warmup": {
+    "rates": [
+     125309.43872188355,
+     125381.7891373802,
+     131140.63124250897,
+     129145.9497206704
+    ],
+    "mean": 127744.45220561078,
+    "drift": 0.0406,
+    "scatter": 0.0456,
+    "warmupS": 90.1,
+    "rampFlatAtS": 81.4,
+    "rampFloorS": 90.0,
+    "rampWaitedExtraS": 8.7,
+    "rampFlatAtRates": [
+     125309.4,
+     125381.8,
+     131140.6,
+     129145.9
+    ]
+   },
+   "tSteady": 1790822190.389684,
+   "tOpen": 1790822193.4934652,
+   "open": {
+    "ts": 1790822191211,
+    "committed": 9809014,
+    "committedParts": [
+     1240512,
+     1246564,
+     1245942,
+     1209044,
+     1211596,
+     1203838,
+     1224425,
+     1227093
+    ],
+    "endIn": 200000000,
+    "end_positions-by-symbol": 9778151,
+    "end_positions-by-account": 39114683
+   },
+   "hostLoadOpen": 3.18,
+   "hostCores": 8,
+   "hostSwapOpenMB": 1370.3,
+   "brokerLimitHits": 2537,
+   "brokerRefaults": 80466,
+   "brokerFileCacheBytes": 3207380992,
+   "brokerLimitBytes": 4563402752,
+   "tClose": 1790822253.849736,
+   "close": {
+    "ts": 1790822251373,
+    "committed": 17450667,
+    "committedParts": [
+     2188453,
+     2200107,
+     2196782,
+     2181611,
+     2156346,
+     2158340,
+     2192663,
+     2176365
+    ],
+    "endIn": 200000000,
+    "end_positions-by-symbol": 17416093,
+    "end_positions-by-account": 69656385
+   },
+   "hostLoadClose": 4.2,
+   "hostSwapCloseMB": 1370.3,
+   "boundaries": 6,
+   "gcNames": [
+    "All",
+    "G1 Old Generation",
+    "G1 Young Generation"
+   ],
+   "elapsedS": 60.16,
+   "recordsConsumed": 7641653,
+   "rateSource": "kafka committed offsets on orders",
+   "recordsPerSec": 127017.9,
+   "outputRecsPerSec": 631914.2,
+   "vantageSource": "sink rows / 4.975 outputs per input",
+   "vantageSinkRecords": 7674300.3,
+   "vantageDisagreement": 0.0043,
+   "backlogRemaining": 182549333,
+   "headroomS": 1437.2,
+   "tmCores": 1.003,
+   "tmCapFrac": 1.0033,
+   "tmThrottledPeriodsPct": 100.0,
+   "kafkaCores": 0.135,
+   "kafkaCap": 2.5,
+   "kafkaCapFrac": 0.0541,
+   "gcMsInWindow": 1694.0,
+   "gcFracOfCapacity": 0.0282,
+   "sourceIdle": 0.0,
+   "sourceBusy": 0.6623,
+   "sourceBackpressured": 0.3377,
+   "bpSamples": 6,
+   "backpressure": {
+    "Source: orders-source -> parse-orders": {
+     "busy": 0.6623,
+     "idle": 0.0,
+     "backPressured": 0.3377,
+     "samples": 6
+    },
+    "Source: prices-source -> parse-prices": {
+     "idle": 1.0,
+     "busy": 0.0,
+     "backPressured": 0.0,
+     "samples": 6
+    },
+    "position-by-account -> (sink-positions-by-account: Writer -> sink-positions-by-account: Committer, sink-market-values-by-account: Writer -> sink-market-values-by-account: Committer)": {
+     "busy": 0.8978,
+     "backPressured": 0.0,
+     "idle": 0.1022,
+     "samples": 6
+    },
+    "position-by-symbol -> (sink-positions-by-symbol: Writer -> sink-positions-by-symbol: Committer, sink-market-values-by-symbol: Writer -> sink-market-values-by-symbol: Committer)": {
+     "backPressured": 0.0,
+     "idle": 0.8105,
+     "busy": 0.1895,
+     "samples": 6
+    },
+    "_gcNames": [
+     "All",
+     "G1 Old Generation",
+     "G1 Young Generation"
+    ]
+   },
+   "status": "OK"
+  },
+  {
+   "cores": 1,
+   "pass": "p3-asc",
+   "group": "st52-09302213-c1-p3-asc",
+   "hostFreeGB": 121.2,
+   "nanoCpus": 1000000000,
+   "reporterS": 10,
+   "parallelism": 1,
+   "slotsTotal": 1,
+   "tSubmit": 1790822306.9077172,
+   "jobId": "6cb6f0b170aee8186b7b2e397ea83ffa",
+   "shape": {
+    "vertexCount": 4,
+    "signature": [
+     [
+      "Source: orders-source<br/>+- parse-orders<br/>",
+      []
+     ],
+     [
+      "Source: prices-source<br/>+- parse-prices<br/>",
+      []
+     ],
+     [
+      "position-by-account<br/>:- sink-positions-by-account: Writer<br/>:  +- sink-positions-by-account: Committer<br/>+- sink-market-values-by-account: Writer<br/>   +- sink-market-values-by-account: Committer<br/>",
+      [
+       "BROADCAST",
+       "HASH"
+      ]
+     ],
+     [
+      "position-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>:  +- sink-positions-by-symbol: Committer<br/>+- sink-market-values-by-symbol: Writer<br/>   +- sink-market-values-by-symbol: Committer<br/>",
+      [
+       "BROADCAST",
+       "HASH"
+      ]
+     ]
+    ],
+    "maxParallelism": [
+     128
+    ],
+    "plan": {
+     "jid": "6cb6f0b170aee8186b7b2e397ea83ffa",
+     "name": "st52 positions and market values",
+     "type": "STREAMING",
+     "nodes": [
+      {
+       "id": "36d4643082db3c452764d1522f499c91",
+       "parallelism": 1,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "position-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>:  +- sink-positions-by-symbol: Committer<br/>+- sink-market-values-by-symbol: Writer<br/>   +- sink-market-values-by-symbol: Committer<br/>",
+       "inputs": [
+        {
+         "num": 0,
+         "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+         "ship_strategy": "HASH",
+         "exchange": "pipelined_bounded"
+        },
+        {
+         "num": 1,
+         "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+         "ship_strategy": "BROADCAST",
+         "exchange": "pipelined_bounded"
+        }
+       ],
+       "optimizer_properties": {}
+      },
+      {
+       "id": "2ec4b66bbb4aec4aa40e69c0fa20a9fc",
+       "parallelism": 1,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "position-by-account<br/>:- sink-positions-by-account: Writer<br/>:  +- sink-positions-by-account: Committer<br/>+- sink-market-values-by-account: Writer<br/>   +- sink-market-values-by-account: Committer<br/>",
+       "inputs": [
+        {
+         "num": 0,
+         "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+         "ship_strategy": "HASH",
+         "exchange": "pipelined_bounded"
+        },
+        {
+         "num": 1,
+         "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+         "ship_strategy": "BROADCAST",
+         "exchange": "pipelined_bounded"
+        }
+       ],
+       "optimizer_properties": {}
+      },
+      {
+       "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+       "parallelism": 1,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "Source: orders-source<br/>+- parse-orders<br/>",
+       "optimizer_properties": {}
+      },
+      {
+       "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+       "parallelism": 1,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "Source: prices-source<br/>+- parse-prices<br/>",
+       "optimizer_properties": {}
+      }
+     ]
+    }
+   },
+   "warmup": {
+    "rates": [
+     114961.99122106945,
+     130798.61257094808,
+     126089.10232027387,
+     130058.28703218367
+    ],
+    "mean": 125476.99828611876,
+    "drift": 0.097,
+    "scatter": 0.1262,
+    "warmupS": 90.3,
+    "rampFlatAtS": 81.0,
+    "rampFloorS": 90.0,
+    "rampWaitedExtraS": 9.3,
+    "rampFlatAtRates": [
+     114962.0,
+     130798.6,
+     126089.1,
+     130058.3
+    ]
+   },
+   "tSteady": 1790822409.671689,
+   "tOpen": 1790822412.197084,
+   "open": {
+    "ts": 1790822410076,
+    "committed": 9903252,
+    "committedParts": [
+     1254768,
+     1253242,
+     1246606,
+     1223416,
+     1227310,
+     1218189,
+     1239573,
+     1240148
+    ],
+    "endIn": 200000000,
+    "end_positions-by-symbol": 9863552,
+    "end_positions-by-account": 39449810
+   },
+   "hostLoadOpen": 2.84,
+   "hostCores": 8,
+   "hostSwapOpenMB": 1362.3,
+   "brokerLimitHits": 2502,
+   "brokerRefaults": 82082,
+   "brokerFileCacheBytes": 3208572928,
+   "brokerLimitBytes": 4563402752,
+   "tClose": 1790822472.542327,
+   "close": {
+    "ts": 1790822470207,
+    "committed": 17786472,
+    "committedParts": [
+     2231208,
+     2240440,
+     2243380,
+     2216121,
+     2198980,
+     2201382,
+     2236059,
+     2218902
+    ],
+    "endIn": 200000000,
+    "end_positions-by-symbol": 17729551,
+    "end_positions-by-account": 70915038
+   },
+   "hostLoadClose": 2.87,
+   "hostSwapCloseMB": 1362.3,
+   "boundaries": 6,
+   "gcNames": [
+    "All",
+    "G1 Old Generation",
+    "G1 Young Generation"
+   ],
+   "elapsedS": 60.13,
+   "recordsConsumed": 7883220,
+   "rateSource": "kafka committed offsets on orders",
+   "recordsPerSec": 131100.8,
+   "outputRecsPerSec": 652226.3,
+   "vantageSource": "sink rows / 4.975 outputs per input",
+   "vantageSinkRecords": 7905774.3,
+   "vantageDisagreement": 0.0029,
+   "backlogRemaining": 182213528,
+   "headroomS": 1389.9,
+   "tmCores": 1.002,
+   "tmCapFrac": 1.0023,
+   "tmThrottledPeriodsPct": 100.0,
+   "kafkaCores": 0.128,
+   "kafkaCap": 2.5,
+   "kafkaCapFrac": 0.0512,
+   "gcMsInWindow": 1418.0,
+   "gcFracOfCapacity": 0.0236,
+   "sourceIdle": 0.0,
+   "sourceBusy": 0.6473,
+   "sourceBackpressured": 0.3527,
+   "bpSamples": 6,
+   "backpressure": {
+    "position-by-account -> (sink-positions-by-account: Writer -> sink-positions-by-account: Committer, sink-market-values-by-account: Writer -> sink-market-values-by-account: Committer)": {
+     "idle": 0.0882,
+     "busy": 0.9118,
+     "backPressured": 0.0,
+     "samples": 6
+    },
+    "Source: prices-source -> parse-prices": {
+     "idle": 1.0,
+     "busy": 0.0,
+     "backPressured": 0.0,
+     "samples": 6
+    },
+    "position-by-symbol -> (sink-positions-by-symbol: Writer -> sink-positions-by-symbol: Committer, sink-market-values-by-symbol: Writer -> sink-market-values-by-symbol: Committer)": {
+     "busy": 0.1977,
+     "idle": 0.8023,
+     "backPressured": 0.0,
+     "samples": 6
+    },
+    "Source: orders-source -> parse-orders": {
+     "idle": 0.0,
+     "backPressured": 0.3527,
+     "busy": 0.6473,
+     "samples": 6
+    },
+    "_gcNames": [
+     "All",
+     "G1 Old Generation",
+     "G1 Young Generation"
+    ]
+   },
+   "status": "OK"
+  },
+  {
+   "cores": 2,
+   "pass": "p3-asc",
+   "group": "st52-09302213-c2-p3-asc",
+   "hostFreeGB": 121.2,
+   "nanoCpus": 2000000000,
+   "reporterS": 10,
+   "parallelism": 2,
+   "slotsTotal": 2,
+   "tSubmit": 1790822548.442035,
+   "jobId": "e5ca7f65c178930bb91180bc0f411606",
+   "shape": {
+    "vertexCount": 4,
+    "signature": [
+     [
+      "Source: orders-source<br/>+- parse-orders<br/>",
+      []
+     ],
+     [
+      "Source: prices-source<br/>+- parse-prices<br/>",
+      []
+     ],
+     [
+      "position-by-account<br/>:- sink-positions-by-account: Writer<br/>:  +- sink-positions-by-account: Committer<br/>+- sink-market-values-by-account: Writer<br/>   +- sink-market-values-by-account: Committer<br/>",
+      [
+       "BROADCAST",
+       "HASH"
+      ]
+     ],
+     [
+      "position-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>:  +- sink-positions-by-symbol: Committer<br/>+- sink-market-values-by-symbol: Writer<br/>   +- sink-market-values-by-symbol: Committer<br/>",
+      [
+       "BROADCAST",
+       "HASH"
+      ]
+     ]
+    ],
+    "maxParallelism": [
+     128
+    ],
+    "plan": {
+     "jid": "e5ca7f65c178930bb91180bc0f411606",
+     "name": "st52 positions and market values",
+     "type": "STREAMING",
+     "nodes": [
+      {
+       "id": "36d4643082db3c452764d1522f499c91",
+       "parallelism": 2,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "position-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>:  +- sink-positions-by-symbol: Committer<br/>+- sink-market-values-by-symbol: Writer<br/>   +- sink-market-values-by-symbol: Committer<br/>",
+       "inputs": [
+        {
+         "num": 0,
+         "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+         "ship_strategy": "HASH",
+         "exchange": "pipelined_bounded"
+        },
+        {
+         "num": 1,
+         "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+         "ship_strategy": "BROADCAST",
+         "exchange": "pipelined_bounded"
+        }
+       ],
+       "optimizer_properties": {}
+      },
+      {
+       "id": "2ec4b66bbb4aec4aa40e69c0fa20a9fc",
+       "parallelism": 2,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "position-by-account<br/>:- sink-positions-by-account: Writer<br/>:  +- sink-positions-by-account: Committer<br/>+- sink-market-values-by-account: Writer<br/>   +- sink-market-values-by-account: Committer<br/>",
+       "inputs": [
+        {
+         "num": 0,
+         "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+         "ship_strategy": "HASH",
+         "exchange": "pipelined_bounded"
+        },
+        {
+         "num": 1,
+         "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+         "ship_strategy": "BROADCAST",
+         "exchange": "pipelined_bounded"
+        }
+       ],
+       "optimizer_properties": {}
+      },
+      {
+       "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+       "parallelism": 2,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "Source: orders-source<br/>+- parse-orders<br/>",
+       "optimizer_properties": {}
+      },
+      {
+       "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+       "parallelism": 2,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "Source: prices-source<br/>+- parse-prices<br/>",
+       "optimizer_properties": {}
+      }
+     ]
+    }
+   },
+   "warmup": {
+    "rates": [
+     237238.99371069184,
+     232335.2923597968,
+     243636.92553085435,
+     234040.52300628804
+    ],
+    "mean": 236812.93365190775,
+    "drift": 0.0022,
+    "scatter": 0.0477,
+    "warmupS": 90.2,
+    "rampFlatAtS": 62.7,
+    "rampFloorS": 90.0,
+    "rampWaitedExtraS": 27.5,
+    "rampFlatAtRates": [
+     209892.5,
+     235792.5,
+     237239.0,
+     232335.3
+    ]
+   },
+   "tSteady": 1790822651.4705229,
+   "tOpen": 1790822656.112063,
+   "open": {
+    "ts": 1790822653577,
+    "committed": 19349161,
+    "committedParts": [
+     2421649,
+     2432791,
+     2426335,
+     2411468,
+     2402676,
+     2407477,
+     2434553,
+     2412212
+    ],
+    "endIn": 200000000,
+    "end_positions-by-symbol": 19315079,
+    "end_positions-by-account": 77266451
+   },
+   "hostLoadOpen": 4.28,
+   "hostCores": 8,
+   "hostSwapOpenMB": 1362.3,
+   "brokerLimitHits": 5762,
+   "brokerRefaults": 199149,
+   "brokerFileCacheBytes": 3203260416,
+   "brokerLimitBytes": 4563402752,
+   "tClose": 1790822716.084408,
+   "close": {
+    "ts": 1790822713741,
+    "committed": 34620485,
+    "committedParts": [
+     4326422,
+     4347127,
+     4354248,
+     4312742,
+     4284383,
+     4326071,
+     4361107,
+     4308385
+    ],
+    "endIn": 200000000,
+    "end_positions-by-symbol": 34509519,
+    "end_positions-by-account": 138030368
+   },
+   "hostLoadClose": 4.57,
+   "hostSwapCloseMB": 1362.3,
+   "boundaries": 6,
+   "gcNames": [
+    "All",
+    "G1 Old Generation",
+    "G1 Young Generation"
+   ],
+   "elapsedS": 60.16,
+   "recordsConsumed": 15271324,
+   "rateSource": "kafka committed offsets on orders",
+   "recordsPerSec": 253828.3,
+   "outputRecsPerSec": 1262795.6,
+   "vantageSource": "sink rows / 4.975 outputs per input",
+   "vantageSinkRecords": 15268011.5,
+   "vantageDisagreement": 0.0002,
+   "backlogRemaining": 165379515,
+   "headroomS": 651.5,
+   "tmCores": 1.997,
+   "tmCapFrac": 0.9986,
+   "tmThrottledPeriodsPct": 100.0,
+   "kafkaCores": 0.253,
+   "kafkaCap": 2.5,
+   "kafkaCapFrac": 0.1013,
+   "gcMsInWindow": 1472.0,
+   "gcFracOfCapacity": 0.0122,
+   "sourceIdle": 0.0073,
+   "sourceBusy": 0.7115,
+   "sourceBackpressured": 0.2812,
+   "bpSamples": 10,
+   "backpressure": {
+    "position-by-symbol -> (sink-positions-by-symbol: Writer -> sink-positions-by-symbol: Committer, sink-market-values-by-symbol: Writer -> sink-market-values-by-symbol: Committer)": {
+     "idle": 0.7214,
+     "backPressured": 0.0,
+     "busy": 0.2786,
+     "samples": 10
+    },
+    "position-by-account -> (sink-positions-by-account: Writer -> sink-positions-by-account: Committer, sink-market-values-by-account: Writer -> sink-market-values-by-account: Committer)": {
+     "busy": 0.8974,
+     "idle": 0.1026,
+     "backPressured": 0.0,
+     "samples": 10
+    },
+    "Source: orders-source -> parse-orders": {
+     "backPressured": 0.2812,
+     "busy": 0.7115,
+     "idle": 0.0073,
+     "samples": 10
+    },
+    "Source: prices-source -> parse-prices": {
+     "busy": 0.0,
+     "backPressured": 0.0,
+     "idle": 1.0,
+     "samples": 10
+    },
+    "_gcNames": [
+     "All",
+     "G1 Old Generation",
+     "G1 Young Generation"
+    ]
+   },
+   "status": "OK"
+  },
+  {
+   "cores": 4,
+   "pass": "p3-asc",
+   "group": "st52-09302213-c4-p3-asc",
+   "hostFreeGB": 118.2,
+   "nanoCpus": 4000000000,
+   "reporterS": 10,
+   "parallelism": 4,
+   "slotsTotal": 4,
+   "tSubmit": 1790822794.820597,
+   "jobId": "d3c7dbd958cbc1d3156e4633affce0c6",
+   "shape": {
+    "vertexCount": 4,
+    "signature": [
+     [
+      "Source: orders-source<br/>+- parse-orders<br/>",
+      []
+     ],
+     [
+      "Source: prices-source<br/>+- parse-prices<br/>",
+      []
+     ],
+     [
+      "position-by-account<br/>:- sink-positions-by-account: Writer<br/>:  +- sink-positions-by-account: Committer<br/>+- sink-market-values-by-account: Writer<br/>   +- sink-market-values-by-account: Committer<br/>",
+      [
+       "BROADCAST",
+       "HASH"
+      ]
+     ],
+     [
+      "position-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>:  +- sink-positions-by-symbol: Committer<br/>+- sink-market-values-by-symbol: Writer<br/>   +- sink-market-values-by-symbol: Committer<br/>",
+      [
+       "BROADCAST",
+       "HASH"
+      ]
+     ]
+    ],
+    "maxParallelism": [
+     128
+    ],
+    "plan": {
+     "jid": "d3c7dbd958cbc1d3156e4633affce0c6",
+     "name": "st52 positions and market values",
+     "type": "STREAMING",
+     "nodes": [
+      {
+       "id": "36d4643082db3c452764d1522f499c91",
+       "parallelism": 4,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "position-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>:  +- sink-positions-by-symbol: Committer<br/>+- sink-market-values-by-symbol: Writer<br/>   +- sink-market-values-by-symbol: Committer<br/>",
+       "inputs": [
+        {
+         "num": 0,
+         "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+         "ship_strategy": "HASH",
+         "exchange": "pipelined_bounded"
+        },
+        {
+         "num": 1,
+         "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+         "ship_strategy": "BROADCAST",
+         "exchange": "pipelined_bounded"
+        }
+       ],
+       "optimizer_properties": {}
+      },
+      {
+       "id": "2ec4b66bbb4aec4aa40e69c0fa20a9fc",
+       "parallelism": 4,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "position-by-account<br/>:- sink-positions-by-account: Writer<br/>:  +- sink-positions-by-account: Committer<br/>+- sink-market-values-by-account: Writer<br/>   +- sink-market-values-by-account: Committer<br/>",
+       "inputs": [
+        {
+         "num": 0,
+         "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+         "ship_strategy": "HASH",
+         "exchange": "pipelined_bounded"
+        },
+        {
+         "num": 1,
+         "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+         "ship_strategy": "BROADCAST",
+         "exchange": "pipelined_bounded"
+        }
+       ],
+       "optimizer_properties": {}
+      },
+      {
+       "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+       "parallelism": 4,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "Source: orders-source<br/>+- parse-orders<br/>",
+       "optimizer_properties": {}
+      },
+      {
+       "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+       "parallelism": 4,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "Source: prices-source<br/>+- parse-prices<br/>",
+       "optimizer_properties": {}
+      }
+     ]
+    }
+   },
+   "warmup": {
+    "rates": [
+     453546.82207611075,
+     463790.0569032645,
+     444223.9018824871,
+     488055.497162077
+    ],
+    "mean": 462404.06950598484,
+    "drift": 0.0545,
+    "scatter": 0.0948,
+    "warmupS": 90.5,
+    "rampFlatAtS": 72.5,
+    "rampFloorS": 90.0,
+    "rampWaitedExtraS": 18.0,
+    "rampFlatAtRates": [
+     468450.6,
+     453546.8,
+     463790.1,
+     444223.9
+    ]
+   },
+   "tSteady": 1790822898.3171608,
+   "tOpen": 1790822901.873476,
+   "open": {
+    "ts": 1790822899443,
+    "committed": 38880013,
+    "committedParts": [
+     4862998,
+     4870703,
+     4866766,
+     4854840,
+     4844675,
+     4857818,
+     4869405,
+     4852808
+    ],
+    "endIn": 200000000,
+    "end_positions-by-symbol": 38807671,
+    "end_positions-by-account": 155227754
+   },
+   "hostLoadOpen": 7.58,
+   "hostCores": 8,
+   "hostSwapOpenMB": 1377.4,
+   "brokerLimitHits": 0,
+   "brokerRefaults": 389452,
+   "brokerFileCacheBytes": 3033645056,
+   "brokerLimitBytes": 4563402752,
+   "tClose": 1790822961.901472,
+   "close": {
+    "ts": 1790822959581,
+    "committed": 66866943,
+    "committedParts": [
+     8366065,
+     8370745,
+     8351329,
+     8356178,
+     8323965,
+     8379263,
+     8374707,
+     8344691
+    ],
+    "endIn": 200000000,
+    "end_positions-by-symbol": 66726589,
+    "end_positions-by-account": 266930692
+   },
+   "hostLoadClose": 7.6,
+   "hostSwapCloseMB": 1377.4,
+   "boundaries": 6,
+   "gcNames": [
+    "All",
+    "G1 Old Generation",
+    "G1 Young Generation"
+   ],
+   "elapsedS": 60.14,
+   "recordsConsumed": 27986930,
+   "rateSource": "kafka committed offsets on orders",
+   "recordsPerSec": 465378.5,
+   "outputRecsPerSec": 2315257.9,
+   "vantageSource": "sink rows / 4.975 outputs per input",
+   "vantageSinkRecords": 28064694.7,
+   "vantageDisagreement": 0.0028,
+   "backlogRemaining": 133133057,
+   "headroomS": 286.1,
+   "tmCores": 3.991,
+   "tmCapFrac": 0.9978,
+   "tmThrottledPeriodsPct": 99.7,
+   "kafkaCores": 0.485,
+   "kafkaCap": 2.5,
+   "kafkaCapFrac": 0.194,
+   "gcMsInWindow": 1768.0,
+   "gcFracOfCapacity": 0.0073,
+   "sourceIdle": 0.0129,
+   "sourceBusy": 0.7826,
+   "sourceBackpressured": 0.2045,
+   "bpSamples": 24,
+   "backpressure": {
+    "Source: orders-source -> parse-orders": {
+     "backPressured": 0.2045,
+     "busy": 0.7826,
+     "idle": 0.0129,
+     "samples": 24
+    },
+    "position-by-account -> (sink-positions-by-account: Writer -> sink-positions-by-account: Committer, sink-market-values-by-account: Writer -> sink-market-values-by-account: Committer)": {
+     "busy": 0.9507,
+     "backPressured": 0.0,
+     "idle": 0.0493,
+     "samples": 24
+    },
+    "Source: prices-source -> parse-prices": {
+     "busy": 0.0,
+     "idle": 1.0,
+     "backPressured": 0.0,
+     "samples": 24
+    },
+    "position-by-symbol -> (sink-positions-by-symbol: Writer -> sink-positions-by-symbol: Committer, sink-market-values-by-symbol: Writer -> sink-market-values-by-symbol: Committer)": {
+     "idle": 0.6025,
+     "backPressured": 0.0,
+     "busy": 0.3975,
+     "samples": 24
+    },
+    "_gcNames": [
+     "All",
+     "G1 Old Generation",
+     "G1 Young Generation"
+    ]
+   },
+   "status": "OK"
+  },
+  {
+   "cores": 1,
+   "pass": "sentinel",
+   "group": "st52-09302213-c1-sentinel",
+   "hostFreeGB": 112.4,
+   "nanoCpus": 1000000000,
+   "reporterS": 10,
+   "parallelism": 1,
+   "slotsTotal": 1,
+   "tSubmit": 1790823017.1413,
+   "jobId": "b7048d61ae173567e6a041468954a0bc",
+   "shape": {
+    "vertexCount": 4,
+    "signature": [
+     [
+      "Source: orders-source<br/>+- parse-orders<br/>",
+      []
+     ],
+     [
+      "Source: prices-source<br/>+- parse-prices<br/>",
+      []
+     ],
+     [
+      "position-by-account<br/>:- sink-positions-by-account: Writer<br/>:  +- sink-positions-by-account: Committer<br/>+- sink-market-values-by-account: Writer<br/>   +- sink-market-values-by-account: Committer<br/>",
+      [
+       "BROADCAST",
+       "HASH"
+      ]
+     ],
+     [
+      "position-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>:  +- sink-positions-by-symbol: Committer<br/>+- sink-market-values-by-symbol: Writer<br/>   +- sink-market-values-by-symbol: Committer<br/>",
+      [
+       "BROADCAST",
+       "HASH"
+      ]
+     ]
+    ],
+    "maxParallelism": [
+     128
+    ],
+    "plan": {
+     "jid": "b7048d61ae173567e6a041468954a0bc",
+     "name": "st52 positions and market values",
+     "type": "STREAMING",
+     "nodes": [
+      {
+       "id": "36d4643082db3c452764d1522f499c91",
+       "parallelism": 1,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "position-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>:  +- sink-positions-by-symbol: Committer<br/>+- sink-market-values-by-symbol: Writer<br/>   +- sink-market-values-by-symbol: Committer<br/>",
+       "inputs": [
+        {
+         "num": 0,
+         "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+         "ship_strategy": "HASH",
+         "exchange": "pipelined_bounded"
+        },
+        {
+         "num": 1,
+         "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+         "ship_strategy": "BROADCAST",
+         "exchange": "pipelined_bounded"
+        }
+       ],
+       "optimizer_properties": {}
+      },
+      {
+       "id": "2ec4b66bbb4aec4aa40e69c0fa20a9fc",
+       "parallelism": 1,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "position-by-account<br/>:- sink-positions-by-account: Writer<br/>:  +- sink-positions-by-account: Committer<br/>+- sink-market-values-by-account: Writer<br/>   +- sink-market-values-by-account: Committer<br/>",
+       "inputs": [
+        {
+         "num": 0,
+         "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+         "ship_strategy": "HASH",
+         "exchange": "pipelined_bounded"
+        },
+        {
+         "num": 1,
+         "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+         "ship_strategy": "BROADCAST",
+         "exchange": "pipelined_bounded"
+        }
+       ],
+       "optimizer_properties": {}
+      },
+      {
+       "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+       "parallelism": 1,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "Source: orders-source<br/>+- parse-orders<br/>",
+       "optimizer_properties": {}
+      },
+      {
+       "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+       "parallelism": 1,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "Source: prices-source<br/>+- parse-prices<br/>",
+       "optimizer_properties": {}
+      }
+     ]
+    }
+   },
+   "warmup": {
+    "rates": [
+     119821.65985852346,
+     115228.17322050771,
+     116374.18904082244,
+     123391.9768486179
+    ],
+    "mean": 118703.99974211789,
+    "drift": 0.03,
+    "scatter": 0.0688,
+    "warmupS": 90.5,
+    "rampFlatAtS": 63.0,
+    "rampFloorS": 90.0,
+    "rampWaitedExtraS": 27.5,
+    "rampFlatAtRates": [
+     105795.6,
+     125201.6,
+     119821.7,
+     115228.2
+    ]
+   },
+   "tSteady": 1790823120.336404,
+   "tOpen": 1790823125.165298,
+   "open": {
+    "ts": 1790823122827,
+    "committed": 9732730,
+    "committedParts": [
+     1227089,
+     1234063,
+     1231944,
+     1209044,
+     1211596,
+     1197688,
+     1209840,
+     1211466
+    ],
+    "endIn": 200000000,
+    "end_positions-by-symbol": 9719170,
+    "end_positions-by-account": 38872092
+   },
+   "hostLoadOpen": 5.35,
+   "hostCores": 8,
+   "hostSwapOpenMB": 1377.4,
+   "brokerLimitHits": 3240,
+   "brokerRefaults": 94438,
+   "brokerFileCacheBytes": 3210878976,
+   "brokerLimitBytes": 4563402752,
+   "tClose": 1790823195.3672261,
+   "close": {
+    "ts": 1790823192991,
+    "committed": 18951926,
+    "committedParts": [
+     2363999,
+     2379395,
+     2375138,
+     2361687,
+     2352600,
+     2359261,
+     2394006,
+     2365840
+    ],
+    "endIn": 200000000,
+    "end_positions-by-symbol": 18931738,
+    "end_positions-by-account": 75708456
+   },
+   "hostLoadClose": 3.89,
+   "hostSwapCloseMB": 1369.4,
+   "boundaries": 7,
+   "gcNames": [
+    "All",
+    "G1 Old Generation",
+    "G1 Young Generation"
+   ],
+   "elapsedS": 70.16,
+   "recordsConsumed": 9219196,
+   "rateSource": "kafka committed offsets on orders",
+   "recordsPerSec": 131395.0,
+   "outputRecsPerSec": 653689.9,
+   "vantageSource": "sink rows / 4.975 outputs per input",
+   "vantageSinkRecords": 9256066.7,
+   "vantageDisagreement": 0.004,
+   "backlogRemaining": 181048074,
+   "headroomS": 1377.9,
+   "tmCores": 1.0,
+   "tmCapFrac": 1.0,
+   "tmThrottledPeriodsPct": 100.0,
+   "kafkaCores": 0.134,
+   "kafkaCap": 2.5,
+   "kafkaCapFrac": 0.0535,
+   "gcMsInWindow": 1766.0,
+   "gcFracOfCapacity": 0.0252,
+   "sourceIdle": 0.0,
+   "sourceBusy": 0.6601,
+   "sourceBackpressured": 0.3399,
+   "bpSamples": 7,
+   "backpressure": {
+    "Source: orders-source -> parse-orders": {
+     "busy": 0.6601,
+     "idle": 0.0,
+     "backPressured": 0.3399,
+     "samples": 7
+    },
+    "position-by-account -> (sink-positions-by-account: Writer -> sink-positions-by-account: Committer, sink-market-values-by-account: Writer -> sink-market-values-by-account: Committer)": {
+     "idle": 0.0999,
+     "backPressured": 0.0,
+     "busy": 0.9001,
+     "samples": 7
+    },
+    "position-by-symbol -> (sink-positions-by-symbol: Writer -> sink-positions-by-symbol: Committer, sink-market-values-by-symbol: Writer -> sink-market-values-by-symbol: Committer)": {
+     "backPressured": 0.0,
+     "idle": 0.793,
+     "busy": 0.207,
+     "samples": 7
+    },
+    "Source: prices-source -> parse-prices": {
+     "backPressured": 0.0,
+     "busy": 0.001,
+     "idle": 0.999,
+     "samples": 7
+    },
+    "_gcNames": [
+     "All",
+     "G1 Old Generation",
+     "G1 Young Generation"
+    ]
+   },
+   "status": "OK"
+  },
+  {
+   "cores": 2,
+   "pass": "settle-1",
+   "group": "st52-09302213-c2-settle-1",
+   "hostFreeGB": 120.9,
+   "nanoCpus": 2000000000,
+   "reporterS": 10,
+   "parallelism": 2,
+   "slotsTotal": 2,
+   "tSubmit": 1790823274.301773,
+   "jobId": "30c3d5075feb27753281b47eb5284d42",
+   "shape": {
+    "vertexCount": 4,
+    "signature": [
+     [
+      "Source: orders-source<br/>+- parse-orders<br/>",
+      []
+     ],
+     [
+      "Source: prices-source<br/>+- parse-prices<br/>",
+      []
+     ],
+     [
+      "position-by-account<br/>:- sink-positions-by-account: Writer<br/>:  +- sink-positions-by-account: Committer<br/>+- sink-market-values-by-account: Writer<br/>   +- sink-market-values-by-account: Committer<br/>",
+      [
+       "BROADCAST",
+       "HASH"
+      ]
+     ],
+     [
+      "position-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>:  +- sink-positions-by-symbol: Committer<br/>+- sink-market-values-by-symbol: Writer<br/>   +- sink-market-values-by-symbol: Committer<br/>",
+      [
+       "BROADCAST",
+       "HASH"
+      ]
+     ]
+    ],
+    "maxParallelism": [
+     128
+    ],
+    "plan": {
+     "jid": "30c3d5075feb27753281b47eb5284d42",
+     "name": "st52 positions and market values",
+     "type": "STREAMING",
+     "nodes": [
+      {
+       "id": "36d4643082db3c452764d1522f499c91",
+       "parallelism": 2,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "position-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>:  +- sink-positions-by-symbol: Committer<br/>+- sink-market-values-by-symbol: Writer<br/>   +- sink-market-values-by-symbol: Committer<br/>",
+       "inputs": [
+        {
+         "num": 0,
+         "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+         "ship_strategy": "HASH",
+         "exchange": "pipelined_bounded"
+        },
+        {
+         "num": 1,
+         "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+         "ship_strategy": "BROADCAST",
+         "exchange": "pipelined_bounded"
+        }
+       ],
+       "optimizer_properties": {}
+      },
+      {
+       "id": "2ec4b66bbb4aec4aa40e69c0fa20a9fc",
+       "parallelism": 2,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "position-by-account<br/>:- sink-positions-by-account: Writer<br/>:  +- sink-positions-by-account: Committer<br/>+- sink-market-values-by-account: Writer<br/>   +- sink-market-values-by-account: Committer<br/>",
+       "inputs": [
+        {
+         "num": 0,
+         "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+         "ship_strategy": "HASH",
+         "exchange": "pipelined_bounded"
+        },
+        {
+         "num": 1,
+         "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+         "ship_strategy": "BROADCAST",
+         "exchange": "pipelined_bounded"
+        }
+       ],
+       "optimizer_properties": {}
+      },
+      {
+       "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+       "parallelism": 2,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "Source: orders-source<br/>+- parse-orders<br/>",
+       "optimizer_properties": {}
+      },
+      {
+       "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+       "parallelism": 2,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "Source: prices-source<br/>+- parse-prices<br/>",
+       "optimizer_properties": {}
+      }
+     ]
+    }
+   },
+   "warmup": {
+    "rates": [
+     249512.4775404272,
+     256058.87048493314,
+     249844.84304932735,
+     249473.36923997608
+    ],
+    "mean": 251222.39007866595,
+    "drift": 0.0076,
+    "scatter": 0.0262,
+    "warmupS": 90.4,
+    "rampFlatAtS": 59.1,
+    "rampFloorS": 90.0,
+    "rampWaitedExtraS": 31.3,
+    "rampFlatAtRates": [
+     243449.3,
+     224051.9,
+     234632.0,
+     249512.5
+    ]
+   },
+   "tSteady": 1790823377.1840708,
+   "tOpen": 1790823379.4872692,
+   "open": {
+    "ts": 1790823375959,
+    "committed": 19508857,
+    "committedParts": [
+     2436768,
+     2453699,
+     2439935,
+     2425186,
+     2424130,
+     2427408,
+     2462794,
+     2438937
+    ],
+    "endIn": 200000000,
+    "end_positions-by-symbol": 19472071,
+    "end_positions-by-account": 77908285
+   },
+   "hostLoadOpen": 4.96,
+   "hostCores": 8,
+   "hostSwapOpenMB": 1369.4,
+   "brokerLimitHits": 5559,
+   "brokerRefaults": 185617,
+   "brokerFileCacheBytes": 3206922240,
+   "brokerLimitBytes": 4563402752,
+   "tClose": 1790823438.488393,
+   "close": {
+    "ts": 1790823436112,
+    "committed": 34641927,
+    "committedParts": [
+     4326422,
+     4347127,
+     4354248,
+     4312742,
+     4288230,
+     4333407,
+     4361107,
+     4318644
+    ],
+    "endIn": 200000000,
+    "end_positions-by-symbol": 34574711,
+    "end_positions-by-account": 138261566
+   },
+   "hostLoadClose": 3.99,
+   "hostSwapCloseMB": 1369.4,
+   "boundaries": 6,
+   "gcNames": [
+    "All",
+    "G1 Old Generation",
+    "G1 Young Generation"
+   ],
+   "elapsedS": 60.15,
+   "recordsConsumed": 15133070,
+   "rateSource": "kafka committed offsets on orders",
+   "recordsPerSec": 251576.3,
+   "outputRecsPerSec": 1251592.2,
+   "vantageSource": "sink rows / 4.975 outputs per input",
+   "vantageSinkRecords": 15167019.3,
+   "vantageDisagreement": 0.0022,
+   "backlogRemaining": 165358073,
+   "headroomS": 657.3,
+   "tmCores": 1.961,
+   "tmCapFrac": 0.9805,
+   "tmThrottledPeriodsPct": 100.0,
+   "kafkaCores": 0.231,
+   "kafkaCap": 2.5,
+   "kafkaCapFrac": 0.0926,
+   "gcMsInWindow": 1644.0,
+   "gcFracOfCapacity": 0.0137,
+   "sourceIdle": 0.004,
+   "sourceBusy": 0.7037,
+   "sourceBackpressured": 0.2923,
+   "bpSamples": 12,
+   "backpressure": {
+    "position-by-account -> (sink-positions-by-account: Writer -> sink-positions-by-account: Committer, sink-market-values-by-account: Writer -> sink-market-values-by-account: Committer)": {
+     "idle": 0.0999,
+     "busy": 0.9001,
+     "backPressured": 0.0,
+     "samples": 12
+    },
+    "Source: prices-source -> parse-prices": {
+     "idle": 1.0,
+     "busy": 0.0,
+     "backPressured": 0.0,
+     "samples": 12
+    },
+    "Source: orders-source -> parse-orders": {
+     "backPressured": 0.2923,
+     "idle": 0.004,
+     "busy": 0.7037,
+     "samples": 12
+    },
+    "position-by-symbol -> (sink-positions-by-symbol: Writer -> sink-positions-by-symbol: Committer, sink-market-values-by-symbol: Writer -> sink-market-values-by-symbol: Committer)": {
+     "idle": 0.7128,
+     "busy": 0.2872,
+     "backPressured": 0.0,
+     "samples": 12
+    },
+    "_gcNames": [
+     "All",
+     "G1 Old Generation",
+     "G1 Young Generation"
+    ]
+   },
+   "status": "OK"
+  },
+  {
+   "cores": 4,
+   "pass": "settle-2",
+   "group": "st52-09302213-c4-settle-2",
+   "hostFreeGB": 118.1,
+   "nanoCpus": 4000000000,
+   "reporterS": 10,
+   "parallelism": 4,
+   "slotsTotal": 4,
+   "tSubmit": 1790823515.994257,
+   "jobId": "2ceeb67166b06f9fa8bcc29db98f1497",
+   "shape": {
+    "vertexCount": 4,
+    "signature": [
+     [
+      "Source: orders-source<br/>+- parse-orders<br/>",
+      []
+     ],
+     [
+      "Source: prices-source<br/>+- parse-prices<br/>",
+      []
+     ],
+     [
+      "position-by-account<br/>:- sink-positions-by-account: Writer<br/>:  +- sink-positions-by-account: Committer<br/>+- sink-market-values-by-account: Writer<br/>   +- sink-market-values-by-account: Committer<br/>",
+      [
+       "BROADCAST",
+       "HASH"
+      ]
+     ],
+     [
+      "position-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>:  +- sink-positions-by-symbol: Committer<br/>+- sink-market-values-by-symbol: Writer<br/>   +- sink-market-values-by-symbol: Committer<br/>",
+      [
+       "BROADCAST",
+       "HASH"
+      ]
+     ]
+    ],
+    "maxParallelism": [
+     128
+    ],
+    "plan": {
+     "jid": "2ceeb67166b06f9fa8bcc29db98f1497",
+     "name": "st52 positions and market values",
+     "type": "STREAMING",
+     "nodes": [
+      {
+       "id": "36d4643082db3c452764d1522f499c91",
+       "parallelism": 4,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "position-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>:  +- sink-positions-by-symbol: Committer<br/>+- sink-market-values-by-symbol: Writer<br/>   +- sink-market-values-by-symbol: Committer<br/>",
+       "inputs": [
+        {
+         "num": 0,
+         "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+         "ship_strategy": "HASH",
+         "exchange": "pipelined_bounded"
+        },
+        {
+         "num": 1,
+         "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+         "ship_strategy": "BROADCAST",
+         "exchange": "pipelined_bounded"
+        }
+       ],
+       "optimizer_properties": {}
+      },
+      {
+       "id": "2ec4b66bbb4aec4aa40e69c0fa20a9fc",
+       "parallelism": 4,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "position-by-account<br/>:- sink-positions-by-account: Writer<br/>:  +- sink-positions-by-account: Committer<br/>+- sink-market-values-by-account: Writer<br/>   +- sink-market-values-by-account: Committer<br/>",
+       "inputs": [
+        {
+         "num": 0,
+         "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+         "ship_strategy": "HASH",
+         "exchange": "pipelined_bounded"
+        },
+        {
+         "num": 1,
+         "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+         "ship_strategy": "BROADCAST",
+         "exchange": "pipelined_bounded"
+        }
+       ],
+       "optimizer_properties": {}
+      },
+      {
+       "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+       "parallelism": 4,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "Source: orders-source<br/>+- parse-orders<br/>",
+       "optimizer_properties": {}
+      },
+      {
+       "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+       "parallelism": 4,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "Source: prices-source<br/>+- parse-prices<br/>",
+       "optimizer_properties": {}
+      }
+     ]
+    }
+   },
+   "warmup": {
+    "rates": [
+     490627.271772245,
+     475039.6326245383,
+     486481.0088724952,
+     470931.1550759393
+    ],
+    "mean": 480769.7670863045,
+    "drift": 0.0297,
+    "scatter": 0.041,
+    "warmupS": 124.3,
+    "rampFlatAtS": 54.6,
+    "rampFloorS": 90.0,
+    "rampWaitedExtraS": 69.7,
+    "rampFlatAtRates": [
+     441810.4,
+     472696.7,
+     470161.5,
+     486466.5
+    ]
+   },
+   "tSteady": 1790823652.385689,
+   "tOpen": 1790823654.841811,
+   "open": {
+    "ts": 1790823652170,
+    "committed": 56403970,
+    "committedParts": [
+     7037631,
+     7059310,
+     7072413,
+     7042237,
+     6996656,
+     7047799,
+     7109793,
+     7038131
+    ],
+    "endIn": 200000000,
+    "end_positions-by-symbol": 56196924,
+    "end_positions-by-account": 224796620
+   },
+   "hostLoadOpen": 8.34,
+   "hostCores": 8,
+   "hostSwapOpenMB": 1369.4,
+   "brokerLimitHits": 0,
+   "brokerRefaults": 392475,
+   "brokerFileCacheBytes": 2977542144,
+   "brokerLimitBytes": 4563402752,
+   "tClose": 1790823714.7360919,
+   "close": {
+    "ts": 1790823712277,
+    "committed": 83098569,
+    "committedParts": [
+     10328407,
+     10365204,
+     10418162,
+     10396450,
+     10332603,
+     10417198,
+     10472420,
+     10368125
+    ],
+    "endIn": 200000000,
+    "end_positions-by-symbol": 82803436,
+    "end_positions-by-account": 331224372
+   },
+   "hostLoadClose": 9.24,
+   "hostSwapCloseMB": 1361.4,
+   "boundaries": 6,
+   "gcNames": [
+    "All",
+    "G1 Old Generation",
+    "G1 Young Generation"
+   ],
+   "elapsedS": 60.11,
+   "recordsConsumed": 26694599,
+   "rateSource": "kafka committed offsets on orders",
+   "recordsPerSec": 444118.0,
+   "outputRecsPerSec": 2209486.9,
+   "vantageSource": "sink rows / 4.975 outputs per input",
+   "vantageSinkRecords": 26740555.6,
+   "vantageDisagreement": 0.0017,
+   "backlogRemaining": 116901431,
+   "headroomS": 263.2,
+   "tmCores": 3.967,
+   "tmCapFrac": 0.9918,
+   "tmThrottledPeriodsPct": 99.8,
+   "kafkaCores": 0.539,
+   "kafkaCap": 2.5,
+   "kafkaCapFrac": 0.2157,
+   "gcMsInWindow": 1457.0,
+   "gcFracOfCapacity": 0.0061,
+   "sourceIdle": 0.0166,
+   "sourceBusy": 0.7885,
+   "sourceBackpressured": 0.1949,
+   "bpSamples": 24,
+   "backpressure": {
+    "position-by-account -> (sink-positions-by-account: Writer -> sink-positions-by-account: Committer, sink-market-values-by-account: Writer -> sink-market-values-by-account: Committer)": {
+     "backPressured": 0.0,
+     "busy": 0.9443,
+     "idle": 0.0557,
+     "samples": 24
+    },
+    "Source: prices-source -> parse-prices": {
+     "backPressured": 0.0,
+     "busy": 0.0002,
+     "idle": 0.9998,
+     "samples": 24
+    },
+    "Source: orders-source -> parse-orders": {
+     "idle": 0.0166,
+     "busy": 0.7885,
+     "backPressured": 0.1949,
+     "samples": 24
+    },
+    "position-by-symbol -> (sink-positions-by-symbol: Writer -> sink-positions-by-symbol: Committer, sink-market-values-by-symbol: Writer -> sink-market-values-by-symbol: Committer)": {
+     "busy": 0.4028,
+     "backPressured": 0.0,
+     "idle": 0.5972,
+     "samples": 24
+    },
+    "_gcNames": [
+     "All",
+     "G1 Old Generation",
+     "G1 Young Generation"
+    ]
+   },
+   "status": "OK"
+  },
+  {
+   "cores": 2,
+   "pass": "settle-3",
+   "group": "st52-09302213-c2-settle-3",
+   "hostFreeGB": 109.5,
+   "nanoCpus": 2000000000,
+   "reporterS": 10,
+   "parallelism": 2,
+   "slotsTotal": 2,
+   "tSubmit": 1790823778.517928,
+   "jobId": "1a0d3f2860d2b7abaa776c3338ee6021",
+   "shape": {
+    "vertexCount": 4,
+    "signature": [
+     [
+      "Source: orders-source<br/>+- parse-orders<br/>",
+      []
+     ],
+     [
+      "Source: prices-source<br/>+- parse-prices<br/>",
+      []
+     ],
+     [
+      "position-by-account<br/>:- sink-positions-by-account: Writer<br/>:  +- sink-positions-by-account: Committer<br/>+- sink-market-values-by-account: Writer<br/>   +- sink-market-values-by-account: Committer<br/>",
+      [
+       "BROADCAST",
+       "HASH"
+      ]
+     ],
+     [
+      "position-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>:  +- sink-positions-by-symbol: Committer<br/>+- sink-market-values-by-symbol: Writer<br/>   +- sink-market-values-by-symbol: Committer<br/>",
+      [
+       "BROADCAST",
+       "HASH"
+      ]
+     ]
+    ],
+    "maxParallelism": [
+     128
+    ],
+    "plan": {
+     "jid": "1a0d3f2860d2b7abaa776c3338ee6021",
+     "name": "st52 positions and market values",
+     "type": "STREAMING",
+     "nodes": [
+      {
+       "id": "36d4643082db3c452764d1522f499c91",
+       "parallelism": 2,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "position-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>:  +- sink-positions-by-symbol: Committer<br/>+- sink-market-values-by-symbol: Writer<br/>   +- sink-market-values-by-symbol: Committer<br/>",
+       "inputs": [
+        {
+         "num": 0,
+         "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+         "ship_strategy": "HASH",
+         "exchange": "pipelined_bounded"
+        },
+        {
+         "num": 1,
+         "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+         "ship_strategy": "BROADCAST",
+         "exchange": "pipelined_bounded"
+        }
+       ],
+       "optimizer_properties": {}
+      },
+      {
+       "id": "2ec4b66bbb4aec4aa40e69c0fa20a9fc",
+       "parallelism": 2,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "position-by-account<br/>:- sink-positions-by-account: Writer<br/>:  +- sink-positions-by-account: Committer<br/>+- sink-market-values-by-account: Writer<br/>   +- sink-market-values-by-account: Committer<br/>",
+       "inputs": [
+        {
+         "num": 0,
+         "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+         "ship_strategy": "HASH",
+         "exchange": "pipelined_bounded"
+        },
+        {
+         "num": 1,
+         "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+         "ship_strategy": "BROADCAST",
+         "exchange": "pipelined_bounded"
+        }
+       ],
+       "optimizer_properties": {}
+      },
+      {
+       "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+       "parallelism": 2,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "Source: orders-source<br/>+- parse-orders<br/>",
+       "optimizer_properties": {}
+      },
+      {
+       "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+       "parallelism": 2,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "Source: prices-source<br/>+- parse-prices<br/>",
+       "optimizer_properties": {}
+      }
+     ]
+    }
+   },
+   "warmup": {
+    "rates": [
+     256332.1702721563,
+     258435.73636454283,
+     264837.3277411624,
+     262879.5926517572
+    ],
+    "mean": 260621.20675740467,
+    "drift": 0.03,
+    "scatter": 0.0326,
+    "warmupS": 90.3,
+    "rampFlatAtS": 66.7,
+    "rampFloorS": 90.0,
+    "rampWaitedExtraS": 23.6,
+    "rampFlatAtRates": [
+     248767.5,
+     256188.3,
+     256332.2,
+     258435.7
+    ]
+   },
+   "tSteady": 1790823880.57443,
+   "tOpen": 1790823888.9601421,
+   "open": {
+    "ts": 1790823886641,
+    "committed": 22660669,
+    "committedParts": [
+     2837292,
+     2854909,
+     2846665,
+     2815835,
+     2802760,
+     2828625,
+     2853895,
+     2820688
+    ],
+    "endIn": 200000000,
+    "end_positions-by-symbol": 22626417,
+    "end_positions-by-account": 90491002
+   },
+   "hostLoadOpen": 4.63,
+   "hostCores": 8,
+   "hostSwapOpenMB": 1361.4,
+   "brokerLimitHits": 5553,
+   "brokerRefaults": 191673,
+   "brokerFileCacheBytes": 3205550080,
+   "brokerLimitBytes": 4563402752,
+   "tClose": 1790823949.145591,
+   "close": {
+    "ts": 1790823946800,
+    "committed": 38407442,
+    "committedParts": [
+     4793067,
+     4824818,
+     4826631,
+     4778160,
+     4760528,
+     4799313,
+     4838813,
+     4786112
+    ],
+    "endIn": 200000000,
+    "end_positions-by-symbol": 38320759,
+    "end_positions-by-account": 153299635
+   },
+   "hostLoadClose": 4.72,
+   "hostSwapCloseMB": 1361.4,
+   "boundaries": 6,
+   "gcNames": [
+    "All",
+    "G1 Old Generation",
+    "G1 Young Generation"
+   ],
+   "elapsedS": 60.16,
+   "recordsConsumed": 15746773,
+   "rateSource": "kafka committed offsets on orders",
+   "recordsPerSec": 261752.6,
+   "outputRecsPerSec": 1302219.0,
+   "vantageSource": "sink rows / 4.975 outputs per input",
+   "vantageSinkRecords": 15779492.5,
+   "vantageDisagreement": 0.0021,
+   "backlogRemaining": 161592558,
+   "headroomS": 617.3,
+   "tmCores": 1.999,
+   "tmCapFrac": 0.9997,
+   "tmThrottledPeriodsPct": 99.8,
+   "kafkaCores": 0.231,
+   "kafkaCap": 2.5,
+   "kafkaCapFrac": 0.0926,
+   "gcMsInWindow": 1628.0,
+   "gcFracOfCapacity": 0.0135,
+   "sourceIdle": 0.0056,
+   "sourceBusy": 0.6647,
+   "sourceBackpressured": 0.3297,
+   "bpSamples": 12,
+   "backpressure": {
+    "position-by-account -> (sink-positions-by-account: Writer -> sink-positions-by-account: Committer, sink-market-values-by-account: Writer -> sink-market-values-by-account: Committer)": {
+     "busy": 0.8869,
+     "idle": 0.1131,
+     "backPressured": 0.0,
+     "samples": 12
+    },
+    "Source: prices-source -> parse-prices": {
+     "backPressured": 0.0,
+     "busy": 0.0,
+     "idle": 1.0,
+     "samples": 12
+    },
+    "position-by-symbol -> (sink-positions-by-symbol: Writer -> sink-positions-by-symbol: Committer, sink-market-values-by-symbol: Writer -> sink-market-values-by-symbol: Committer)": {
+     "busy": 0.2758,
+     "backPressured": 0.0,
+     "idle": 0.7242,
+     "samples": 12
+    },
+    "Source: orders-source -> parse-orders": {
+     "idle": 0.0056,
+     "backPressured": 0.3297,
+     "busy": 0.6647,
+     "samples": 12
+    },
+    "_gcNames": [
+     "All",
+     "G1 Old Generation",
+     "G1 Young Generation"
+    ]
+   },
+   "status": "OK"
+  },
+  {
+   "cores": 4,
+   "pass": "settle-4",
+   "group": "st52-09302213-c4-settle-4",
+   "hostFreeGB": 117.4,
+   "nanoCpus": 4000000000,
+   "reporterS": 10,
+   "parallelism": 4,
+   "slotsTotal": 4,
+   "tSubmit": 1790823995.3292859,
+   "jobId": "a7c6d3e478afeaa8cebebbbf85e16e79",
+   "shape": {
+    "vertexCount": 4,
+    "signature": [
+     [
+      "Source: orders-source<br/>+- parse-orders<br/>",
+      []
+     ],
+     [
+      "Source: prices-source<br/>+- parse-prices<br/>",
+      []
+     ],
+     [
+      "position-by-account<br/>:- sink-positions-by-account: Writer<br/>:  +- sink-positions-by-account: Committer<br/>+- sink-market-values-by-account: Writer<br/>   +- sink-market-values-by-account: Committer<br/>",
+      [
+       "BROADCAST",
+       "HASH"
+      ]
+     ],
+     [
+      "position-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>:  +- sink-positions-by-symbol: Committer<br/>+- sink-market-values-by-symbol: Writer<br/>   +- sink-market-values-by-symbol: Committer<br/>",
+      [
+       "BROADCAST",
+       "HASH"
+      ]
+     ]
+    ],
+    "maxParallelism": [
+     128
+    ],
+    "plan": {
+     "jid": "a7c6d3e478afeaa8cebebbbf85e16e79",
+     "name": "st52 positions and market values",
+     "type": "STREAMING",
+     "nodes": [
+      {
+       "id": "36d4643082db3c452764d1522f499c91",
+       "parallelism": 4,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "position-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>:  +- sink-positions-by-symbol: Committer<br/>+- sink-market-values-by-symbol: Writer<br/>   +- sink-market-values-by-symbol: Committer<br/>",
+       "inputs": [
+        {
+         "num": 0,
+         "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+         "ship_strategy": "HASH",
+         "exchange": "pipelined_bounded"
+        },
+        {
+         "num": 1,
+         "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+         "ship_strategy": "BROADCAST",
+         "exchange": "pipelined_bounded"
+        }
+       ],
+       "optimizer_properties": {}
+      },
+      {
+       "id": "2ec4b66bbb4aec4aa40e69c0fa20a9fc",
+       "parallelism": 4,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "position-by-account<br/>:- sink-positions-by-account: Writer<br/>:  +- sink-positions-by-account: Committer<br/>+- sink-market-values-by-account: Writer<br/>   +- sink-market-values-by-account: Committer<br/>",
+       "inputs": [
+        {
+         "num": 0,
+         "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+         "ship_strategy": "HASH",
+         "exchange": "pipelined_bounded"
+        },
+        {
+         "num": 1,
+         "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+         "ship_strategy": "BROADCAST",
+         "exchange": "pipelined_bounded"
+        }
+       ],
+       "optimizer_properties": {}
+      },
+      {
+       "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+       "parallelism": 4,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "Source: orders-source<br/>+- parse-orders<br/>",
+       "optimizer_properties": {}
+      },
+      {
+       "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+       "parallelism": 4,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "Source: prices-source<br/>+- parse-prices<br/>",
+       "optimizer_properties": {}
+      }
+     ]
+    }
+   },
+   "warmup": {
+    "rates": [
+     480463.25655598764,
+     514780.03152916447,
+     487720.65868263476,
+     477832.26837060705
+    ],
+    "mean": 490199.0537845985,
+    "drift": 0.0214,
+    "scatter": 0.0754,
+    "warmupS": 90.2,
+    "rampFlatAtS": 61.6,
+    "rampFloorS": 90.0,
+    "rampWaitedExtraS": 28.6,
+    "rampFlatAtRates": [
+     467859.8,
+     461026.7,
+     480463.3,
+     514780.0
+    ]
+   },
+   "tSteady": 1790824097.502135,
+   "tOpen": 1790824101.112162,
+   "open": {
+    "ts": 1790824098936,
+    "committed": 40302894,
+    "committedParts": [
+     5068801,
+     5037396,
+     5005648,
+     5036744,
+     5061027,
+     5026210,
+     5022383,
+     5044685
+    ],
+    "endIn": 200000000,
+    "end_positions-by-symbol": 40168437,
+    "end_positions-by-account": 160657835
+   },
+   "hostLoadOpen": 7.49,
+   "hostCores": 8,
+   "hostSwapOpenMB": 1361.4,
+   "brokerLimitHits": 0,
+   "brokerRefaults": 370247,
+   "brokerFileCacheBytes": 2904616960,
+   "brokerLimitBytes": 4563402752,
+   "tClose": 1790824161.2478878,
+   "close": {
+    "ts": 1790824159065,
+    "committed": 69047084,
+    "committedParts": [
+     8693428,
+     8606869,
+     8571671,
+     8650953,
+     8674142,
+     8622443,
+     8593960,
+     8633618
+    ],
+    "endIn": 200000000,
+    "end_positions-by-symbol": 68839719,
+    "end_positions-by-account": 275379931
+   },
+   "hostLoadClose": 8.75,
+   "hostSwapCloseMB": 1361.4,
+   "boundaries": 6,
+   "gcNames": [
+    "All",
+    "G1 Old Generation",
+    "G1 Young Generation"
+   ],
+   "elapsedS": 60.13,
+   "recordsConsumed": 28744190,
+   "rateSource": "kafka committed offsets on orders",
+   "recordsPerSec": 478042.0,
+   "outputRecsPerSec": 2378259.2,
+   "vantageSource": "sink rows / 4.975 outputs per input",
+   "vantageSinkRecords": 28822789.5,
+   "vantageDisagreement": 0.0027,
+   "backlogRemaining": 130952916,
+   "headroomS": 273.9,
+   "tmCores": 3.999,
+   "tmCapFrac": 0.9999,
+   "tmThrottledPeriodsPct": 99.8,
+   "kafkaCores": 0.486,
+   "kafkaCap": 2.5,
+   "kafkaCapFrac": 0.1943,
+   "gcMsInWindow": 1654.0,
+   "gcFracOfCapacity": 0.0069,
+   "sourceIdle": 0.0128,
+   "sourceBusy": 0.7756,
+   "sourceBackpressured": 0.2116,
+   "bpSamples": 24,
+   "backpressure": {
+    "position-by-account -> (sink-positions-by-account: Writer -> sink-positions-by-account: Committer, sink-market-values-by-account: Writer -> sink-market-values-by-account: Committer)": {
+     "busy": 0.944,
+     "backPressured": 0.0,
+     "idle": 0.056,
+     "samples": 24
+    },
+    "Source: orders-source -> parse-orders": {
+     "backPressured": 0.2116,
+     "idle": 0.0128,
+     "busy": 0.7756,
+     "samples": 24
+    },
+    "Source: prices-source -> parse-prices": {
+     "backPressured": 0.0,
+     "idle": 0.9998,
+     "busy": 0.0002,
+     "samples": 24
+    },
+    "position-by-symbol -> (sink-positions-by-symbol: Writer -> sink-positions-by-symbol: Committer, sink-market-values-by-symbol: Writer -> sink-market-values-by-symbol: Committer)": {
+     "busy": 0.3919,
+     "idle": 0.6081,
+     "backPressured": 0.0,
+     "samples": 24
+    },
+    "_gcNames": [
+     "All",
+     "G1 Old Generation",
+     "G1 Young Generation"
+    ]
+   },
+   "status": "OK"
+  },
+  {
+   "cores": 2,
+   "pass": "settle-5",
+   "group": "st52-09302213-c2-settle-5",
+   "hostFreeGB": 112.0,
+   "nanoCpus": 2000000000,
+   "reporterS": 10,
+   "parallelism": 2,
+   "slotsTotal": 2,
+   "tSubmit": 1790824240.188054,
+   "jobId": "bfe1bb964978ba2fe3dfb8522625c5b3",
+   "shape": {
+    "vertexCount": 4,
+    "signature": [
+     [
+      "Source: orders-source<br/>+- parse-orders<br/>",
+      []
+     ],
+     [
+      "Source: prices-source<br/>+- parse-prices<br/>",
+      []
+     ],
+     [
+      "position-by-account<br/>:- sink-positions-by-account: Writer<br/>:  +- sink-positions-by-account: Committer<br/>+- sink-market-values-by-account: Writer<br/>   +- sink-market-values-by-account: Committer<br/>",
+      [
+       "BROADCAST",
+       "HASH"
+      ]
+     ],
+     [
+      "position-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>:  +- sink-positions-by-symbol: Committer<br/>+- sink-market-values-by-symbol: Writer<br/>   +- sink-market-values-by-symbol: Committer<br/>",
+      [
+       "BROADCAST",
+       "HASH"
+      ]
+     ]
+    ],
+    "maxParallelism": [
+     128
+    ],
+    "plan": {
+     "jid": "bfe1bb964978ba2fe3dfb8522625c5b3",
+     "name": "st52 positions and market values",
+     "type": "STREAMING",
+     "nodes": [
+      {
+       "id": "36d4643082db3c452764d1522f499c91",
+       "parallelism": 2,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "position-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>:  +- sink-positions-by-symbol: Committer<br/>+- sink-market-values-by-symbol: Writer<br/>   +- sink-market-values-by-symbol: Committer<br/>",
+       "inputs": [
+        {
+         "num": 0,
+         "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+         "ship_strategy": "HASH",
+         "exchange": "pipelined_bounded"
+        },
+        {
+         "num": 1,
+         "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+         "ship_strategy": "BROADCAST",
+         "exchange": "pipelined_bounded"
+        }
+       ],
+       "optimizer_properties": {}
+      },
+      {
+       "id": "2ec4b66bbb4aec4aa40e69c0fa20a9fc",
+       "parallelism": 2,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "position-by-account<br/>:- sink-positions-by-account: Writer<br/>:  +- sink-positions-by-account: Committer<br/>+- sink-market-values-by-account: Writer<br/>   +- sink-market-values-by-account: Committer<br/>",
+       "inputs": [
+        {
+         "num": 0,
+         "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+         "ship_strategy": "HASH",
+         "exchange": "pipelined_bounded"
+        },
+        {
+         "num": 1,
+         "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+         "ship_strategy": "BROADCAST",
+         "exchange": "pipelined_bounded"
+        }
+       ],
+       "optimizer_properties": {}
+      },
+      {
+       "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+       "parallelism": 2,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "Source: orders-source<br/>+- parse-orders<br/>",
+       "optimizer_properties": {}
+      },
+      {
+       "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+       "parallelism": 2,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "Source: prices-source<br/>+- parse-prices<br/>",
+       "optimizer_properties": {}
+      }
+     ]
+    }
+   },
+   "warmup": {
+    "rates": [
+     235509.19080919083,
+     252928.94263441933,
+     242749.55062911924,
+     245864.52833947606
+    ],
+    "mean": 244263.05310305138,
+    "drift": 0.0257,
+    "scatter": 0.0713,
+    "warmupS": 90.1,
+    "rampFlatAtS": 49.8,
+    "rampFloorS": 90.0,
+    "rampWaitedExtraS": 40.3,
+    "rampFlatAtRates": [
+     205597.9,
+     208222.3,
+     233043.4,
+     216994.1
+    ]
+   },
+   "tSteady": 1790824342.275048,
+   "tOpen": 1790824344.471802,
+   "open": {
+    "ts": 1790824341803,
+    "committed": 19214551,
+    "committedParts": [
+     2406164,
+     2417611,
+     2402661,
+     2401013,
+     2380064,
+     2389492,
+     2419872,
+     2397674
+    ],
+    "endIn": 200000000,
+    "end_positions-by-symbol": 19181754,
+    "end_positions-by-account": 76748297
+   },
+   "hostLoadOpen": 11.13,
+   "hostCores": 8,
+   "hostSwapOpenMB": 1361.4,
+   "brokerLimitHits": 5617,
+   "brokerRefaults": 175575,
+   "brokerFileCacheBytes": 3207815168,
+   "brokerLimitBytes": 4563402752,
+   "tClose": 1790824404.174113,
+   "close": {
+    "ts": 1790824401950,
+    "committed": 34027555,
+    "committedParts": [
+     4257319,
+     4277029,
+     4269928,
+     4236892,
+     4201597,
+     4248367,
+     4292789,
+     4243634
+    ],
+    "endIn": 200000000,
+    "end_positions-by-symbol": 33964507,
+    "end_positions-by-account": 135859519
+   },
+   "hostLoadClose": 8.48,
+   "hostSwapCloseMB": 1361.4,
+   "boundaries": 6,
+   "gcNames": [
+    "All",
+    "G1 Old Generation",
+    "G1 Young Generation"
+   ],
+   "elapsedS": 60.15,
+   "recordsConsumed": 14813004,
+   "rateSource": "kafka committed offsets on orders",
+   "recordsPerSec": 246280.0,
+   "outputRecsPerSec": 1225243.1,
+   "vantageSource": "sink rows / 4.975 outputs per input",
+   "vantageSinkRecords": 14853060.3,
+   "vantageDisagreement": 0.0027,
+   "backlogRemaining": 165972445,
+   "headroomS": 673.9,
+   "tmCores": 1.985,
+   "tmCapFrac": 0.9924,
+   "tmThrottledPeriodsPct": 100.0,
+   "kafkaCores": 0.258,
+   "kafkaCap": 2.5,
+   "kafkaCapFrac": 0.1034,
+   "gcMsInWindow": 1192.0,
+   "gcFracOfCapacity": 0.0099,
+   "sourceIdle": 0.0086,
+   "sourceBusy": 0.668,
+   "sourceBackpressured": 0.3234,
+   "bpSamples": 12,
+   "backpressure": {
+    "position-by-symbol -> (sink-positions-by-symbol: Writer -> sink-positions-by-symbol: Committer, sink-market-values-by-symbol: Writer -> sink-market-values-by-symbol: Committer)": {
+     "idle": 0.7076,
+     "backPressured": 0.0,
+     "busy": 0.2924,
+     "samples": 12
+    },
+    "position-by-account -> (sink-positions-by-account: Writer -> sink-positions-by-account: Committer, sink-market-values-by-account: Writer -> sink-market-values-by-account: Committer)": {
+     "idle": 0.1274,
+     "backPressured": 0.0,
+     "busy": 0.8726,
+     "samples": 12
+    },
+    "Source: prices-source -> parse-prices": {
+     "busy": 0.0004,
+     "idle": 0.9996,
+     "backPressured": 0.0,
+     "samples": 12
+    },
+    "Source: orders-source -> parse-orders": {
+     "busy": 0.668,
+     "idle": 0.0086,
+     "backPressured": 0.3234,
+     "samples": 12
+    },
+    "_gcNames": [
+     "All",
+     "G1 Old Generation",
+     "G1 Young Generation"
+    ]
+   },
+   "status": "OK"
+  },
+  {
+   "cores": 4,
+   "pass": "settle-6",
+   "group": "st52-09302213-c4-settle-6",
+   "hostFreeGB": 118.1,
+   "nanoCpus": 4000000000,
+   "reporterS": 10,
+   "parallelism": 4,
+   "slotsTotal": 4,
+   "tSubmit": 1790824479.7284238,
+   "jobId": "7abb8e6246473a44fd5e892431c439ba",
+   "shape": {
+    "vertexCount": 4,
+    "signature": [
+     [
+      "Source: orders-source<br/>+- parse-orders<br/>",
+      []
+     ],
+     [
+      "Source: prices-source<br/>+- parse-prices<br/>",
+      []
+     ],
+     [
+      "position-by-account<br/>:- sink-positions-by-account: Writer<br/>:  +- sink-positions-by-account: Committer<br/>+- sink-market-values-by-account: Writer<br/>   +- sink-market-values-by-account: Committer<br/>",
+      [
+       "BROADCAST",
+       "HASH"
+      ]
+     ],
+     [
+      "position-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>:  +- sink-positions-by-symbol: Committer<br/>+- sink-market-values-by-symbol: Writer<br/>   +- sink-market-values-by-symbol: Committer<br/>",
+      [
+       "BROADCAST",
+       "HASH"
+      ]
+     ]
+    ],
+    "maxParallelism": [
+     128
+    ],
+    "plan": {
+     "jid": "7abb8e6246473a44fd5e892431c439ba",
+     "name": "st52 positions and market values",
+     "type": "STREAMING",
+     "nodes": [
+      {
+       "id": "36d4643082db3c452764d1522f499c91",
+       "parallelism": 4,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "position-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>:  +- sink-positions-by-symbol: Committer<br/>+- sink-market-values-by-symbol: Writer<br/>   +- sink-market-values-by-symbol: Committer<br/>",
+       "inputs": [
+        {
+         "num": 0,
+         "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+         "ship_strategy": "HASH",
+         "exchange": "pipelined_bounded"
+        },
+        {
+         "num": 1,
+         "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+         "ship_strategy": "BROADCAST",
+         "exchange": "pipelined_bounded"
+        }
+       ],
+       "optimizer_properties": {}
+      },
+      {
+       "id": "2ec4b66bbb4aec4aa40e69c0fa20a9fc",
+       "parallelism": 4,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "position-by-account<br/>:- sink-positions-by-account: Writer<br/>:  +- sink-positions-by-account: Committer<br/>+- sink-market-values-by-account: Writer<br/>   +- sink-market-values-by-account: Committer<br/>",
+       "inputs": [
+        {
+         "num": 0,
+         "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+         "ship_strategy": "HASH",
+         "exchange": "pipelined_bounded"
+        },
+        {
+         "num": 1,
+         "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+         "ship_strategy": "BROADCAST",
+         "exchange": "pipelined_bounded"
+        }
+       ],
+       "optimizer_properties": {}
+      },
+      {
+       "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+       "parallelism": 4,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "Source: orders-source<br/>+- parse-orders<br/>",
+       "optimizer_properties": {}
+      },
+      {
+       "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+       "parallelism": 4,
+       "operator": "",
+       "operator_strategy": "",
+       "description": "Source: prices-source<br/>+- parse-prices<br/>",
+       "optimizer_properties": {}
+      }
+     ]
+    }
+   },
+   "warmup": {
+    "rates": [
+     485750.9461732548,
+     455637.64353469794,
+     480653.3439649158,
+     474280.2236198463
+    ],
+    "mean": 474080.5393231787,
+    "drift": 0.0059,
+    "scatter": 0.0635,
+    "warmupS": 90.2,
+    "rampFlatAtS": 54.7,
+    "rampFloorS": 90.0,
+    "rampWaitedExtraS": 35.5,
+    "rampFlatAtRates": [
+     490789.6,
+     479808.9,
+     433430.5,
+     485750.9
+    ]
+   },
+   "tSteady": 1790824582.345221,
+   "tOpen": 1790824589.122833,
+   "open": {
+    "ts": 1790824586811,
+    "committed": 41103201,
+    "committedParts": [
+     5154255,
+     5141074,
+     5131994,
+     5128236,
+     5143279,
+     5121505,
+     5144432,
+     5138426
+    ],
+    "endIn": 200000000,
+    "end_positions-by-symbol": 41009922,
+    "end_positions-by-account": 164055319
+   },
+   "hostLoadOpen": 7.28,
+   "hostCores": 8,
+   "hostSwapOpenMB": 1361.4,
+   "brokerLimitHits": 0,
+   "brokerRefaults": 363888,
+   "brokerFileCacheBytes": 2844581888,
+   "brokerLimitBytes": 4563402752,
+   "tClose": 1790824649.1175082,
+   "close": {
+    "ts": 1790824646919,
+    "committed": 69379752,
+    "committedParts": [
+     8706434,
+     8657386,
+     8657954,
+     8660383,
+     8680315,
+     8690695,
+     8679823,
+     8646762
+    ],
+    "endIn": 200000000,
+    "end_positions-by-symbol": 69222676,
+    "end_positions-by-account": 276887622
+   },
+   "hostLoadClose": 9.52,
+   "hostSwapCloseMB": 1361.4,
+   "boundaries": 6,
+   "gcNames": [
+    "All",
+    "G1 Old Generation",
+    "G1 Young Generation"
+   ],
+   "elapsedS": 60.11,
+   "recordsConsumed": 28276551,
+   "rateSource": "kafka committed offsets on orders",
+   "recordsPerSec": 470429.1,
+   "outputRecsPerSec": 2340384.7,
+   "vantageSource": "sink rows / 4.975 outputs per input",
+   "vantageSinkRecords": 28350765.2,
+   "vantageDisagreement": 0.0026,
+   "backlogRemaining": 130620248,
+   "headroomS": 277.7,
+   "tmCores": 3.983,
+   "tmCapFrac": 0.9957,
+   "tmThrottledPeriodsPct": 99.7,
+   "kafkaCores": 0.478,
+   "kafkaCap": 2.5,
+   "kafkaCapFrac": 0.1914,
+   "gcMsInWindow": 1489.0,
+   "gcFracOfCapacity": 0.0062,
+   "sourceIdle": 0.0163,
+   "sourceBusy": 0.7879,
+   "sourceBackpressured": 0.1958,
+   "bpSamples": 24,
+   "backpressure": {
+    "position-by-account -> (sink-positions-by-account: Writer -> sink-positions-by-account: Committer, sink-market-values-by-account: Writer -> sink-market-values-by-account: Committer)": {
+     "busy": 0.947,
+     "backPressured": 0.0,
+     "idle": 0.053,
+     "samples": 24
+    },
+    "Source: orders-source -> parse-orders": {
+     "idle": 0.0163,
+     "busy": 0.7879,
+     "backPressured": 0.1958,
+     "samples": 24
+    },
+    "Source: prices-source -> parse-prices": {
+     "backPressured": 0.0,
+     "idle": 0.9999,
+     "busy": 0.0001,
+     "samples": 24
+    },
+    "position-by-symbol -> (sink-positions-by-symbol: Writer -> sink-positions-by-symbol: Committer, sink-market-values-by-symbol: Writer -> sink-market-values-by-symbol: Committer)": {
+     "idle": 0.5909,
+     "busy": 0.4091,
+     "backPressured": 0.0,
+     "samples": 24
+    },
+    "_gcNames": [
+     "All",
+     "G1 Old Generation",
+     "G1 Young Generation"
+    ]
+   },
+   "status": "OK"
+  }
+ ],
+ "refusals": [],
+ "savedAt": "2026-09-30 23:17:54 EDT",
+ "savedAtEpoch": 1790824674.10159,
+ "settleCases": 6,
+ "dashboard": "opens on the suite, 22:12\u201323:18; every panel shows data over the suite",
+ "reportVerdict": "not-settled",
+ "unsettledSteps": [
+  {
+   "step": "2->4",
+   "ratio": 1.858,
+   "low": 1.771,
+   "high": 1.9,
+   "need": 1.8,
+   "pairs": 8
+  }
+ ]
+}

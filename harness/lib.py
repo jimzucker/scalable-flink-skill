@@ -4506,7 +4506,7 @@ def dashboard_here():
     return svc
 
 
-def dashboard_loaded(svc, datasources, boards, wait_s=90):
+def dashboard_loaded(svc, datasources, boards, wait_s=90, tries=10):
     """Grafana answers, has loaded every provisioned dashboard, and each data
     source it was given answers its own health check. Returns a one-line
     detail; raises with what is wrong."""
@@ -4525,11 +4525,12 @@ def dashboard_loaded(svc, datasources, boards, wait_s=90):
         time.sleep(3)
     want = {(b.get("dashboard", b).get("title") or "") for b in boards.values()}
     # Grafana reads provisioned files on its own schedule; give it a moment.
-    for _ in range(10):
+    for i in range(tries):
         have = {h.get("title") for h in grafana_api(svc["port"], "/api/search?type=dash-db") or []}
         if want <= have:
             break
-        time.sleep(3)
+        if i < tries - 1:
+            time.sleep(3)
     missing = sorted(want - have)
     if missing:
         raise Exception(f"Grafana has not loaded {', '.join(missing)}; it shows {', '.join(sorted(have)) or 'none'}")
@@ -4640,6 +4641,65 @@ def dashboard_open_on_suite(svc, t0, t1, wait_s=60):
         time.sleep(3)
     hm = lambda t: time.strftime("%H:%M", time.localtime(t))
     return True, f"opens on the suite, {hm(t0 - 60)}–{hm(t1 + 30)}"
+
+
+def memory_budget_line(vm):
+    """Pure but for the config: the preflight row's sentence for the worker's
+    container limit at its largest case, the broker, the job manager and every
+    extra service, against `vm` bytes (0 when unknown). Pulled out of preflight
+    so its arithmetic is tested; clean-room run 52 found it budgeting process
+    sizes, not limits."""
+    c = cfg()
+    top = max(c.cases)
+    capped = tm_memory_capped()
+    # Container limits, which is what the VM has to hold: the worker's
+    # limit (1.25x its process size by default), the job manager's
+    # mem_limit (2g in the compose file) and every extra service's own.
+    # Clean-room run 52 found this row budgeting process sizes and leaving
+    # the dashboard out (run 45, earlier: 1024m for a 1600m process).
+    _, limit = tm_memory_for(top)
+    worker = _mib(limit) if capped and limit else 0.0
+    broker = _mib(c.kafka_mem)
+    jm = 2048.0
+    extras, unread = 0.0, []
+    for name, b in (c.raw.get("extraServices") or {}).items():
+        if isinstance(b, dict) and b.get("mem_limit"):
+            try:
+                extras += _mib(str(b["mem_limit"]))
+            except Exception:
+                unread.append(name)
+    need = worker + broker + jm + extras
+    # Reported, not enforced. A rule refusing need > VM - 1 GB was added on
+    # 2026-09-07 and removed the same day: runs 20 and 21 both passed with a
+    # 6,144m broker on a 7,838 MiB VM, which that rule refuses, and run 22
+    # spent two chains discovering that it contradicts the broker-memory
+    # hint (which asked for 5,632m where the rule allowed 3,613m). The
+    # broker's page cache is elastic; over-committing it against the VM is
+    # normal and the cases that matter are caught by the cap floor and the
+    # broker's own limit-hit guard.
+    over = " (over-committed, which is normal — the broker's cache is elastic)" if vm and need > vm / 1048576.0 else ""
+    # Say "uncapped" here too. Budgeting Cfg.tm_mem's 4096m default while the
+    # row above reports the worker as uncapped states a figure that was never
+    # applied, and the over-commit warning it produces is then arithmetic on
+    # a phantom. Clean-room run 30 reported the contradiction.
+    w = (f"worker limit {worker:.0f}m at {top} cores" if capped
+         else "memory uncapped (engine default)")
+    ex = (f" + other services {extras:.0f}m" if extras else "") + (
+        f" (could not read the memory limit of {', '.join(unread)})" if unread else "")
+    return (f"{w} + broker {broker:.0f}m + job manager {jm:.0f}m{ex} "
+            f"= {need:.0f}m of {vm / 1048576:.0f}m VM{over}" if vm
+            else f"{need:.0f}m requested, VM size unknown")
+
+
+def dashboard_stop_reason(svc, t0, t1):
+    """None when there is no dashboard or every panel shows data through
+    Grafana over [t0, t1]; otherwise the sentence the chain stops with."""
+    if not svc:
+        return None
+    try:
+        return dashboard_has_data(svc, t0, t1, "the completeness run")
+    except Exception as e:
+        return f"the dashboard could not be read through Grafana: {e}"
 
 
 def dashboard_report_line(out):

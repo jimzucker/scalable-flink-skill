@@ -795,6 +795,81 @@ def cmd_selftest(live=True, topic=None):
     expect("dashboard: panels with no points or an error are named (must not fire)", empties, "",
            should_fire=False)
 
+    def settling(open_until, budget, stop_at=None):
+        """The settling loop with a fake case runner: the step stays open until
+        `open_until` runs exist."""
+        def go():
+            runs = [dict(cores=c_, recordsPerSec=r, status="OK") for c_, r, _ in RUN4]
+            ran, labels, said = [], [], []
+
+            def run_one(cores, pass_id, label=None):
+                runs.append(dict(cores=cores, recordsPerSec=1.0, status="OK"))
+                ran.append(cores); labels.append(label)
+                return ("rig", "stopped") if stop_at and len(ran) == stop_at else None
+            extra, stop = settle_suite(runs, run_one, budget,
+                                       judge=lambda rs: [run4] if len(rs) < open_until else [dict(run4, meetsClaim=True)],
+                                       say=said.append)
+            return extra, stop, ran, labels, said
+        return go
+
+    def settles_in_two():
+        extra, stop, ran, labels, said = settling(12, 6)()
+        assert (extra, stop, ran) == (2, None, [2, 4]), (extra, stop, ran)
+        assert labels[0] == "suite: settling 2->4, extra case 1 of up to 6 (2 cores)", labels[0]
+        assert len(said) == 1 and "Running up to 6 more case(s) of 2 and 4 cores" in said[0], said
+    expect("settle: the loop runs the open step's two sizes until it settles (must not fire)",
+           settles_in_two, "", should_fire=False)
+
+    def never_settles():
+        extra, stop, ran, _, _ = settling(10_000, 6)()
+        assert extra == 6 and ran == [2, 4, 2, 4, 2, 4] and stop is None, (extra, ran)
+    expect("settle: the loop stops at its budget when the step never settles (must not fire)",
+           never_settles, "", should_fire=False)
+
+    def stops_on_rig():
+        extra, stop, ran, _, _ = settling(10_000, 6, stop_at=1)()
+        assert extra == 1 and stop == ("rig", "stopped"), (extra, stop)
+    expect("settle: a rig check stopping a settling case stops the loop (must not fire)",
+           stops_on_rig, "", should_fire=False)
+
+    def not_settled_words():
+        step = dict(run4, adjacentPairs=[1.697, 1.75, 1.8, 1.85, 1.86, 1.9, 1.95, 1.982],
+                    ratio=1.858, ratioLowCI=1.771, ratioHighCI=1.9)
+        assert L.settle_range(step) == ("The range its 8 pairs of passes support is 1.77x to 1.90x "
+                                        "(single pairs ran 1.70x to 1.98x)"), L.settle_range(step)
+        done = report_verdict("not-settled", {"unsettledSteps": [
+            {"step": "2->4", "ratio": 1.858, "low": 1.771, "high": 1.9, "need": 1.8, "pairs": 8}]})
+        assert done == ("STOPPED at report: not settled — 2→4 reads 1.86x, and the range its 8 pairs "
+                        "support, 1.77x to 1.90x, spans the 1.80x target. Report it as not settled and "
+                        "change nothing in the pipeline"), done
+        assert report_verdict("claim-not-met", {}).startswith("STOPPED at report: the table is good")
+        assert report_verdict(None, None) == "STOPPED at report: the table could not be reported"
+    expect("report: the not-settled range and DONE line read as written (run 52's figures) (must not fire)",
+           not_settled_words, "", should_fire=False)
+
+    def memory_row():
+        # The row's arithmetic from the example config: the worker's container
+        # limit at its largest case, broker, job manager 2g and extra services;
+        # an unreadable limit is named, not a crash.
+        saved = c.raw.get("extraServices")
+        try:
+            c.raw["extraServices"] = {"grafana": {"mem_limit": "224m"}, "prometheus": {"mem_limit": "192m"},
+                                      "odd": {"mem_limit": "1.5g"}}
+            _, limit = L.tm_memory_for(max(c.cases))
+            want_worker = L._mib(limit) if L.tm_memory_capped() and limit else 0
+            line = L.memory_budget_line(10_000 * 1048576)
+            need = want_worker + L._mib(c.kafka_mem) + 2048 + 416
+            assert f"= {need:.0f}m of 10000m VM" in line, line
+            assert "other services 416m" in line and "could not read the memory limit of odd" in line, line
+            assert L.memory_budget_line(0).endswith("requested, VM size unknown"), L.memory_budget_line(0)
+        finally:
+            if saved is None:
+                c.raw.pop("extraServices", None)
+            else:
+                c.raw["extraServices"] = saved
+    expect("memory: the budget row adds container limits and names a limit it cannot read (must not fire)",
+           memory_row, "", should_fire=False)
+
     def worker_memory():
         # Clean-room run 52: the memory row budgeted the worker's process size,
         # while start_tm gives its container 1.25x that. Both now read one
@@ -827,6 +902,153 @@ def cmd_selftest(live=True, topic=None):
                 c.design.pop("inputs", None)
     expect("args: every declared input has a placeholder, and the scaled one follows the tiny proof "
            "(must not fire)", inputs_from_the_spec, "", should_fire=False)
+
+    # A fake Grafana for the parts of the dashboard checks that talk to it.
+    # They ran only live until 2026-10-02 (two reference runs, clean-room run
+    # 52), and the path that stops the chain on an empty panel had never run.
+    import http.server, threading, urllib.parse as _up
+
+    class FakeGrafana:
+        def __init__(self, prov):
+            self.prov, self.ds_status, self.hide, self.empty = prov, "OK", set(), set()
+            fake = self
+
+            class H(http.server.BaseHTTPRequestHandler):
+                def log_message(self, *a):
+                    pass
+
+                def reply(self, code, body):
+                    data = json.dumps(body).encode()
+                    self.send_response(code)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+
+                def do_GET(self):
+                    path = _up.urlparse(self.path).path
+                    boards = fake.boards()
+                    if path == "/api/health":
+                        return self.reply(200, {"database": "ok"})
+                    if path == "/api/search":
+                        return self.reply(200, [{"uid": u, "title": b["title"]} for u, b in boards.items()
+                                                if b["title"] not in fake.hide])
+                    if path.startswith("/api/dashboards/uid/"):
+                        return self.reply(200, {"dashboard": boards[path.rsplit("/", 1)[1]]})
+                    if path.startswith("/api/datasources/uid/") and path.endswith("/health"):
+                        return self.reply(200, {"status": fake.ds_status, "message": "fake"})
+                    self.reply(404, {"message": "not found"})
+
+                def do_POST(self):
+                    body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                    res = {}
+                    for q in body["queries"]:
+                        if (q.get("datasource") or {}).get("uid") != "st44prom":
+                            return self.reply(404, {"message": "data source not found"})
+                        n = 0 if q["expr"] in fake.empty else 30
+                        res[q["refId"]] = {"frames": [{"data": {"values": [list(range(n)), [1.0] * n]}}]}
+                    self.reply(200, {"results": res})
+
+            self.srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+            self.port = self.srv.server_address[1]
+            threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+
+        def boards(self):
+            d = os.path.join(self.prov, "dashboards", "json")
+            out = {}
+            for f in os.listdir(d):
+                b = json.load(open(os.path.join(d, f)))
+                out[b.get("uid") or f] = b
+            return out
+
+        def close(self):
+            # shutdown() alone leaves the socket accepting, so a request waits
+            # out its timeout instead of being refused as by a Grafana that is down
+            if not getattr(self, "closed", False):
+                self.closed = True
+                self.srv.shutdown()
+                self.srv.server_close()
+
+    def grafana_rig(fn):
+        def go():
+            with tempfile.TemporaryDirectory() as tdir:
+                prov = os.path.join(tdir, "prov")
+                os.makedirs(os.path.join(prov, "datasources")); os.makedirs(os.path.join(prov, "dashboards", "json"))
+                open(os.path.join(prov, "datasources", "ds.yml"), "w").write(
+                    "apiVersion: 1\ndatasources:\n  - name: Prometheus\n    uid: st44prom\n    type: prometheus\n")
+                open(os.path.join(prov, "dashboards", "p.yml"), "w").write(
+                    "apiVersion: 1\nproviders:\n  - name: x\n    options:\n      path: /etc/grafana/provisioning/dashboards/json\n")
+                json.dump({"uid": "d1", "title": "Pipeline", "time": {"from": "now-90m", "to": "now"},
+                           "panels": [panel(expr="rate_a", title="Input rate"),
+                                      panel(expr="lag_b", title="Records waiting")]},
+                          open(os.path.join(prov, "dashboards", "json", "d.json"), "w"))
+                fake = FakeGrafana(prov)
+                try:
+                    svc = {"service": "grafana", "port": fake.port, "mounts": {"/etc/grafana/provisioning": prov}}
+                    fn(fake, svc)
+                finally:
+                    fake.close()
+        return go
+
+    def loaded(fake, svc):
+        ds, boards, found = L.dashboard_files(svc)
+        assert not found, found
+        assert "has loaded 1 dashboard" in L.dashboard_loaded(svc, ds, boards, wait_s=5, tries=1)
+        fake.ds_status = "ERROR"
+        try:
+            L.dashboard_loaded(svc, ds, boards, wait_s=5, tries=1)
+            raise AssertionError("a data source failing its health check passed")
+        except Exception as e:
+            assert "does not answer" in str(e), e
+        fake.ds_status, fake.hide = "OK", {"Pipeline"}
+        try:
+            L.dashboard_loaded(svc, ds, boards, wait_s=5, tries=1)
+            raise AssertionError("a dashboard Grafana had not loaded passed")
+        except Exception as e:
+            assert "has not loaded Pipeline" in str(e), e
+    expect("grafana: loaded, data source answering, and both failures caught (must not fire)",
+           grafana_rig(loaded), "", should_fire=False)
+
+    def has_data(fake, svc):
+        now = time.time()
+        assert L.dashboard_stop_reason(svc, now - 600, now) is None
+        fake.empty = {"lag_b"}
+        why = L.dashboard_stop_reason(svc, now - 600, now)
+        assert why and '1 of 2 dashboard panels show no data' in why and '"Records waiting"' in why, why
+    expect("grafana: every panel with data passes; one empty panel is named (must not fire)",
+           grafana_rig(has_data), "", should_fire=False)
+
+    def grafana_down(fake, svc):
+        fake.close()
+        now = time.time()
+        why = L.dashboard_stop_reason(svc, now - 600, now)
+        assert why and "could not be read through Grafana" in why, why
+    expect("grafana: a Grafana that does not answer stops it, and says so (must not fire)",
+           grafana_rig(grafana_down), "", should_fire=False)
+
+    def opens_on_suite(fake, svc):
+        t0, t1 = time.time() - 3600, time.time() - 600
+        ok, detail = L.dashboard_open_on_suite(svc, t0, t1, wait_s=5)
+        assert ok and detail.startswith("opens on the suite"), detail
+        b = fake.boards()["d1"]
+        assert L.range_covers(b, t0, t1) and b["refresh"] == "", b.get("time")
+    expect("grafana: the suite's range is written to the file and read back (must not fire)",
+           grafana_rig(opens_on_suite), "", should_fire=False)
+
+    def chain_stops_on_empty_panel(fake, svc):
+        fake.empty = {"rate_a"}
+        ran = []
+        with tempfile.TemporaryDirectory() as tmp:
+            rc = cmd_all(steps=[("completeness", lambda: (ran.append("completeness"), 0)[1]),
+                                ("tinyproof", lambda: (ran.append("tinyproof"), 0)[1])],
+                         results=tmp,
+                         dashboard_check=lambda since: L.dashboard_stop_reason(svc, since - 60, time.time()))
+            done = open(os.path.join(tmp, "DONE")).read()
+        assert rc == 1 and ran == ["completeness"], (rc, ran)
+        assert done.startswith("STOPPED at completeness: 1 of 2 dashboard panels show no data"), done
+        assert '"Input rate"' in done, done
+    expect("chain: an empty dashboard panel stops it at completeness, before the suite (must not fire)",
+           grafana_rig(chain_stops_on_empty_panel), "", should_fire=False)
 
     def one_query_empty():
         qs = [{"refId": "A", "expr": "a", "legendFormat": "orders read"},
@@ -2188,46 +2410,7 @@ def cmd_preflight():
         being stopped mid-run instead: the broker's page cache grows into whatever cap it is
         given, and paying for that cap out of the worker drove 1-core GC to 26%."""
         info = L.sh("docker info --format '{{.MemTotal}}'", check=False).stdout.strip()
-        vm = int(info) if info.isdigit() else 0
-        top = max(c.cases)
-        capped = L.tm_memory_capped()
-        # Container limits, which is what the VM has to hold: the worker's
-        # limit (1.25x its process size by default), the job manager's
-        # mem_limit (2g in the compose file) and every extra service's own.
-        # Clean-room run 52 found this row budgeting process sizes and leaving
-        # the dashboard out (run 45, earlier: 1024m for a 1600m process).
-        _, limit = L.tm_memory_for(top)
-        worker = L._mib(limit) if capped and limit else 0.0
-        broker = L._mib(c.kafka_mem)
-        jm = 2048.0
-        extras, unread = 0.0, []
-        for name, b in (c.raw.get("extraServices") or {}).items():
-            if isinstance(b, dict) and b.get("mem_limit"):
-                try:
-                    extras += L._mib(str(b["mem_limit"]))
-                except Exception:
-                    unread.append(name)
-        need = worker + broker + jm + extras
-        # Reported, not enforced. A rule refusing need > VM - 1 GB was added on
-        # 2026-09-07 and removed the same day: runs 20 and 21 both passed with a
-        # 6,144m broker on a 7,838 MiB VM, which that rule refuses, and run 22
-        # spent two chains discovering that it contradicts the broker-memory
-        # hint (which asked for 5,632m where the rule allowed 3,613m). The
-        # broker's page cache is elastic; over-committing it against the VM is
-        # normal and the cases that matter are caught by the cap floor and the
-        # broker's own limit-hit guard.
-        over = " (over-committed, which is normal — the broker's cache is elastic)" if vm and need > vm / 1048576.0 else ""
-        # Say "uncapped" here too. Budgeting Cfg.tm_mem's 4096m default while the
-        # row above reports the worker as uncapped states a figure that was never
-        # applied, and the over-commit warning it produces is then arithmetic on
-        # a phantom. Clean-room run 30 reported the contradiction.
-        w = (f"worker limit {worker:.0f}m at {top} cores" if capped
-             else "memory uncapped (engine default)")
-        ex = (f" + other services {extras:.0f}m" if extras else "") + (
-            f" (could not read the memory limit of {', '.join(unread)})" if unread else "")
-        return (f"{w} + broker {broker:.0f}m + job manager {jm:.0f}m{ex} "
-                f"= {need:.0f}m of {vm / 1048576:.0f}m VM{over}" if vm
-                else f"{need:.0f}m requested, VM size unknown")
+        return L.memory_budget_line(int(info) if info.isdigit() else 0)
 
     def backlog_sizing_hint():
         """Preflight cannot know the rate yet, but it can say what the guess must
@@ -2896,6 +3079,38 @@ def passes_plan(cases, n, baseline=None):
     return plan
 
 
+def settle_suite(runs, run_one, budget, judge=None, say=None):
+    """Run extra cases until every step is settled or `budget` cases are spent.
+    `run_one(cores, pass_id, label=...)` runs one case and appends it to `runs`,
+    returning a (reason, message) pair when a rig check says to stop. `judge`
+    turns runs into step verdicts (the suite's own table by default). Returns
+    (extra cases run, stop). Pulled out of cmd_suite so the self-test can drive
+    it with a fake case runner; it had run only live (reference run 5,
+    clean-room run 52)."""
+    judge = judge or (lambda rs: build_table(rs, quick=False)["stepRatios"])
+    say = say or log
+    extra, announced, stop = 0, None, None
+    while not stop and extra < budget:
+        nxt = L.settle_next(runs, judge(runs))
+        if not nxt:
+            break
+        cores, step = nxt
+        # Said again whenever the open step changes: reference run 5 settled
+        # 1->2 with one case and went on to 2->4 under a line naming 1 and 2.
+        if step["step"] != announced:
+            say(f"  {step['step']} is not settled: {step['ratioLowCI']:.2f}x to {step['ratioHighCI']:.2f}x "
+                f"spans the target. Running up to {budget - extra} more case(s) of "
+                f"{step['from']} and {step['to']} cores to decide it.")
+            announced = step["step"]
+        extra += 1
+        # "case 13 of 13", then "case 15 of 15", read as a suite that kept
+        # finishing (clean-room run 52); say what these cases are.
+        stop = run_one(cores, f"settle-{extra}",
+                       label=f"suite: settling {step['step']}, extra case {extra} of up to "
+                             f"{budget} ({cores} cores)")
+    return extra, stop
+
+
 def cmd_suite():
     c = cfg()
     man = load_json("manifest.json")
@@ -3000,27 +3215,9 @@ def cmd_suite():
     # passes. Run its two cases alternately -- each case after the first adds a
     # pair of neighbours in time -- until it settles or the budget is spent.
     # Reference run 4 (2026-09-28) read 2->4 at 1.65-1.82x from three pairs.
-    extra, announced = 0, None
-    while not stop and not L.QUICK and extra < T["settleExtraCases"]:
-        nxt = L.settle_next(out["runs"], build_table(out["runs"], quick=False)["stepRatios"])
-        if not nxt:
-            break
-        cores, step = nxt
-        # Said again whenever the open step changes: reference run 5 settled
-        # 1->2 with one case and went on to 2->4 under a line naming 1 and 2.
-        if step["step"] != announced:
-            left = T["settleExtraCases"] - extra
-            log(f"  {step['step']} is not settled: {step['ratioLowCI']:.2f}x to {step['ratioHighCI']:.2f}x "
-                f"spans the target. Running up to {left} more case(s) of "
-                f"{step['from']} and {step['to']} cores to decide it.")
-            announced = step["step"]
-        total_cases += 1
-        extra += 1
-        # "case 13 of 13", then "case 15 of 15", read as a suite that kept
-        # finishing (clean-room run 52); say what these cases are.
-        stop = run_one(cores, f"settle-{extra}",
-                       label=f"suite: settling {step['step']}, extra case {extra} of up to "
-                             f"{T['settleExtraCases']} ({cores} cores)")
+    extra = 0
+    if not stop and not L.QUICK:
+        extra, stop = settle_suite(out["runs"], run_one, T["settleExtraCases"])
     if extra:
         out["settleCases"] = extra
         save()
@@ -3346,7 +3543,31 @@ def cmd_report():
 
 # ------------------------------------------------------------------------ all
 
-def cmd_all(steps=None, results=None):
+def report_verdict(why, suite):
+    """Pure. The DONE line for a chain that stopped at the report, from the
+    report's own verdict and suite.json. What a person reads when the chain is
+    over: "FAIL at report" said nothing about what happened."""
+    suite = suite or {}
+    if why == "no-result":
+        return ("STOPPED at report: no scaling result — too many cases were "
+                "thrown out to compare one core count with another")
+    if why == "not-settled":
+        return ("STOPPED at report: not settled — "
+                + "; ".join(f"{u['step'].replace('->', '→')} reads {u['ratio']:.2f}x, and "
+                            f"the range its {u['pairs']} pairs support, {u['low']:.2f}x "
+                            f"to {u['high']:.2f}x, spans the {u['need']:.2f}x target"
+                            for u in (suite.get("unsettledSteps") or []))
+                + ". Report it as not settled and change nothing in the pipeline")
+    if why == "claim-not-met":
+        return "STOPPED at report: the table is good, the pipeline did not meet the target"
+    if why == "step-missing":
+        return ("STOPPED at report: a step the claim needs was not measured"
+                + "".join(f" — {g['step'].replace('->', '→')}: {g['why']}"
+                          for g in (suite.get("missingSteps") or [])))
+    return "STOPPED at report: the table could not be reported"
+
+
+def cmd_all(steps=None, results=None, dashboard_check=None):
     """The whole chain as one command. Run 11 spent 20 minutes of its 1.97 h in
     the gaps between commands an agent typed by hand, and wrote phases.log by
     hand; here the harness writes it, and DONE is the file to wait on.
@@ -3426,13 +3647,11 @@ def cmd_all(steps=None, results=None):
                     pass
         # Every dashboard panel shows data through Grafana, checked as soon as
         # a job has run -- minutes in, not after the hour-long suite.
+        # `dashboard_check` is the self-test's way in; the live chain asks Grafana.
         stop_why = None
-        if name == "completeness" and not rc and results == c.results:
-            try:
-                svc = L.dashboard_here()
-                stop_why = svc and L.dashboard_has_data(svc, t0, time.time(), "the completeness run")
-            except Exception as e:
-                stop_why = f"the dashboard could not be read through Grafana: {e}"
+        if name == "completeness" and not rc and (results == c.results or dashboard_check):
+            stop_why = (dashboard_check or (lambda since: L.dashboard_stop_reason(
+                L.dashboard_here(), since, time.time())))(t0)
             if stop_why:
                 log(f"STOPPED: {stop_why}")
                 rc = 1
@@ -3458,21 +3677,7 @@ def cmd_all(steps=None, results=None):
                     why = (load_json("suite.json") or {}).get("reportVerdict")
                 except Exception:
                     why = None
-            verdict = ({"no-result": "STOPPED at report: no scaling result — too many cases were "
-                                     "thrown out to compare one core count with another",
-                        "not-settled": "STOPPED at report: not settled — "
-                                       + "; ".join(f"{u['step'].replace('->', '→')} reads {u['ratio']:.2f}x, and "
-                                                   f"the range its {u['pairs']} pairs support, {u['low']:.2f}x "
-                                                   f"to {u['high']:.2f}x, spans the {u['need']:.2f}x target"
-                                                   for u in ((load_json("suite.json") or {}).get("unsettledSteps") or []))
-                                       + ". Report it as not settled and change nothing in the pipeline",
-                        "claim-not-met": "STOPPED at report: the table is good, the pipeline did "
-                                         "not meet the target",
-                        "step-missing": "STOPPED at report: a step the claim needs was not measured"
-                                        + ("".join(f" — {g['step'].replace('->', '→')}: {g['why']}"
-                                                   for g in ((load_json("suite.json") or {}).get("missingSteps") or []))
-                                           )}.get(why,
-                        "STOPPED at report: the table could not be reported")
+            verdict = (report_verdict(why, load_json("suite.json") if why else None)
                        if name == "report" else f"STOPPED at {name}" + (f": {stop_why}" if stop_why else ""))
             break
     out["verdict"] = verdict

@@ -1316,7 +1316,7 @@ def cmd_selftest(live=True, topic=None):
                 rc = cmd_replay()
             if rc != 0:
                 said = [l.strip() for l in buf.getvalue().splitlines()
-                        if "DISAGREE" in l or "STOPPED" in l or "refus" in l.lower()]
+                        if "DISAGREE" in l or "STOPPED" in l]
                 raise Exception("the replay disagreed with the record while --quick was set: "
                                 + " | ".join(said[:6] or buf.getvalue().splitlines()[-6:]))
             t = build_table([{"cores": 2, "pass": "p1", "recordsPerSec": 100.0},

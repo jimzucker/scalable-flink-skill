@@ -4691,6 +4691,71 @@ def memory_budget_line(vm):
             else f"{need:.0f}m requested, VM size unknown")
 
 
+# The series SKILL.md section 7 names, checked by every run against the image
+# it actually runs (doccheck holds the table and this list to the same names).
+# All 19 returned data on flink:1.20.1 on 2026-10-02.
+SECTION7_METRICS = (
+    "flink_taskmanager_job_task_operator_numRecordsOutPerSecond",
+    "flink_taskmanager_job_task_operator_numRecordsInPerSecond",
+    "flink_taskmanager_job_task_operator_pendingRecords",
+    "flink_taskmanager_job_task_operator_currentEmitEventTimeLag",
+    "flink_jobmanager_job_numRestarts",
+    "flink_jobmanager_job_numberOfFailedCheckpoints",
+    "docker_container_cpu_seconds_total",
+    "docker_container_memory_bytes",
+    "docker_container_memory_limit_bytes",
+    "flink_taskmanager_job_task_busyTimeMsPerSecond",
+    "flink_taskmanager_job_task_backPressuredTimeMsPerSecond",
+    "flink_taskmanager_job_task_idleTimeMsPerSecond",
+    "flink_taskmanager_Status_JVM_GarbageCollector_All_TimeMsPerSecond",
+    "flink_taskmanager_Status_JVM_GarbageCollector_G1_Young_Generation_TimeMsPerSecond",
+    "flink_taskmanager_Status_JVM_GarbageCollector_G1_Old_Generation_TimeMsPerSecond",
+    "flink_jobmanager_job_lastCheckpointDuration",
+    "flink_jobmanager_job_lastCheckpointSize",
+    "flink_jobmanager_taskSlotsAvailable",
+    "flink_taskmanager_Status_JVM_Threads_Count",
+)
+
+
+def section7_metrics_missing(svc, t0, t1):
+    """The SECTION7_METRICS names that returned no data through Grafana over
+    [t0, t1], or None when there is no dashboard to ask through. A Flink image
+    that renames a metric is found on its first run instead of by a reader
+    staring at an empty panel."""
+    if not svc:
+        return None
+    ds, _, _ = dashboard_files(svc)
+    uid = next((d.get("uid") for d in ds if (d.get("type") or "prometheus") == "prometheus" and d.get("uid")), None)
+    if not uid:
+        return None
+    queries = [{"refId": f"m{i}", "expr": f'count({{__name__="{name}"}})',
+                "datasource": {"type": "prometheus", "uid": uid}, "intervalMs": 15000, "maxDataPoints": 50}
+               for i, name in enumerate(SECTION7_METRICS)]
+    r = grafana_api(svc["port"], "/api/ds/query", {"queries": queries, "from": str(int(t0 * 1000)),
+                                                   "to": str(int(t1 * 1000))})
+    results = (r or {}).get("results", {})
+    missing = []
+    for i, name in enumerate(SECTION7_METRICS):
+        n = 0
+        for f in (results.get(f"m{i}") or {}).get("frames") or []:
+            vals = (f.get("data") or {}).get("values") or []
+            if len(vals) >= 2:
+                n += sum(1 for v in vals[-1] if v is not None)
+        if n == 0:
+            missing.append(name)
+    return missing
+
+
+def section7_metrics_line(missing):
+    """Pure. The report's sentence about the names section 7 lists."""
+    if missing is None:
+        return None
+    if not missing:
+        return f"all {len(SECTION7_METRICS)} series SKILL.md section 7 names returned data on this image"
+    return (f"SKILL.md section 7 names {len(missing)} series this image did not export: "
+            + ", ".join(missing) + ". Check the image's metric names before trusting those panels.")
+
+
 def dashboard_stop_reason(svc, t0, t1):
     """None when there is no dashboard or every panel shows data through
     Grafana over [t0, t1]; otherwise the sentence the chain stops with."""

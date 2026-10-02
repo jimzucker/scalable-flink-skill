@@ -511,6 +511,15 @@ class Cfg:
         for i, t in enumerate(self.topics_also):
             d[f"also{i}"] = t
         d["alsos"] = ",".join(self.topics_also)
+        # Every input the requirements declare (design.inputs), so a second
+        # input -- the default case's price feed -- is named from the spec, not
+        # typed into job.args (clean-room run 52). The scaled input follows
+        # topic_in, which the tiny proof points at its own small topic.
+        ins = [self.topic_in if t == self.suite_topic_in else t
+               for t in (self.design.get("inputs") or [self.suite_topic_in])]
+        for i, t in enumerate(ins):
+            d[f"in{i}"] = t
+        d["ins"] = ",".join(ins)
         d.update(kw)
         return s.format(**d)
 

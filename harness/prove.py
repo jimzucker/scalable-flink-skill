@@ -808,6 +808,26 @@ def cmd_selftest(live=True, topic=None):
     expect("memory: the worker's container limit is 1.25x its process size, as started (must not fire)",
            worker_memory, "", should_fire=False)
 
+    def inputs_from_the_spec():
+        # The number of inputs comes from the requirements (design.inputs), not
+        # from the harness: every declared input gets a placeholder, and the
+        # scaled one follows topic_in to the tiny proof's topic.
+        saved = (c.topic_in, c.design.get("inputs"))
+        try:
+            c.design["inputs"] = [c.suite_topic_in, "prices"]
+            got = c.fmt("--in {in} --a {in0} --b {in1} --all {ins}")
+            want = f"--in {c.suite_topic_in} --a {c.suite_topic_in} --b prices --all {c.suite_topic_in},prices"
+            assert got == want, got
+            c.topic_in = c.suite_topic_in + "-tiny"
+            got = c.fmt("{in0} {in1}")
+            assert got == f"{c.suite_topic_in}-tiny prices", got
+        finally:
+            c.topic_in, c.design["inputs"] = saved[0], saved[1]
+            if saved[1] is None:
+                c.design.pop("inputs", None)
+    expect("args: every declared input has a placeholder, and the scaled one follows the tiny proof "
+           "(must not fire)", inputs_from_the_spec, "", should_fire=False)
+
     def one_query_empty():
         qs = [{"refId": "A", "expr": "a", "legendFormat": "orders read"},
               {"refId": "B", "expr": "b", "legendFormat": "rows written"}]

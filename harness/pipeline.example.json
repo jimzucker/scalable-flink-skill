@@ -36,7 +36,7 @@
   "job": {
     "jar": "job/target/positions-1.0.jar",
     "mainClass": "scaletest.PositionsJob",
-    "args": "--bootstrap={bootstrap} --topicIn={in} --topicSym={out0} --topicAcct={out1} --group={group} --parallelism={par} --checkpointMs={ckptMs}",
+    "args": "--bootstrap={bootstrap} --topicIn={in} --topicPrices={in1} --topicSym={out0} --topicAcct={out1} --group={group} --parallelism={par} --checkpointMs={ckptMs}",
     "sourceVertexMatch": "kafka-source"
   },
   "generator": {

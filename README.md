@@ -46,6 +46,13 @@ across 1→4 cores.
 Both results, with their raw output, are in the validation repository linked
 under [Evidence](#evidence).
 
+The dashboard the skill builds, from a reference-pipeline run on 2026-10-01
+that met the target on both steps (1→2 **1.92×**, 2→4 **1.84×**). Its four rows
+are the pipeline's output, lag and job health, Kafka, and Flink; the steps in
+*CPU by container* are the 1-, 2- and 4-core cases, ten in all.
+
+![The four-row dashboard over a reference run's whole suite](docs/dashboard-reference-run.png)
+
 ## What it does
 
 1. **Interviews you before it builds.** One question at a time, each with a

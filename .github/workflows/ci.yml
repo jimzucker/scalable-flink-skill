@@ -35,6 +35,12 @@ jobs:
       - name: The prose and the code state the same numbers
         run: python3 harness/doccheck.py
 
+      # A name a function reads that is defined nowhere fails only when that
+      # line runs; preflight's host probe reached the rig that way on 2026-09-08
+      # after the self-test and the replay had both passed.
+      - name: No function reads a name that is defined nowhere
+        run: python3 harness/namecheck.py harness/lib.py harness/prove.py harness/doccheck.py harness/platforms.py harness/dashboard/docker_cpu_exporter.py
+
       - name: The skill's name matches the directory it installs into
         run: |
           name=$(sed -n 's/^name: //p' SKILL.md | head -1)

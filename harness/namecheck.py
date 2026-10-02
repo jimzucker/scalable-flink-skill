@@ -38,4 +38,6 @@ if __name__ == "__main__":
     for p, line, scope, name in found:
         print(f"{p}:{line}: {scope}() reads undefined name {name!r}")
     print(f"namecheck: {len(found)} undefined name(s) in {len(sys.argv) - 1} file(s)")
+    # Exit non-zero on a finding, or CI reads a broken name as a pass.
+    sys.exit(1 if found else 0)
     sys.exit(1 if found else 0)

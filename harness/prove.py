@@ -1789,6 +1789,285 @@ def cmd_selftest(live=True, topic=None):
     expect("a pipeline with no constant fan-out still gets a report (must not fire)",
            report_renders_with_no_constant_fan_out, "", should_fire=False)
 
+    def every_renderer_on_real_suites():
+        # Clean-room run 42 ended with a 0-byte suite.txt because a renderer
+        # raised. Both fixtures are real suites -- run 42's trimmed, and run
+        # 52's (settling cases, a not-settled step, the dashboard line) -- and
+        # each goes through every renderer the report uses.
+        here = os.path.dirname(os.path.abspath(__file__))
+        saved = L._CFG.out_per_in
+        try:
+            for name, must in (("suite-no-fanout.json", ()),
+                               ("suite-run52-not-settled.json", ("not settled", "settle-6", "1->2"))):
+                out = json.load(open(os.path.join(here, "fixtures", name)))
+                out["table"] = L.build_table(out["runs"], quick=out.get("quickLook", False))
+                L._CFG.out_per_in = out.get("outputsPerInput")
+                text, md, card = L.render_table(out), L.render_markdown(out), L.scorecard(out)
+                for kind, body in (("table", text), ("markdown", md), ("scorecard", "\n".join(card) if isinstance(card, list) else str(card))):
+                    if not body.strip() or "nan" in body.lower():
+                        raise Exception(f"{name}: the {kind} rendered empty or with a nan")
+                if not md.lstrip().startswith(("#", "|", "**")):
+                    raise Exception(f"{name}: the markdown does not start as markdown: {md[:60]!r}")
+                for word in must:
+                    if word not in text + md:
+                        raise Exception(f"{name}: the report never says {word!r}")
+            rows, _ = L.design_diff({"operators": ["parse-order"], "outputs": ["positions"]}, RUN36_PLAN,
+                                    {"positions": 5}, {"outputsPerInput": (5, 4.99)})
+            table = "\n".join(L.design_table(rows))
+            if "parse-order" not in table or "outputsPerInput" not in table:
+                raise Exception(f"the design table lost a row: {table[:200]!r}")
+        finally:
+            L._CFG.out_per_in = saved
+    expect("report: every renderer runs on two real suites, run 42's and run 52's (must not fire)",
+           every_renderer_on_real_suites, "", should_fire=False)
+
+    # Small guards that had no test of their own (review of 2026-10-02).
+    def outputs_written():
+        assert L.declared_outputs_verdict({"mv-sym": 812, "mv-acct": 40}) is None
+        one = L.declared_outputs_verdict({"mv-sym": 812, "mv-acct": 0})
+        assert isinstance(one, Refusal) and "topic mv-acct is empty" in one.msg, one
+        two = L.declared_outputs_verdict({"mv-sym": 0, "mv-acct": 0})
+        assert "topics mv-acct, mv-sym are empty" in two.msg, two.msg
+    expect("outputs: a declared output left empty by a full drain is named (must not fire)",
+           outputs_written, "", should_fire=False)
+
+    def backlog_ran_out():
+        L.drained({"committed": 900, "endIn": 2000})        # still draining: must not fire (else "2,000")
+        L.drained({"committed": 900, "endIn": 0})           # no end known yet: not a verdict
+        L.drained({"committed": 1000, "endIn": 1000})
+    expect("the backlog ran out under the job", backlog_ran_out, "the backlog ran out (1,000 records)")
+
+    def one_max_parallelism():
+        saved_kc, saved_props = L.keycheck, dict(c.flink_props)
+        try:
+            c.flink_props.pop("pipeline.max-parallelism", None)
+            L.keycheck = lambda *a, **k: ["1\t128", "2\t128", "4\t128"]
+            got = L.max_parallelism_for([1, 2, 4])
+            assert got == (128, "Flink's own default for these parallelisms"), got
+            c.flink_props["pipeline.max-parallelism"] = "369"
+            assert L.max_parallelism_for([1, 2, 4])[0] == 369
+            c.flink_props.pop("pipeline.max-parallelism")
+            L.keycheck = lambda *a, **k: ["1\t128", "2\t128", "4\t256"]
+            L.max_parallelism_for([1, 2, 4])
+        finally:
+            L.keycheck = saved_kc
+            c.flink_props.clear(); c.flink_props.update(saved_props)
+    expect("cases that would not share one maxParallelism", one_max_parallelism,
+           "would not share one maxParallelism")
+
+    # The warm-up and window-anchoring loops, on a fake clock fed with the
+    # offset sampler's ticks. Their verdicts (warmup_verdict, settle_boundary)
+    # were tested; the loops that find each commit, honour the deadline and
+    # notice a dry backlog ran only live. The ticks are clean-room run 52's own.
+    TICKS = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                        "fixtures", "ticks-run52-2c.json")))["ticks"]
+
+    class Clock:
+        """time.time() and time.sleep() on a virtual clock; the rest is real."""
+        def __init__(self, t):
+            self.now = t
+
+        def time(self):
+            return self.now
+
+        def sleep(self, s):
+            self.now += max(s, 0.01)
+
+        def __getattr__(self, name):
+            return getattr(time, name)
+
+    def on_ticks(ticks, fn):
+        """Run fn with the sampler returning, at each virtual moment, the ticks
+        written by then."""
+        clock = Clock(ticks[0]["ts"] / 1000.0)
+        saved = (L.time, L.sampler_tail)
+        L.time = clock
+        L.sampler_tail = lambda n=8: [t for t in ticks if t["ts"] <= clock.now * 1000][-n:]
+        try:
+            return fn()
+        finally:
+            L.time, L.sampler_tail = saved
+
+    def stretched(ticks, seconds, scale=lambda i: 1.0, end_in=None):
+        """A longer stream with run 52's own commit steps, repeated, each step's
+        records multiplied by scale(commit number)."""
+        steps, prev = [], ticks[0]
+        for t in ticks[1:]:
+            if t["committed"] != prev["committed"]:
+                steps.append((t["ts"] - prev["ts"], t["committed"] - prev["committed"]))
+                prev = t
+        out, ts, committed, i, last = [], ticks[0]["ts"], ticks[0]["committed"], 0, ticks[0]["ts"]
+        while ts - ticks[0]["ts"] < seconds * 1000:
+            dt, dc = steps[i % len(steps)]
+            while last + 500 < ts + dt:
+                last += 500
+                out.append({"ts": last, "committed": committed, "endIn": end_in or 10**12})
+            ts += dt
+            committed += int(dc * scale(i))
+            if end_in:
+                committed = min(committed, end_in)
+            out.append({"ts": ts, "committed": committed, "endIn": end_in or 10**12})
+            last, i = ts, i + 1
+        return out
+
+    def warm_steady():
+        d = on_ticks(stretched(TICKS, 300), lambda: L.wait_flat(600))
+        assert d.get("rampFlatAtS") is not None, d
+    expect("warm-up: run 52's own commit steps settle (must not fire)", warm_steady, "", should_fire=False)
+
+    def warm_falling():
+        on_ticks(stretched(TICKS, 900, scale=lambda i: 0.93 ** i), lambda: L.wait_flat(600))
+    expect("warm-up: a rate that keeps falling never settles", warm_falling, "never settled")
+
+    def warm_nothing():
+        flat = [{"ts": TICKS[0]["ts"] + 500 * i, "committed": 0, "endIn": 10**9} for i in range(2000)]
+        on_ticks(flat, lambda: L.wait_flat(300))
+    expect("warm-up: a pipeline that commits nothing is named as such", warm_nothing,
+           "did not commit a single offset")
+
+    def warm_runs_dry():
+        # about 60 s of run 52's 2-core rate (~250,000/s): dry before the 90 s warm-up floor
+        on_ticks(stretched(TICKS, 900, end_in=TICKS[0]["committed"] + 15_000_000), lambda: L.wait_flat(600))
+    expect("warm-up: the backlog running dry is named", warm_runs_dry, "the backlog ran out")
+
+    def window_opens_on_a_commit():
+        base = TICKS[0]
+        got = on_ticks(TICKS, lambda: L.next_boundary(after=base, timeout=60))
+        assert got["committed"] > base["committed"] and got["ts"] > base["ts"], got
+        assert any(t["committed"] == got["committed"] for t in TICKS), "a boundary no tick recorded"
+    expect("window: it opens on run 52's next real commit, not on the clock (must not fire)",
+           window_opens_on_a_commit, "", should_fire=False)
+
+    def window_never_opens():
+        still = [{"ts": TICKS[0]["ts"] + 500 * i, "committed": TICKS[0]["committed"], "endIn": 10**12}
+                 for i in range(400)]
+        on_ticks(still, lambda: L.next_boundary(after=still[0], timeout=60))
+    expect("window: an offset that never advances stops the case", window_never_opens,
+           "did not advance within 60s")
+
+    # graph_shape reads the running plan over REST; until 2026-10-02 only its
+    # comparison (check_shape) was tested. A fake REST answer drives the read.
+    def plan_of(chained, max_par, jid="j1", par=2):
+        if chained:
+            nodes = [{"id": "a", "description": "Source: orders -> parse -> aggregate -> sink",
+                      "parallelism": par, "inputs": []}]
+        else:
+            nodes = [{"id": "s", "description": "Source: orders -> parse", "parallelism": par, "inputs": []},
+                     {"id": "a", "description": "aggregate -> sink", "parallelism": par,
+                      "inputs": [{"id": "s", "ship_strategy": "HASH"}]}]
+        return {"plan": {"jid": jid, "nodes": nodes}}, {"vertices": [{"maxParallelism": max_par} for _ in nodes]}
+
+    def shape_with(chained, max_par, jid="j1", par=2):
+        plan, job = plan_of(chained, max_par, jid, par)
+        saved = L.rest
+        L.rest = lambda path, *a, **k: plan if path.endswith("/plan") else job
+        try:
+            return L.graph_shape(jid)
+        finally:
+            L.rest = saved
+
+    def shape_read():
+        s2 = shape_with(False, 128)
+        assert s2["vertexCount"] == 2 and s2["maxParallelism"] == [128], s2
+        assert s2["signature"] == [["Source: orders -> parse", []], ["aggregate -> sink", ["HASH"]]], s2["signature"]
+        # the same job at another size, under a new job id, is the same shape
+        L.check_shape(shape_with(False, 128, jid="j2", par=4), s2)
+    expect("graph: the shape is read off the plan, and a new job at another size matches (must not fire)",
+           shape_read, "", should_fire=False)
+
+    def chained_baseline():
+        # Measured on one build: a chained baseline read 211,533 against 140,308
+        # for the same graph as the other cases, and 1->4 2.16x against 3.26x.
+        L.check_shape(shape_with(True, 128, par=1), shape_with(False, 128))
+    expect("graph: a baseline chained into one vertex is a different shape", chained_baseline,
+           "job graph shape differs")
+
+    def other_key_groups():
+        L.check_shape(shape_with(False, 256, par=4), shape_with(False, 128))
+    expect("graph: a different key-group count is a different shape", other_key_groups,
+           "job graph shape differs")
+
+    # backpressure_in_window parsed the worker's reporter log only live. These
+    # lines follow the SLF4J reporter's form: a scope ending in the task name and
+    # subtask, then the metric. One sample before the window and one after must
+    # not count.
+    def reporter_log(gc_names=("G1_Young_Generation",)):
+        def at(t):
+            return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t)) + ".000000000Z"
+        lines = []
+        for i, t in enumerate((990, 1000, 1010, 1020, 1030)):
+            busy = 999.0 if t in (990, 1030) else 800.0 + 20 * i
+            lines += [f"{at(t)} tm.taskmanager.x1.job.Source: orders -> parse.0.busyTimeMsPerSecond: {busy}",
+                      f"{at(t)} tm.taskmanager.x1.job.Source: orders -> parse.0.idleTimeMsPerSecond: 100.0",
+                      f"{at(t)} tm.taskmanager.x1.job.aggregate -> sink.1.backPressuredTimeMsPerSecond: 50.0"]
+            for gname in gc_names:
+                lines.append(f"{at(t)} tm.taskmanager.x1.Status.JVM.GarbageCollector.{gname}.Time: {100 * i}")
+        return "\n".join(lines)
+
+    def bp_with(log, t0=1000, t1=1020):
+        saved = L.sh
+        L.sh = lambda cmd, *a, **k: type("Result", (), {"stdout": log, "stderr": "", "returncode": 0})()
+        try:
+            return L.backpressure_in_window(t0, t1)
+        finally:
+            L.sh = saved
+
+    def bp_window():
+        got = bp_with(reporter_log())
+        src = got["Source: orders -> parse"]
+        assert src["busy"] == round((820 + 840 + 860) / 3 / 1000, 4) and src["samples"] == 3, src
+        assert src["idle"] == 0.1, src
+        assert got["aggregate -> sink"]["backPressured"] == 0.05, got
+        assert got["_gc"] == {"G1_Young_Generation.Time": 200.0}, got["_gc"]   # 100 -> 300 inside
+        assert got["_gcNames"] == ["G1_Young_Generation"], got["_gcNames"]
+    expect("back-pressure: only samples inside the window count, averaged per vertex (must not fire)",
+           bp_window, "", should_fire=False)
+
+    def bp_serial_seen():
+        got = bp_with(reporter_log(gc_names=("Copy", "MarkSweepCompact")))
+        assert got["_gcNames"] == ["Copy", "MarkSweepCompact"], got["_gcNames"]
+    expect("back-pressure: the collector that actually ran is read from the log (must not fire)",
+           bp_serial_seen, "", should_fire=False)
+
+    # disk_projection measures what disk_verdict decides on; only the verdict
+    # was tested. Fake broker sizes drive the measurement: 20 GB of tiny input
+    # for 100,000,000 records (200 bytes each) and 5 GB of sink for 10,000,000
+    # consumed (500 bytes per input), all of which is deleted before the fill.
+    def projected(free_gb, on_disk_gb=0.0):
+        GB = 1e9
+        saved = {k: getattr(L, k) for k in ("topic_bytes", "topic_bytes_if_any", "volume_bytes",
+                                            "host_free_bytes")}
+        L.topic_bytes = lambda topics: 20 * GB
+        L.topic_bytes_if_any = lambda topics: (on_disk_gb * GB if topics == [c.suite_topic_in] else 5 * GB)
+        L.volume_bytes = lambda vol: 1 * GB
+        L.host_free_bytes = lambda: free_gb * GB
+        try:
+            return L.disk_projection("orders-tiny", 100_000_000, {"close": {"committed": 10_000_000}})
+        finally:
+            for k, v in saved.items():
+                setattr(L, k, v)
+
+    def disk_measured():
+        d = projected(500)
+        assert d["inputBytesPerRecord"] == 200.0, d
+        assert d["reclaimableBytes"] == int(25e9) and d["hostFreeBytesNow"] == int(500e9), d
+        m = d["measuredOn"]
+        assert (m["tinyTopicBytes"], m["sinkRecordsConsumed"], m["sinkBytesOnDisk"]) == (int(20e9), 10_000_000, int(5e9)), m
+        assert d["fits"] and d["hostFreeBytes"] == int(525e9), d       # free now + what is deleted before the fill
+    expect("disk: the projection measures bytes per record and credits what the fill deletes (must not fire)",
+           disk_measured, "", should_fire=False)
+
+    def disk_does_not_fit():
+        projected(1)
+    expect("disk: a suite that cannot fit stops before the fill", disk_does_not_fit, "of disk and only")
+
+    def disk_input_already_there():
+        need_cold = projected(10_000)["neededBytes"]
+        need_warm = projected(10_000, on_disk_gb=50)["neededBytes"]
+        assert need_cold - need_warm == int(50e9), (need_cold, need_warm)   # run 36: not asked for twice
+    expect("disk: input already on the broker is not asked for twice (must not fire)",
+           disk_input_already_there, "", should_fire=False)
+
     def sizing_does_not_trust_a_tiny_proof_warm_up():
         # size_backlog is called from inside the tiny proof, where warmupMinS is
         # 20 s. Clean-room run 42 measured 44.2 s there, was told 401,149,826

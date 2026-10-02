@@ -1307,8 +1307,18 @@ def cmd_selftest(live=True, topic=None):
         prev = L.QUICK          # restore, never assume: setting this False at the
         L.QUICK = True          # end turned quick mode off for the rest of a live
         try:                    # chain on 2026-09-05, and the suite voided itself
-            if cmd_replay() != 0:
-                raise Exception("the replay disagreed with the record while --quick was set")
+            # The replay's own lines go into the message: on 2026-10-02 this
+            # failed once in 18 runs saying only "disagreed", and the output that
+            # named the record was not kept, so the cause could not be found.
+            import io, contextlib
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = cmd_replay()
+            if rc != 0:
+                said = [l.strip() for l in buf.getvalue().splitlines()
+                        if "DISAGREE" in l or "STOPPED" in l or "refus" in l.lower()]
+                raise Exception("the replay disagreed with the record while --quick was set: "
+                                + " | ".join(said[:6] or buf.getvalue().splitlines()[-6:]))
             t = build_table([{"cores": 2, "pass": "p1", "recordsPerSec": 100.0},
                              {"cores": 4, "pass": "p1", "recordsPerSec": 200.0}])
             if t["cases"][2]["reportable"] or t.get("quickLook"):

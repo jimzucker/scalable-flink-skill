@@ -586,6 +586,32 @@ def check_rows_raise_to_fail(fail):
     return "every preflight row fails by raising, not by returning a FAIL message"
 
 
+def check_no_typed_topics(fail):
+    """The examples name every topic through a placeholder. The number and
+    names of inputs and outputs come from the requirements; a command that types
+    one ("--topic=prices") hard-codes one business case into the run. The
+    default example declared prices as an input and never passed it to the job."""
+    bad, n = [], 0
+    for name in ("pipeline.example.json", "pipeline.example.windowed.json"):
+        ex = json.loads(read(HERE, name))
+        topics = set([ex["topics"]["in"]] + list(ex["topics"].get("out") or [])
+                     + list(ex.get("topicsAlsoWritten") or [])
+                     + list((ex.get("design") or {}).get("inputs") or [])
+                     + list((ex.get("design") or {}).get("outputs") or []))
+        cmds = [ex["job"].get("args", "")]
+        for k in ("generator", "verifier", "secondVantage"):
+            v = ex.get(k) or {}
+            cmds += [v.get("cmd", ""), v.get("manifestCmd", "")]
+        for cmd in cmds:
+            n += 1
+            for t in topics:
+                if re.search(r"=" + re.escape(t) + r"(?=\s|$)", cmd or ""):
+                    bad.append(f"{name} types the topic {t!r} into a command: use its placeholder")
+    for b in sorted(set(bad)):
+        fail(b)
+    return f"no example types a topic name into its {n} commands; every topic comes from a placeholder"
+
+
 def check_target_not_needed(fail):
     """Section 6 says "target", not "needed". There are three renderings of the
     same figures -- the scorecard, the suite table and suite.md -- and the rule
@@ -939,7 +965,7 @@ def main():
                   check_example_broker_memory, check_example_comments,
                   check_key_layout, check_tinyproof_reruns,
                   check_broker_cpu_hook, check_dashboard_rows, check_question_references,
-                  check_rows_raise_to_fail,
+                  check_rows_raise_to_fail, check_no_typed_topics,
                   check_target_not_needed,
                   check_probe_advice,
                   check_calls_are_grouped,

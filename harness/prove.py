@@ -1035,6 +1035,20 @@ def cmd_selftest(live=True, topic=None):
     expect("grafana: the suite's range is written to the file and read back (must not fire)",
            grafana_rig(opens_on_suite), "", should_fire=False)
 
+    def section7_names(fake, svc):
+        now = time.time()
+        assert L.section7_metrics_missing(svc, now - 600, now) == []
+        assert L.section7_metrics_line([]).startswith(f"all {len(L.SECTION7_METRICS)} series")
+        gone = "flink_jobmanager_job_numRestarts"
+        fake.empty = {f'count({{__name__="{gone}"}})'}
+        missing = L.section7_metrics_missing(svc, now - 600, now)
+        assert missing == [gone], missing
+        line = L.section7_metrics_line(missing)
+        assert "1 series this image did not export: flink_jobmanager_job_numRestarts" in line, line
+        assert L.section7_metrics_missing(None, now - 600, now) is None
+    expect("grafana: a section 7 series the image does not export is named (must not fire)",
+           grafana_rig(section7_names), "", should_fire=False)
+
     def chain_stops_on_empty_panel(fake, svc):
         fake.empty = {"rate_a"}
         ran = []
@@ -3599,6 +3613,14 @@ def cmd_report():
     if dash:
         out["dashboard"] = dash
         text += f"dashboard            : {dash}\n"
+    try:
+        named = load_json("section7-metrics.json") if os.path.exists(os.path.join(c.results, "section7-metrics.json")) else None
+    except Exception:
+        named = None
+    if named is not None:
+        line = L.section7_metrics_line(named.get("missing"))
+        out["section7Metrics"] = named.get("missing")
+        text += f"metric names         : {line}\n"
     for name, body in (("suite.txt", text), ("suite.md", markdown)):
         # Written whole, then moved into place. Rendering first already stops a
         # renderer crash from destroying the previous run's table; this also
@@ -3944,6 +3966,17 @@ def cmd_all(steps=None, results=None, dashboard_check=None):
             if stop_why:
                 log(f"STOPPED: {stop_why}")
                 rc = 1
+        # Every series section 7 names, asked of the image actually running.
+        # Reported, never a reason to stop: a build may not use every panel.
+        if name == "completeness" and not rc and results == c.results:
+            try:
+                missing = L.section7_metrics_missing(L.dashboard_here(), t0, time.time())
+                if missing is not None:
+                    save_json("section7-metrics.json", {"missing": missing,
+                                                        "checked": list(L.SECTION7_METRICS)})
+                    log(f"  {L.section7_metrics_line(missing)}")
+            except Exception as e:
+                log(f"  the series section 7 names were not checked: {e}")
         if L.QUICK != quick0:
             log(f"phase {name} left the quick flag {L.QUICK} (it was {quick0}); restoring")
             L.QUICK = quick0

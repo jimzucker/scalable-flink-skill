@@ -1167,20 +1167,26 @@ same exporter, which serves each container's memory and its limit beside its
 CPU.
 
 **Metric names that returned data on `flink:1.20.1`** with the Prometheus
-reporter and the shipped exporter, read through Grafana on 2026-09-28. Match
+reporter and the shipped exporter, read through Grafana on 2026-09-28 and again on 2026-10-02. Match
 operators by the names your job gives them (`operator_name=~".*parse.*"`):
 
 | panel | Prometheus series |
 |---|---|
-| rate per stage | `flink_taskmanager_job_task_operator_numRecordsOutPerSecond` (and `…numRecordsInPerSecond`) |
+| rate per stage | `flink_taskmanager_job_task_operator_numRecordsOutPerSecond`, `flink_taskmanager_job_task_operator_numRecordsInPerSecond` |
 | records waiting in Kafka | `flink_taskmanager_job_task_operator_pendingRecords` (the Kafka source's) |
 | event-time lag | `flink_taskmanager_job_task_operator_currentEmitEventTimeLag`, in ms |
 | job restarts; failed checkpoints | `flink_jobmanager_job_numRestarts`; `flink_jobmanager_job_numberOfFailedCheckpoints` |
 | CPU and memory by container | `docker_container_cpu_seconds_total` (a counter: take `rate`), `docker_container_memory_bytes`, `docker_container_memory_limit_bytes` |
-| task busy, back-pressured, idle | `flink_taskmanager_job_task_busyTimeMsPerSecond`, `…backPressuredTimeMsPerSecond`, `…idleTimeMsPerSecond` |
-| garbage collection | `flink_taskmanager_Status_JVM_GarbageCollector_G1_Young_Generation_TimeMsPerSecond` and `…G1_Old_Generation…` (clean-room run 52 used `…GarbageCollector_All_Time`) |
+| task busy, back-pressured, idle | `flink_taskmanager_job_task_busyTimeMsPerSecond`, `flink_taskmanager_job_task_backPressuredTimeMsPerSecond`, `flink_taskmanager_job_task_idleTimeMsPerSecond` |
+| garbage collection | `flink_taskmanager_Status_JVM_GarbageCollector_All_TimeMsPerSecond` — every collector together, so it reads the same whichever one the JVM chose; per collector, `flink_taskmanager_Status_JVM_GarbageCollector_G1_Young_Generation_TimeMsPerSecond` and `flink_taskmanager_Status_JVM_GarbageCollector_G1_Old_Generation_TimeMsPerSecond` |
 | checkpoint duration; size | `flink_jobmanager_job_lastCheckpointDuration`; `flink_jobmanager_job_lastCheckpointSize` |
 | free slots; threads | `flink_jobmanager_taskSlotsAvailable`; `flink_taskmanager_Status_JVM_Threads_Count` |
+
+**The harness checks these names on every run.** Straight after
+completeness it asks Prometheus, through Grafana, for each series in this
+table, and the report says which, if any, the running image did not export —
+so a Flink upgrade that renames one shows on its first run. It is reported,
+never a reason to stop: a build may not use every panel.
 
 **Two panels need numbers only the job has.** Flink exports no count of
 distinct keys and no per-path totals, so *distinct keys per aggregation* and

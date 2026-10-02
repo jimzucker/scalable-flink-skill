@@ -612,6 +612,24 @@ def check_no_typed_topics(fail):
     return f"no example types a topic name into its {n} commands; every topic comes from a placeholder"
 
 
+def check_section7_metrics(fail):
+    """The series section 7's table names and the list the harness checks on
+    every run are the same names, so the check covers what the skill teaches."""
+    import lib
+    skill = read(ROOT, "SKILL.md")
+    i = skill.index("| panel | Prometheus series |")
+    table = skill[i:skill.index("\n\n", i)]
+    named = set(re.findall(r"`((?:flink|docker)_[A-Za-z0-9_]+)`", table))
+    listed = set(lib.SECTION7_METRICS)
+    for n in sorted(named - listed):
+        fail(f"SKILL.md \u00a77 names {n}, which the harness's SECTION7_METRICS does not check")
+    for n in sorted(listed - named):
+        fail(f"the harness checks {n}, which SKILL.md \u00a77 does not name")
+    if "\u2026" in table:
+        fail("SKILL.md \u00a77's metric table abbreviates a name with an ellipsis; write it out")
+    return f"\u00a77's {len(named)} metric names are the {len(listed)} the harness checks every run"
+
+
 def check_target_not_needed(fail):
     """Section 6 says "target", not "needed". There are three renderings of the
     same figures -- the scorecard, the suite table and suite.md -- and the rule
@@ -965,7 +983,7 @@ def main():
                   check_example_broker_memory, check_example_comments,
                   check_key_layout, check_tinyproof_reruns,
                   check_broker_cpu_hook, check_dashboard_rows, check_question_references,
-                  check_rows_raise_to_fail, check_no_typed_topics,
+                  check_rows_raise_to_fail, check_no_typed_topics, check_section7_metrics,
                   check_target_not_needed,
                   check_probe_advice,
                   check_calls_are_grouped,

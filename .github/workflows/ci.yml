@@ -39,7 +39,7 @@ jobs:
       # line runs; preflight's host probe reached the rig that way on 2026-09-08
       # after the self-test and the replay had both passed.
       - name: No function reads a name that is defined nowhere
-        run: python3 harness/namecheck.py harness/lib.py harness/prove.py harness/doccheck.py harness/platforms.py harness/dashboard/docker_cpu_exporter.py
+        run: python3 harness/namecheck.py harness/lib.py harness/prove.py harness/doccheck.py harness/platforms.py harness/platform_confluent.py harness/dashboard/docker_cpu_exporter.py
 
       - name: The skill's name matches the directory it installs into
         run: |

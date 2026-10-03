@@ -56,10 +56,6 @@ class Platform:
 # config that asks for one stops with this sentence instead of a traceback, and
 # so the plan and the code say the same thing.
 NOT_BUILT = {
-    "confluent-cloud": ("Confluent Cloud, Flink SQL only. It needs an organization, environment "
-                        "and compute pool, a Flink API key and a Kafka API key, and an answer to "
-                        "whether a compute pool can be held at a fixed number of CFUs and read "
-                        "back, or only autoscales"),
     "aws": ("Amazon MSK with Managed Service for Apache Flink. It needs an AWS account and region, "
             "an MSK cluster, and applications sized by parallelism and parallelism per KPU with "
             "autoscaling turned off"),

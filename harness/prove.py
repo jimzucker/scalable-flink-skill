@@ -1584,9 +1584,11 @@ def cmd_selftest(live=True, topic=None):
     import platform_confluent as PC
 
     class FakeConfluent:
-        def __init__(self, ignore_update=False, fail=()):
+        def __init__(self, ignore_update=False, fail=(), cold=0):
+            self.cold = cold
             self.clusters, self.pools, self.keys, self.calls = {}, {}, {}, []
             self.envs = {"env-test": "test-env", "env-dflt": "default"}
+            self.statements = {}
             self.ignore_update, self.fail, self.n = ignore_update, set(fail), 0
 
         def __call__(self, args):
@@ -1640,8 +1642,30 @@ def cmd_selftest(live=True, topic=None):
                 if "--environment" in args:         # as the real CLI answers (2026-10-03)
                     return 1, "", "Error: unknown flag: --environment"
                 self.keys.pop(a[2], None); return ok()
+            if a[:3] == ["flink", "statement", "create"]:
+                if a[3] in self.statements:
+                    return 1, "", f'Error: Statement with name "{a[3]}" already exists.'
+                self.statements[a[3]] = {"name": a[3], "status": "PENDING", "sql": flag("--sql")}
+                return ok()
+            if a[:3] == ["flink", "statement", "describe"]:
+                st = self.statements[a[3]]
+                if st["status"] == "PENDING":
+                    self.ran = getattr(self, "ran", 0) + 1
+                    if self.ran <= self.cold:          # a new stack, as measured: refuses at first
+                        st["status"], st["status_detail"] = "FAILED", (
+                            "Unable to process the request due to technical difficulties on our end.")
+                        return ok(st)
+                    st["status"] = "FAILED" if ("statement" in self.fail and "ready" not in st["name"]) else (
+                        "COMPLETED" if st["sql"].upper().startswith("CREATE") else "RUNNING")
+                    if st["status"] == "FAILED":
+                        st["status_detail"] = "Table 'why_t' could not be created: the environment is not ready"
+                return ok(st)
             if a[:3] == ["flink", "statement", "list"]:
-                return ok([])
+                return ok(list(self.statements.values()))
+            if a[:3] == ["flink", "statement", "delete"]:
+                for n in a[3:]:
+                    if not n.startswith("--"): self.statements.pop(n, None)
+                return ok()
             return 1, "", f"the fake does not know {' '.join(a)}"
 
     def on_confluent(fn, **fake_kw):
@@ -1652,10 +1676,12 @@ def cmd_selftest(live=True, topic=None):
                        "credentials": os.path.join(tdir, "creds", "flink-skill.env")}
                 mk = lambda extra=None: PC.ConfluentCloud(dict(raw, **(extra or {})), runner=fake, log=said.append)
                 PC.ConfluentCloud.poll_s = 0
+                PC.ConfluentCloud.ready_wait_s = 0
                 try:
                     fn(fake, mk, said, raw)
                 finally:
                     PC.ConfluentCloud.poll_s = 10
+                    PC.ConfluentCloud.ready_wait_s = 60
         return go
 
     def cc_life(fake, mk, said, raw):
@@ -1719,6 +1745,43 @@ def cmd_selftest(live=True, topic=None):
         assert "default" in fake.envs.values(), "down deleted an environment it did not create"
     expect("confluent: a named environment is created and later deleted; an existing one is only used "
            "(must not fire)", on_confluent(cc_named), "", should_fire=False)
+
+    def cc_statements(fake, mk, said, raw):
+        p = mk(); p.up()
+        assert p.run_statement("fsk-t-ddl", "CREATE TABLE t (a INT)", "db") == "COMPLETED"
+        assert p.run_statement("fsk-t-copy", "INSERT INTO t SELECT 1", "db") == "RUNNING"
+        p.down()
+        assert not fake.statements, f"teardown left statements: {list(fake.statements)}"
+    expect("confluent: a statement is judged on the status read back, and teardown removes it (must not fire)",
+           on_confluent(cc_statements), "", should_fire=False)
+
+    def cc_statement_fails(fake, mk, said, raw):
+        p = mk(); p.up()
+        try:
+            p.run_statement("fsk-t-ddl", "CREATE TABLE t (a INT)", "db")
+        finally:
+            p.down()
+    expect("confluent: a statement Confluent reports FAILED stops with Confluent's own reason",
+           on_confluent(cc_statement_fails, fail={"statement"}),
+           "is FAILED on Confluent Cloud: Table 'why_t' could not be created")
+
+    def cc_cold_stack(fake, mk, said, raw):
+        p = mk(); p.up()
+        assert any("ran its first statement" in l for l in said), said
+        assert sum(1 for n in fake.statements if "ready" in n) == 3, list(fake.statements)
+        p.down()
+    expect("confluent: up waits until a new stack runs a statement, as measured (must not fire)",
+           on_confluent(cc_cold_stack, cold=2), "", should_fire=False)
+
+    def cc_never_ready(fake, mk, said, raw):
+        p = mk()
+        p.ready_tries = 3
+        try:
+            p.up()
+        finally:
+            p.down()
+    expect("confluent: a stack that never runs a statement stops, quoting Confluent",
+           on_confluent(cc_never_ready, cold=99), "never ran a statement in 3 tries")
 
     def cc_estimate():
         est = PC.estimate_usd([5, 10, 20], 3)

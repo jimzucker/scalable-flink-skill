@@ -106,6 +106,7 @@ class ConfluentCloud(Platform):
         self.log = log
         self.state_path = os.path.join(raw.get("stateDir") or state_dir, "confluent-state.json")
         self.state = self._load_state()
+        self.state.setdefault("statements", [])
         self.environment = self.state.get("environment") or (
             self.environment_ref if self.environment_ref.startswith("env-") else None)
 
@@ -214,9 +215,37 @@ class ConfluentCloud(Platform):
                 secrets[f"{label}_API_KEY"] = k[F["api_key"]]
                 secrets[f"{label}_API_SECRET"] = k[F["api_secret"]]
             self._write_credentials(secrets, cluster)
+        self._ready(cluster)
         self.log(f"  confluent-cloud up: cluster {self.state['cluster']}, pool {self.state['pool']}, "
                  f"{len(self.state['keys'])} API keys; credentials in {self.credentials}")
         return True
+
+    ready_tries, ready_wait_s = 10, 60      # the self-test shortens these
+
+    def _ready(self, cluster):
+        """A new stack takes minutes before Confluent will run a statement in it.
+        Measured 2026-10-03 in a new environment: the same CREATE TABLE failed
+        0.7 min after up ("technical difficulties on our end") and completed at
+        2.7 min. So up ends by running a tiny statement until one completes."""
+        t0 = time.time()
+        name_db = cluster.get(F["name"]) or self.state["cluster"]
+        last = None
+        for i in range(self.ready_tries):
+            try:
+                self.run_statement(f"{self.prefix}-ready{i}", f"CREATE TABLE {self.prefix.replace('-', '_')}_ready{i} (a INT)",
+                                   name_db, timeout_s=240)
+                self.state["readyAfterS"] = round(time.time() - t0, 1)
+                self._save_state()
+                self.log(f"  confluent-cloud: the stack ran its first statement {self.state['readyAfterS']:.0f} s "
+                         f"after it was created")
+                return
+            except Refusal as e:
+                last = e.msg
+                if "technical difficulties" not in e.msg and "not ready" not in e.msg.lower():
+                    raise
+            time.sleep(self.ready_wait_s)
+        raise Refusal("rig", f"the stack never ran a statement in {self.ready_tries} tries over "
+                             f"{(time.time() - t0) / 60:.0f} min; the last answer was: {last}")
 
     def _write_credentials(self, secrets, cluster):
         lines = {"CONFLUENT_ENVIRONMENT": self.environment, "CONFLUENT_CLOUD": self.cloud,
@@ -252,12 +281,59 @@ class ConfluentCloud(Platform):
         d = self.cli_json("flink", "compute-pool", "describe", self.state["pool"]) or {}
         return int(d.get(F["current_cfu"], 0))
 
+    # A statement's states, as its describe reports them. `--wait` returns once a
+    # statement is running OR has failed, with exit code 0 either way: on
+    # 2026-10-03 four statements failed and the probe that created them read
+    # success. The status is read back, never the exit code.
+    STATEMENT_OK = {"RUNNING", "COMPLETED"}
+    STATEMENT_BAD = {"FAILED", "FAILING", "STOPPED", "DEGRADED", "DELETED"}
+
+    def statement_status(self, name):
+        """(status, detail, the whole reply) for one statement, as Confluent describes it."""
+        d = self.cli_json("flink", "statement", "describe", name, "--cloud", self.cloud, "--region", self.region) or {}
+        status = str(d.get("status") or d.get("phase") or "").upper()
+        detail = d.get("status_detail") or d.get("detail") or d.get("status_message") or ""
+        return status, str(detail), d
+
+    def run_statement(self, name, sql, database, timeout_s=600):
+        """Create a statement and wait until Confluent reports it running or
+        completed. A failure stops with Confluent's own detail; a reply this
+        code does not recognise stops with the reply itself."""
+        if not name.startswith(self.prefix):
+            raise Refusal("rig", f"statement {name!r} does not carry the run's prefix {self.prefix!r}, so "
+                                 f"teardown would not find it")
+        try:
+            self.cli("flink", "statement", "create", name, "--sql", sql, "--compute-pool", self.state["pool"],
+                     "--database", database, "--cloud", self.cloud, "--region", self.region)
+        except Refusal as e:
+            # Seen 2026-10-03 in a new environment: "already exists" for a name
+            # never used before. Whatever made it, describe what is there.
+            if "already exists" not in e.msg:
+                raise
+            self.log(f"  confluent-cloud: statement {name} already existed when created; reading its status")
+        if name not in self.state["statements"]:
+            self.state["statements"].append(name)
+            self._save_state()
+        t0 = time.time()
+        while True:
+            status, detail, whole = self.statement_status(name)
+            if status in self.STATEMENT_OK:
+                return status
+            if status in self.STATEMENT_BAD:
+                raise Refusal("rig", f"statement {name} is {status} on Confluent Cloud: "
+                                     f"{detail or json.dumps(whole)[:600]}")
+            if time.time() - t0 > timeout_s:
+                raise Refusal("rig", f"statement {name} was still {status or 'without a status'} after "
+                                     f"{timeout_s} s: {json.dumps(whole)[:600]}")
+            time.sleep(self.poll_s)
+
     def _statements(self):
         if not self.state.get("pool"):
             return []
         rows = self.cli_json("flink", "statement", "list", "--compute-pool", self.state["pool"],
                              "--cloud", self.cloud, "--region", self.region) or []
-        return [r[F["name"]] for r in rows if str(r.get(F["name"], "")).startswith(self.prefix)]
+        listed = [r[F["name"]] for r in rows if str(r.get(F["name"], "")).startswith(self.prefix)]
+        return sorted(set(listed))
 
     def clear_size(self):
         names = self._statements()

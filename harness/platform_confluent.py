@@ -320,7 +320,7 @@ class ConfluentCloud(Platform):
             if status in self.STATEMENT_OK:
                 return status
             if status in self.STATEMENT_BAD:
-                raise Refusal("rig", f"statement {name} is {status} on Confluent Cloud: "
+                raise Refusal("rig", f"statement {name} did not run on Confluent Cloud ({status.lower()}): "
                                      f"{detail or json.dumps(whole)[:600]}")
             if time.time() - t0 > timeout_s:
                 raise Refusal("rig", f"statement {name} was still {status or 'without a status'} after "

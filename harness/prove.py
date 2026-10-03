@@ -1761,9 +1761,9 @@ def cmd_selftest(live=True, topic=None):
             p.run_statement("fsk-t-ddl", "CREATE TABLE t (a INT)", "db")
         finally:
             p.down()
-    expect("confluent: a statement Confluent reports FAILED stops with Confluent's own reason",
+    expect("confluent: a statement Confluent reports as failed stops with Confluent's own reason",
            on_confluent(cc_statement_fails, fail={"statement"}),
-           "is FAILED on Confluent Cloud: Table 'why_t' could not be created")
+           "did not run on Confluent Cloud (failed): Table 'why_t' could not be created")
 
     def cc_cold_stack(fake, mk, said, raw):
         p = mk(); p.up()

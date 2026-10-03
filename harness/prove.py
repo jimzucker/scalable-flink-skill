@@ -1586,6 +1586,7 @@ def cmd_selftest(live=True, topic=None):
     class FakeConfluent:
         def __init__(self, ignore_update=False, fail=()):
             self.clusters, self.pools, self.keys, self.calls = {}, {}, {}, []
+            self.envs = {"env-test": "test-env", "env-dflt": "default"}
             self.ignore_update, self.fail, self.n = ignore_update, set(fail), 0
 
         def __call__(self, args):
@@ -1596,6 +1597,12 @@ def cmd_selftest(live=True, topic=None):
             def flag(name, default=None):
                 return a[a.index(name) + 1] if name in a else default
             self.n += 1
+            if a[:2] == ["environment", "list"]:
+                return ok([{"id": i, "name": n} for i, n in self.envs.items()])
+            if a[:2] == ["environment", "create"]:
+                eid = f"env-new{self.n}"; self.envs[eid] = a[2]; return ok({"id": eid, "name": a[2]})
+            if a[:2] == ["environment", "delete"]:
+                self.envs.pop(a[2], None); return ok()
             if a[:3] == ["kafka", "cluster", "create"]:
                 cid = f"lkc-{self.n}"; self.clusters[cid] = {"id": cid, "name": a[3], "status": "PROVISIONING",
                                                               "endpoint": "SASL_SSL://pkc-x.gcp.confluent.cloud:9092"}
@@ -1698,6 +1705,20 @@ def cmd_selftest(live=True, topic=None):
         assert not fake.clusters and not fake.pools, (fake.clusters, fake.pools)
     expect("confluent: after a failed up, down from a new process removes what was created (must not fire)",
            on_confluent(cc_crash_then_clean, fail={"key"}), "", should_fire=False)
+
+    def cc_named(fake, mk, said, raw):
+        # Assets named after the project, not left in "default" (2026-10-03).
+        p = mk({"environment": "flink-training", "prefix": None}); p.up()
+        new = [i for i, n in fake.envs.items() if n == "flink-training"]
+        assert len(new) == 1, fake.envs
+        assert all(c["name"].startswith("flink-training-") for c in fake.clusters.values()), fake.clusters
+        assert all(v["name"].startswith("flink-training-") for v in fake.pools.values()), fake.pools
+        p.down()
+        assert "flink-training" not in fake.envs.values(), "the environment up created survived down"
+        q = mk({"environment": "default", "prefix": "fsk-t"}); q.up(); q.down()
+        assert "default" in fake.envs.values(), "down deleted an environment it did not create"
+    expect("confluent: a named environment is created and later deleted; an existing one is only used "
+           "(must not fire)", on_confluent(cc_named), "", should_fire=False)
 
     def cc_estimate():
         est = PC.estimate_usd([5, 10, 20], 3)

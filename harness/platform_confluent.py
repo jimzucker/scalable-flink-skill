@@ -75,13 +75,23 @@ class ConfluentCloud(Platform):
 
     def __init__(self, raw, runner=None, log=print, state_dir="results"):
         raw = raw or {}
-        self.environment = raw.get("environment")
-        if not self.environment:
-            raise Refusal("rig", "platform.environment is not set: name the Confluent Cloud environment "
-                                 "(env-...) the run may create things in")
+        # An environment id (env-...) or a name. A name that does not exist yet
+        # is created by up and deleted by down; an existing one is only used.
+        # Assets are named after the project, not left in "default" (asked for
+        # on 2026-10-03): platform.environment "flink-training" and, unless set,
+        # the same prefix.
+        self.environment_ref = raw.get("environment")
+        if not self.environment_ref:
+            raise Refusal("rig", "platform.environment is not set: give the Confluent Cloud environment's "
+                                 "id (env-...) or a name, such as the project's; a name that does not "
+                                 "exist yet is created and later deleted")
         self.cloud = raw.get("cloud", "gcp")
         self.region = raw.get("region", "us-east1")
-        self.prefix = raw.get("prefix") or "fsk"
+        self.prefix = raw.get("prefix") or (None if self.environment_ref.startswith("env-")
+                                             else self.environment_ref.lower())
+        if not self.prefix:
+            raise Refusal("rig", "platform.prefix is not set: with an environment id there is no name to "
+                                 "take it from, and every resource the run creates carries it")
         if not re.fullmatch(r"[a-z][a-z0-9-]{1,30}", self.prefix):
             raise Refusal("rig", f"platform.prefix {self.prefix!r} must be lower-case letters, digits "
                                  f"and dashes: every resource the run creates carries it")
@@ -96,13 +106,16 @@ class ConfluentCloud(Platform):
         self.log = log
         self.state_path = os.path.join(raw.get("stateDir") or state_dir, "confluent-state.json")
         self.state = self._load_state()
+        self.environment = self.state.get("environment") or (
+            self.environment_ref if self.environment_ref.startswith("env-") else None)
 
     # ------------------------------------------------------------ plumbing
     def _load_state(self):
         try:
             return json.load(open(self.state_path))
         except (OSError, ValueError):
-            return {"cluster": None, "pool": None, "keys": [], "statements": []}
+            return {"environment": None, "environmentCreated": False, "cluster": None, "pool": None,
+                    "keys": [], "statements": []}
 
     def _save_state(self):
         os.makedirs(os.path.dirname(self.state_path) or ".", exist_ok=True)
@@ -112,7 +125,8 @@ class ConfluentCloud(Platform):
     # Commands that take no --environment. Measured 2026-10-03: `api-key delete`
     # answered "unknown flag: --environment", and the run's Flink key survived
     # the teardown that found it.
-    NO_ENVIRONMENT = (("api-key", "delete"),)
+    NO_ENVIRONMENT = (("api-key", "delete"), ("environment", "list"), ("environment", "create"),
+                      ("environment", "delete"))
 
     def cli(self, *args, quiet=False):
         """Run one CLI command with the environment set where the command takes
@@ -147,12 +161,34 @@ class ConfluentCloud(Platform):
                 raise Refusal("rig", f"{what} was still {d.get(F['status'])!r} after {timeout_s} s")
             time.sleep(every)
 
+    def _environment(self, create=False):
+        """The environment's id, found by id or name; created when asked and
+        it does not exist."""
+        if self.environment:
+            return self.environment
+        ref = self.environment_ref
+        for e in self.cli_json("environment", "list") or []:
+            if ref in (e.get(F["id"]), e.get(F["name"])):
+                self.environment = e[F["id"]]
+                self.state["environment"] = self.environment
+                self._save_state()
+                return self.environment
+        if not create:
+            return None
+        e = self.cli_json("environment", "create", ref)
+        self.environment = self.state["environment"] = e[F["id"]]
+        self.state["environmentCreated"] = True
+        self._save_state()
+        self.log(f"  confluent-cloud: created environment {ref} ({self.environment})")
+        return self.environment
+
     # ------------------------------------------------------------ the contract
     def up(self):
         # Budget first, before anything is created or paid for.
         if self.estimate is not None and float(self.estimate) > self.budget:
             raise Refusal("rig", f"this run is estimated at ${float(self.estimate):.2f}, over the "
                                  f"${self.budget:.2f} budget. Nothing was created.")
+        self._environment(create=True)
         if not self.state.get("cluster"):
             c = self.cli_json("kafka", "cluster", "create", f"{self.prefix}-kafka", "--cloud", self.cloud,
                               "--region", self.region, "--type", "basic", "--max-ecku", str(self.max_ecku))
@@ -235,6 +271,8 @@ class ConfluentCloud(Platform):
     def surviving(self):
         """Everything this run's prefix names that still exists, as Confluent lists it."""
         out = []
+        if not self._environment():
+            return out              # no environment, so nothing in it
         for c in self.cli_json("kafka", "cluster", "list") or []:
             if str(c.get(F["name"], "")).startswith(self.prefix):
                 out.append(f"Kafka cluster {c[F['id']]}")
@@ -250,6 +288,10 @@ class ConfluentCloud(Platform):
         """Delete everything the run created, then list the account and stop on
         any survivor. Each deletion is attempted even if one before it failed."""
         problems = []
+        if not self._environment():
+            self.log(f"  confluent-cloud down: environment {self.environment_ref} does not exist, "
+                     f"so nothing in it survives")
+            return True
         try:
             self.clear_size()
         except Refusal as e:
@@ -271,7 +313,15 @@ class ConfluentCloud(Platform):
             raise Refusal("rig", "after teardown these still exist on Confluent Cloud and may cost "
                                  "money: " + "; ".join(left)
                                  + (". Deleting them reported: " + "; ".join(problems) if problems else ""))
-        self.state = {"cluster": None, "pool": None, "keys": [], "statements": []}
+        if self.state.get("environmentCreated") and self.environment:
+            self.cli("environment", "delete", self.environment, "--force")
+            if any(e.get(F["id"]) == self.environment for e in self.cli_json("environment", "list") or []):
+                raise Refusal("rig", f"environment {self.environment_ref} ({self.environment}) was emptied "
+                                     f"but is still listed after deleting it")
+            self.log(f"  confluent-cloud: deleted environment {self.environment_ref}, which up created")
+        self.environment = None
+        self.state = {"environment": None, "environmentCreated": False, "cluster": None, "pool": None,
+                      "keys": [], "statements": []}
         self._save_state()
         self.log("  confluent-cloud down: nothing with prefix " + self.prefix + " survives")
         return True

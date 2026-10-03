@@ -224,9 +224,11 @@ A reader can then see what was assumed rather than agreed.
 
    **A managed service — Confluent Cloud, Amazon MSK with Managed Service for
    Apache Flink, Google Cloud — cannot be measured yet.** `platform` in
-   `pipeline.json` names one, and the harness stops before anything is created
-   and says what that service still needs. If the user asks for one, say so and
-   build for the laptop with the same pipeline.
+   `pipeline.json` names one. Confluent Cloud can already create its own stack
+   under a budget and tear it down, proving nothing is left; the job and the
+   readings a case is judged on are not built yet, and the run stops there and
+   says so. The other two stop before anything is created. If the user asks
+   for one, say so and build for the laptop with the same pipeline.
 
 ## 1a. Then the plan, and stop
 

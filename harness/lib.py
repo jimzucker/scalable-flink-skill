@@ -229,6 +229,9 @@ class Refusal(Exception):
 sys.path.insert(0, HERE)
 import platforms as P  # noqa: E402
 P.Refusal = Refusal     # a platform's refusal is the harness's own
+import platform_confluent  # noqa: E402
+platform_confluent.Refusal = Refusal
+P.register("confluent-cloud", platform_confluent.ConfluentCloud)
 
 class CaseRefused(Exception):
     def __init__(self, rec, refusal):
@@ -457,7 +460,8 @@ class Cfg:
         # touches Docker or the host then does exactly what it did before
         # platforms.py existed. Anything else is asked through the platform.
         self.platform = P.platform_kind(c)
-        self.plat = P.platform_for(self.platform, c.get("platform") if isinstance(c.get("platform"), dict) else {})
+        self.plat = P.platform_for(self.platform, dict(c.get("platform") if isinstance(c.get("platform"), dict)
+                                                       else {}, stateDir=self.results))
         self.guarantee = c["guarantee"]
         self.log_path = os.path.join(self.results, "harness.log")
         # Three ways to run: no worker memory settings at all (the default, and

@@ -1576,8 +1576,137 @@ def cmd_selftest(live=True, topic=None):
     expect("platform: a size the service did not apply stops the case",
            lambda: on_fake_service(lambda fc: L.start_tm(4), under=1), "did not apply")
     expect("platform: a service that is named but not built stops before anything is paid for",
-           lambda: L.P.platform_for(L.P.platform_kind({"platform": "confluent-cloud"})),
+           lambda: L.P.platform_for(L.P.platform_kind({"platform": "aws"})),
            "cannot run on it yet")
+    # Confluent Cloud, against a fake Confluent CLI: the stack's life, the
+    # budget guard, the credentials file, read-back, and a teardown that
+    # proves nothing survives. No cloud account is touched.
+    import platform_confluent as PC
+
+    class FakeConfluent:
+        def __init__(self, ignore_update=False, fail=()):
+            self.clusters, self.pools, self.keys, self.calls = {}, {}, {}, []
+            self.ignore_update, self.fail, self.n = ignore_update, set(fail), 0
+
+        def __call__(self, args):
+            a = [x for i, x in enumerate(args) if not (x in ("--environment", "-o") or
+                 (i and args[i - 1] in ("--environment", "-o")))]
+            self.calls.append(" ".join(a[:3]))
+            ok = lambda obj=None: (0, json.dumps(obj) if obj is not None else "", "")
+            def flag(name, default=None):
+                return a[a.index(name) + 1] if name in a else default
+            self.n += 1
+            if a[:3] == ["kafka", "cluster", "create"]:
+                cid = f"lkc-{self.n}"; self.clusters[cid] = {"id": cid, "name": a[3], "status": "PROVISIONING",
+                                                              "endpoint": "SASL_SSL://pkc-x.gcp.confluent.cloud:9092"}
+                return ok(self.clusters[cid])
+            if a[:3] == ["kafka", "cluster", "describe"]:
+                self.clusters[a[3]]["status"] = "UP"; return ok(self.clusters[a[3]])
+            if a[:3] == ["kafka", "cluster", "list"]:
+                return ok(list(self.clusters.values()))
+            if a[:3] == ["kafka", "cluster", "delete"]:
+                if "cluster" in self.fail: return 1, "", "the cluster could not be deleted"
+                self.clusters.pop(a[3], None); return ok()
+            if a[:3] == ["flink", "compute-pool", "create"] and int(flag("--max-cfu", 5)) not in PC.POOL_SIZES:
+                return 1, "", "Error: Bad Request: Violations [MaxCfu is not one of 5, 10, 20, 30, 40, 50]"
+            if a[:3] == ["flink", "compute-pool", "create"]:
+                pid = f"lfcp-{self.n}"; self.pools[pid] = {"id": pid, "name": a[3], "status": "PROVISIONING",
+                                                            "max_cfu": int(flag("--max-cfu", 5)), "current_cfu": 0}
+                return ok(self.pools[pid])
+            if a[:3] == ["flink", "compute-pool", "describe"]:
+                self.pools[a[3]]["status"] = "PROVISIONED"; return ok(self.pools[a[3]])
+            if a[:3] == ["flink", "compute-pool", "update"]:
+                if not self.ignore_update: self.pools[a[3]]["max_cfu"] = int(flag("--max-cfu"))
+                return ok()
+            if a[:3] == ["flink", "compute-pool", "list"]:
+                return ok(list(self.pools.values()))
+            if a[:3] == ["flink", "compute-pool", "delete"]:
+                if "pool" in self.fail: return 1, "", "the pool could not be deleted"
+                self.pools.pop(a[3], None); return ok()
+            if a[:2] == ["api-key", "create"]:
+                if "key" in self.fail: return 1, f"SECRET-leak-{self.n}", "boom"
+                k = f"KEY{self.n}"; self.keys[k] = {"key": k, "description": flag("--description")}
+                return ok({"api_key": k, "api_secret": f"SECRET-{self.n}"})
+            if a[:2] == ["api-key", "list"]:
+                return ok(list(self.keys.values()))
+            if a[:2] == ["api-key", "delete"]:
+                if "--environment" in args:         # as the real CLI answers (2026-10-03)
+                    return 1, "", "Error: unknown flag: --environment"
+                self.keys.pop(a[2], None); return ok()
+            if a[:3] == ["flink", "statement", "list"]:
+                return ok([])
+            return 1, "", f"the fake does not know {' '.join(a)}"
+
+    def on_confluent(fn, **fake_kw):
+        def go():
+            with tempfile.TemporaryDirectory() as tdir:
+                fake = FakeConfluent(**fake_kw); said = []
+                raw = {"environment": "env-test", "prefix": "fsk-t", "stateDir": tdir,
+                       "credentials": os.path.join(tdir, "creds", "flink-skill.env")}
+                mk = lambda extra=None: PC.ConfluentCloud(dict(raw, **(extra or {})), runner=fake, log=said.append)
+                PC.ConfluentCloud.poll_s = 0
+                try:
+                    fn(fake, mk, said, raw)
+                finally:
+                    PC.ConfluentCloud.poll_s = 10
+        return go
+
+    def cc_life(fake, mk, said, raw):
+        p = mk(); p.up()
+        creds = raw["credentials"]
+        assert oct(os.stat(creds).st_mode & 0o777) == "0o600", oct(os.stat(creds).st_mode)
+        body = open(creds).read()
+        for k in ("KAFKA_API_KEY", "KAFKA_API_SECRET", "FLINK_API_KEY", "FLINK_API_SECRET", "KAFKA_BOOTSTRAP",
+                  "FLINK_COMPUTE_POOL"):
+            assert k + "=" in body, k
+        assert "SECRET-" in body
+        state = open(os.path.join(raw["stateDir"], "confluent-state.json")).read()
+        assert "SECRET" not in state and "SECRET" not in " ".join(said), "a secret reached the state or the log"
+        assert L.P.set_and_read_back(p, 10) == 10
+        p.down()
+        assert p.surviving() == [] and not os.path.exists(creds), (p.surviving(), os.path.exists(creds))
+    expect("confluent: up writes owner-only credentials and no secret anywhere else; down leaves nothing "
+           "(must not fire)", on_confluent(cc_life), "", should_fire=False)
+
+    expect("confluent: a size the pool did not take stops the case",
+           on_confluent(lambda fake, mk, said, raw: (lambda p: (p.up(), L.P.set_and_read_back(p, 10)))(mk()),
+                        ignore_update=True), "the case is 10, the platform reports 5")
+    expect("confluent: a size Confluent does not allow is named, with the sizes it does",
+           on_confluent(lambda fake, mk, said, raw: (lambda p: (p.up(), p.set_size(4)))(mk())),
+           "cannot be 4 CFU: its size can only be 5, 10, 20, 30, 40, 50")
+
+    def cc_over_budget(fake, mk, said, raw):
+        try:
+            mk({"estimateUsd": 200}).up()
+        finally:
+            assert fake.calls == [], f"something was created over budget: {fake.calls}"
+    expect("confluent: a run estimated over budget stops before anything is created", on_confluent(cc_over_budget),
+           "over the $150.00 budget")
+
+    def cc_survivor(fake, mk, said, raw):
+        p = mk(); p.up(); p.down()
+    expect("confluent: a pool that will not delete is named as still costing money",
+           on_confluent(cc_survivor, fail={"pool"}), "Flink compute pool lfcp-")
+
+    def cc_crash_then_clean(fake, mk, said, raw):
+        try:
+            mk().up()
+        except Refusal as e:
+            assert "SECRET" not in e.msg and "withheld" in e.msg, e.msg
+        assert fake.clusters and fake.pools, "the failed up created nothing to clean"
+        mk().down()                       # a new process: only the state file knows what exists
+        assert not fake.clusters and not fake.pools, (fake.clusters, fake.pools)
+    expect("confluent: after a failed up, down from a new process removes what was created (must not fire)",
+           on_confluent(cc_crash_then_clean, fail={"key"}), "", should_fire=False)
+
+    def cc_estimate():
+        est = PC.estimate_usd([5, 10, 20], 3)
+        assert 1 < est < 150, est
+        assert PC.estimate_usd([5, 10, 20], 3, settle_cases=0) < est
+        assert PC.estimate_usd([5, 10, 20], 3, max_ecku=1) < est      # the eCKU cap is in it
+    expect("confluent: a full suite's estimate sits well inside the budget (must not fire)", cc_estimate, "",
+           should_fire=False)
+
     expect("platform: a name that is not a platform",
            lambda: L.P.platform_kind({"platform": "azure"}), "must be one of")
 

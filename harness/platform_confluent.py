@@ -39,6 +39,12 @@ F = {"id": "id", "status": "status", "endpoint": "endpoint", "name": "name",
 
 READY = {"UP", "PROVISIONED", "RUNNING", "READY"}
 
+# A compute pool's maximum can only be one of these. Measured on 2026-10-03:
+# creating one at 1 CFU was answered "MaxCfu is not one of 5, 10, 20, 30, 40,
+# 50: 1". A case's size is that maximum, so the cases are 5, 10, 20 -- still
+# two doublings -- and never 1, 2, 4.
+POOL_SIZES = (5, 10, 20, 30, 40, 50)
+
 
 def run_cli(args, timeout=600):
     """The real Confluent CLI. Returns (exit code, stdout, stderr)."""
@@ -47,7 +53,7 @@ def run_cli(args, timeout=600):
 
 
 def estimate_usd(cases, passes, case_minutes=6.0, settle_cases=6, gb_per_case=6.0, fill_gb=20.0,
-                 hours_up=None):
+                 hours_up=None, max_ecku=10):
     """Pure. What one suite is expected to cost, from the prices above. Rough
     by design and on the high side: every case is billed at its full size for
     its whole length, and every case reads and writes gb_per_case."""
@@ -56,8 +62,10 @@ def estimate_usd(cases, passes, case_minutes=6.0, settle_cases=6, gb_per_case=6.
     data_gb = fill_gb + gb_per_case * len(sizes)
     # Every GB billed both ways, in and out: an over-estimate, on purpose.
     total = cfu_hours * PRICE["flink_cfu_hour"] + data_gb * (PRICE["kafka_gb_in"] + PRICE["kafka_gb_out"])
-    if hours_up:
-        total += hours_up * PRICE["basic_ecku_hour_after_first"]
+    # The cluster can scale itself up to max_ecku while the stack is up; the
+    # first eCKU is free. Billed as if it sat at the cap the whole time.
+    hours = hours_up if hours_up is not None else len(sizes) * case_minutes / 60.0 + 1.0
+    total += hours * max(0, max_ecku - 1) * PRICE["basic_ecku_hour_after_first"]
     return round(total, 2)
 
 
@@ -79,6 +87,10 @@ class ConfluentCloud(Platform):
                                  f"and dashes: every resource the run creates carries it")
         self.credentials = os.path.expanduser(raw.get("credentials", "~/.confluent/flink-skill.env"))
         self.budget = float(raw.get("budgetUsd", 150.0))
+        # A Basic cluster scales itself up to 50 eCKUs by default ("max_ecku": 50
+        # in its own description), each after the first billed by the hour. The
+        # run caps it, so a busy suite cannot quietly cost $7 an hour.
+        self.max_ecku = int(raw.get("maxEcku", 10))
         self.estimate = raw.get("estimateUsd")          # set by the caller from the suite plan
         self.run = runner or run_cli
         self.log = log
@@ -97,13 +109,19 @@ class ConfluentCloud(Platform):
         with open(self.state_path, "w") as f:
             json.dump(self.state, f, indent=1)           # ids only: never a secret
 
+    # Commands that take no --environment. Measured 2026-10-03: `api-key delete`
+    # answered "unknown flag: --environment", and the run's Flink key survived
+    # the teardown that found it.
+    NO_ENVIRONMENT = (("api-key", "delete"),)
+
     def cli(self, *args, quiet=False):
-        """Run one CLI command with the environment set. `quiet` keeps the
-        output out of every message: an API key's secret travels in it."""
-        args = list(args) + ["--environment", self.environment]
-        rc, out, err = self.run(args)
+        """Run one CLI command with the environment set where the command takes
+        one. `quiet` keeps the output out of every message: an API key's secret
+        travels in it."""
+        env = [] if tuple(args[:2]) in self.NO_ENVIRONMENT else ["--environment", self.environment]
+        rc, out, err = self.run(list(args) + env)
         if rc != 0:
-            what = " ".join(a for a in args if not a.startswith("--environment"))
+            what = " ".join(args)
             raise Refusal("rig", f"confluent {what} did not succeed: "
                                  + ("(output withheld: it may hold a secret)" if quiet else (err or out).strip()[:300]))
         return out
@@ -137,14 +155,14 @@ class ConfluentCloud(Platform):
                                  f"${self.budget:.2f} budget. Nothing was created.")
         if not self.state.get("cluster"):
             c = self.cli_json("kafka", "cluster", "create", f"{self.prefix}-kafka", "--cloud", self.cloud,
-                              "--region", self.region, "--type", "basic")
+                              "--region", self.region, "--type", "basic", "--max-ecku", str(self.max_ecku))
             self.state["cluster"] = c[F["id"]]
             self._save_state()
         cluster = self._wait(lambda: self.cli_json("kafka", "cluster", "describe", self.state["cluster"]),
                              f"Kafka cluster {self.state['cluster']}")
         if not self.state.get("pool"):
             p = self.cli_json("flink", "compute-pool", "create", f"{self.prefix}-flink", "--cloud", self.cloud,
-                              "--region", self.region, "--max-cfu", "1")
+                              "--region", self.region, "--max-cfu", str(POOL_SIZES[0]))
             self.state["pool"] = p[F["id"]]
             self._save_state()
         self._wait(lambda: self.cli_json("flink", "compute-pool", "describe", self.state["pool"]),
@@ -183,6 +201,10 @@ class ConfluentCloud(Platform):
             raise Refusal("rig", f"the credentials file was not written as intended (mode {oct(mode)})")
 
     def set_size(self, units):
+        if int(units) not in POOL_SIZES:
+            raise Refusal("rig", f"a Confluent Cloud compute pool cannot be {units} CFU: its size can only "
+                                 f"be {', '.join(map(str, POOL_SIZES))}. Set cases to sizes from that list, "
+                                 f"for example 5, 10 and 20")
         self.cli("flink", "compute-pool", "update", self.state["pool"], "--max-cfu", str(int(units)))
 
     def read_size(self):

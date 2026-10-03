@@ -1607,6 +1607,8 @@ def cmd_selftest(live=True, topic=None):
             if a[:3] == ["kafka", "cluster", "delete"]:
                 if "cluster" in self.fail: return 1, "", "the cluster could not be deleted"
                 self.clusters.pop(a[3], None); return ok()
+            if a[:3] == ["flink", "compute-pool", "create"] and int(flag("--max-cfu", 5)) not in PC.POOL_SIZES:
+                return 1, "", "Error: Bad Request: Violations [MaxCfu is not one of 5, 10, 20, 30, 40, 50]"
             if a[:3] == ["flink", "compute-pool", "create"]:
                 pid = f"lfcp-{self.n}"; self.pools[pid] = {"id": pid, "name": a[3], "status": "PROVISIONING",
                                                             "max_cfu": int(flag("--max-cfu", 5)), "current_cfu": 0}
@@ -1628,6 +1630,8 @@ def cmd_selftest(live=True, topic=None):
             if a[:2] == ["api-key", "list"]:
                 return ok(list(self.keys.values()))
             if a[:2] == ["api-key", "delete"]:
+                if "--environment" in args:         # as the real CLI answers (2026-10-03)
+                    return 1, "", "Error: unknown flag: --environment"
                 self.keys.pop(a[2], None); return ok()
             if a[:3] == ["flink", "statement", "list"]:
                 return ok([])
@@ -1658,15 +1662,18 @@ def cmd_selftest(live=True, topic=None):
         assert "SECRET-" in body
         state = open(os.path.join(raw["stateDir"], "confluent-state.json")).read()
         assert "SECRET" not in state and "SECRET" not in " ".join(said), "a secret reached the state or the log"
-        assert L.P.set_and_read_back(p, 4) == 4
+        assert L.P.set_and_read_back(p, 10) == 10
         p.down()
         assert p.surviving() == [] and not os.path.exists(creds), (p.surviving(), os.path.exists(creds))
     expect("confluent: up writes owner-only credentials and no secret anywhere else; down leaves nothing "
            "(must not fire)", on_confluent(cc_life), "", should_fire=False)
 
     expect("confluent: a size the pool did not take stops the case",
-           on_confluent(lambda fake, mk, said, raw: (lambda p: (p.up(), L.P.set_and_read_back(p, 4)))(mk()),
-                        ignore_update=True), "the case is 4, the platform reports 1")
+           on_confluent(lambda fake, mk, said, raw: (lambda p: (p.up(), L.P.set_and_read_back(p, 10)))(mk()),
+                        ignore_update=True), "the case is 10, the platform reports 5")
+    expect("confluent: a size Confluent does not allow is named, with the sizes it does",
+           on_confluent(lambda fake, mk, said, raw: (lambda p: (p.up(), p.set_size(4)))(mk())),
+           "cannot be 4 CFU: its size can only be 5, 10, 20, 30, 40, 50")
 
     def cc_over_budget(fake, mk, said, raw):
         try:
@@ -1693,9 +1700,10 @@ def cmd_selftest(live=True, topic=None):
            on_confluent(cc_crash_then_clean, fail={"key"}), "", should_fire=False)
 
     def cc_estimate():
-        est = PC.estimate_usd([1, 2, 4], 3)
+        est = PC.estimate_usd([5, 10, 20], 3)
         assert 1 < est < 150, est
-        assert PC.estimate_usd([1, 2, 4], 3, settle_cases=0) < est
+        assert PC.estimate_usd([5, 10, 20], 3, settle_cases=0) < est
+        assert PC.estimate_usd([5, 10, 20], 3, max_ecku=1) < est      # the eCKU cap is in it
     expect("confluent: a full suite's estimate sits well inside the budget (must not fire)", cc_estimate, "",
            should_fire=False)
 

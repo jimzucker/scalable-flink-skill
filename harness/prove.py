@@ -1620,11 +1620,14 @@ def cmd_selftest(live=True, topic=None):
                 return 1, "", "Error: Bad Request: Violations [MaxCfu is not one of 5, 10, 20, 30, 40, 50]"
             if a[:3] == ["flink", "compute-pool", "create"]:
                 pid = f"lfcp-{self.n}"; self.pools[pid] = {"id": pid, "name": a[3], "status": "PROVISIONING",
-                                                            "max_cfu": int(flag("--max-cfu", 5)), "current_cfu": 0}
+                                                            "max_cfu": 5 if self.ignore_update else int(flag("--max-cfu", 5)),
+                                                            "current_cfu": 0}
                 return ok(self.pools[pid])
             if a[:3] == ["flink", "compute-pool", "describe"]:
                 self.pools[a[3]]["status"] = "PROVISIONED"; return ok(self.pools[a[3]])
             if a[:3] == ["flink", "compute-pool", "update"]:
+                if int(flag("--max-cfu")) < self.pools[a[3]]["max_cfu"]:     # as answered on 2026-10-03
+                    return 1, "", "Error: Reducing the max_cfu of a compute pool is currently unsupported."
                 if not self.ignore_update: self.pools[a[3]]["max_cfu"] = int(flag("--max-cfu"))
                 return ok()
             if a[:3] == ["flink", "compute-pool", "list"]:
@@ -1645,7 +1648,8 @@ def cmd_selftest(live=True, topic=None):
             if a[:3] == ["flink", "statement", "create"]:
                 if a[3] in self.statements:
                     return 1, "", f'Error: Statement with name "{a[3]}" already exists.'
-                self.statements[a[3]] = {"name": a[3], "status": "PENDING", "sql": flag("--sql")}
+                self.statements[a[3]] = {"name": a[3], "status": "PENDING", "sql": flag("--sql"),
+                                         "pool": flag("--compute-pool")}
                 return ok()
             if a[:3] == ["flink", "statement", "describe"]:
                 st = self.statements[a[3]]
@@ -1659,9 +1663,14 @@ def cmd_selftest(live=True, topic=None):
                         "COMPLETED" if st["sql"].upper().startswith("CREATE") else "RUNNING")
                     if st["status"] == "FAILED":
                         st["status_detail"] = "Table 'why_t' could not be created: the environment is not ready"
+                    if ("late" in self.fail and st["sql"].upper().startswith("INSERT")
+                            and getattr(self, "late_left", 0) > 0):
+                        self.late_left -= 1          # as seen 2026-10-03, right after CREATE TABLE
+                        st["status"], st["status_detail"] = "FAILED", "Cannot find table 'orders' in 'db'."
                 return ok(st)
             if a[:3] == ["flink", "statement", "list"]:
-                return ok(list(self.statements.values()))
+                pool = flag("--compute-pool")
+                return ok([v for v in self.statements.values() if pool in (None, v.get("pool"))])
             if a[:3] == ["flink", "statement", "delete"]:
                 for n in a[3:]:
                     if not n.startswith("--"): self.statements.pop(n, None)
@@ -1689,8 +1698,8 @@ def cmd_selftest(live=True, topic=None):
         creds = raw["credentials"]
         assert oct(os.stat(creds).st_mode & 0o777) == "0o600", oct(os.stat(creds).st_mode)
         body = open(creds).read()
-        for k in ("KAFKA_API_KEY", "KAFKA_API_SECRET", "FLINK_API_KEY", "FLINK_API_SECRET", "KAFKA_BOOTSTRAP",
-                  "FLINK_COMPUTE_POOL"):
+        for k in ("KAFKA_API_KEY", "KAFKA_API_SECRET", "FLINK_API_KEY", "FLINK_API_SECRET", "METRICS_API_KEY",
+                  "METRICS_API_SECRET", "KAFKA_BOOTSTRAP", "FLINK_COMPUTE_POOL"):
             assert k + "=" in body, k
         assert "SECRET-" in body
         state = open(os.path.join(raw["stateDir"], "confluent-state.json")).read()
@@ -1782,6 +1791,84 @@ def cmd_selftest(live=True, topic=None):
             p.down()
     expect("confluent: a stack that never runs a statement stops, quoting Confluent",
            on_confluent(cc_never_ready, cold=99), "never ran a statement in 3 tries")
+
+    def cc_pool_per_case(fake, mk, said, raw):
+        p = mk(); p.up()
+        setup = p.state["pool"]
+        assert fake.pools[setup]["max_cfu"] == 20, fake.pools[setup]
+        sizes = []
+        for units in (5, 10, 20, 5):              # ascending, then the sentinel back at the baseline
+            sizes.append(L.P.set_and_read_back(p, units))
+            p.run_statement("fsk-t-job", "INSERT INTO t SELECT 1", "db")
+            assert fake.statements[p.last_statement]["pool"] == p.state["casePool"], "the job ran outside its pool"
+        assert sizes == [5, 10, 20, 5], sizes
+        assert set(fake.pools) == {setup, p.state["casePool"]}, f"earlier case pools survived: {fake.pools}"
+        p.down()
+        assert not fake.pools and not fake.statements, (fake.pools, fake.statements)
+    expect("confluent: every case gets a new pool of its own size, so a suite can come back down to its "
+           "baseline; earlier pools are deleted (must not fire)", on_confluent(cc_pool_per_case), "",
+           should_fire=False)
+
+    def cc_late_table(fake, mk, said, raw):
+        p = mk(); p.up(); p.retry_wait_s = 0
+        fake.late_left = 2
+        assert p.run_statement("fsk-t-job", "INSERT INTO orders SELECT 1", "db") == "RUNNING"
+        assert p.last_statement == "fsk-t-job-r3", p.last_statement
+        assert "fsk-t-job" not in fake.statements and "fsk-t-job-r2" not in fake.statements, list(fake.statements)
+        assert any("could not see a table" in l for l in said), said
+        p.down()
+    expect("confluent: a statement that cannot see a table created just before it is retried under a new "
+           "name, as measured (must not fire)", on_confluent(cc_late_table, fail={"late"}), "",
+           should_fire=False)
+
+    def cc_late_table_gives_up(fake, mk, said, raw):
+        p = mk(); p.up(); p.retry_wait_s = 0
+        fake.late_left = 99
+        try:
+            p.run_statement("fsk-t-job", "INSERT INTO orders SELECT 1", "db")
+        finally:
+            p.down()
+    expect("confluent: a table that never becomes visible stops, quoting Confluent",
+           on_confluent(cc_late_table_gives_up, fail={"late"}), "Cannot find table 'orders'")
+
+    def cc_readings(fake, mk, said, raw):
+        seen = {}
+        def docker(args):
+            seen["args"] = list(args)
+            mount = args[args.index("-v") + 1].split(":")[0]
+            client = os.path.join(mount, "client.properties")
+            seen["mode"] = oct(os.stat(client).st_mode & 0o777)
+            seen["client"] = open(client).read()
+            seen["path"] = client
+            return 0, "orders:0:100\norders:1:250\nother:0:7\n", ""
+        def http(url, auth, body):
+            seen.setdefault("bodies", []).append(body)
+            return 200, {"data": [{"timestamp": "2026-10-03T00:55:00Z", "value": "14597694"},
+                                  {"timestamp": "2026-10-03T00:54:00Z", "value": 11003843.0}]}
+        p = mk({"_docker": docker, "_http": http}); p.up()
+        assert p.log_end("orders") == (350, {0: 100, 1: 250}), p.log_end("orders")
+        assert seen["mode"] == "0o600", seen["mode"]
+        assert "SECRET-" in seen["client"] and not any("SECRET" in a for a in seen["args"]), \
+            "a secret went on the docker command line"
+        assert not os.path.exists(seen["path"]), "the Kafka client file outlived the call"
+        m = p.statement_minutes("fsk-t-job", 0, 600)
+        assert set(m) == set(PC.STATEMENT_METRICS), sorted(m)
+        assert m["recordsIn"] == [("2026-10-03T00:54:00Z", 11003843.0), ("2026-10-03T00:55:00Z", 14597694.0)], m
+        flt = seen["bodies"][0]["filter"]["filters"]
+        assert {"field": "resource.flink_statement.name", "op": "EQ", "value": "fsk-t-job"} in flt, flt
+        assert not any("SECRET" in l for l in said), "a secret reached the log"
+        p.down()
+    expect("confluent: the log end and the per-minute readings come back parsed, with no secret on a "
+           "command line or in the log (must not fire)", on_confluent(cc_readings), "", should_fire=False)
+
+    def cc_metrics_refused(fake, mk, said, raw):
+        p = mk({"_http": lambda url, auth, body: (401, {"errors": [{"detail": "invalid API key"}]})}); p.up()
+        try:
+            p.statement_minutes("fsk-t-job", 0, 600)
+        finally:
+            p.down()
+    expect("confluent: a metrics API that will not answer stops with its own reason",
+           on_confluent(cc_metrics_refused), "answered HTTP 401")
 
     def cc_estimate():
         est = PC.estimate_usd([5, 10, 20], 3)

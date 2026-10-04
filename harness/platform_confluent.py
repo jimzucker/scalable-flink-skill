@@ -3,9 +3,33 @@
 What is built: the stack's life -- up, size, read back, clear, down -- and the
 checks around it: a budget guard before anything is created, a state file of
 everything created so `down` can clean up after a crash, and a teardown that
-lists the account afterwards and stops on any survivor. What is not built yet
-(phase 3): submitting the SQL job, and the engine and broker readings a case is
-judged on. Those stop with a plain sentence rather than a traceback.
+lists the account afterwards and stops on any survivor. Also the readings a
+cloud case needs: the Kafka log end of a topic, read with the Kafka tools
+against the cloud cluster, and Confluent's per-minute metrics for a statement
+-- CFU in use, records read, busy, held back and idle time. What is not built
+yet: the harness's case loop calling these. Until then `submit` and the
+cgroup-shaped readings stop with a plain sentence rather than a traceback.
+
+Measured on 2026-10-03, and why the code is shaped as it is:
+- A pool's size cannot be lowered ("Reducing the max_cfu of a compute pool is
+  currently unsupported"), and a suite comes back down to its baseline. So
+  every case gets a new pool of its own size, and the last one is deleted.
+  `up` makes one more pool, for setup statements and the fill.
+- A statement starts at 1 CFU and took about three minutes to grow to a 10 CFU
+  pool's limit. A case's warm-up has to cover that.
+- Confluent keeps no consumer-group offsets for a statement's reads: Kafka's
+  own tools listed none while a drain ran. The window cannot be anchored on
+  committed offsets the way it is locally.
+- The per-minute "records read" of five drains added up to 72-94% of the
+  records the backlog held, while the fill's "records written" matched its
+  topic to 0.002%. Why is not known; records read is reported, never used as
+  the rate.
+- A drain in a 20 CFU pool held at 10 CFU for minutes with tens of millions of
+  records still waiting, three times out of three, at 24 and at 48 input
+  partitions alike, held back 700-850 ms of every second. Why is not known.
+  Until it is, a 20 CFU case cannot show scaling: its pool is not what binds.
+- The fill: one generator job used 1 CFU and wrote about 12,700 records a
+  second; eight side by side wrote 75,000; sixteen wrote 187,000.
 
 The skill creates its own infrastructure and deletes it, because whatever
 creates it is the only thing that can prove it is gone. An idle cluster costs
@@ -45,11 +69,69 @@ READY = {"UP", "PROVISIONED", "RUNNING", "READY"}
 # two doublings -- and never 1, 2, 4.
 POOL_SIZES = (5, 10, 20, 30, 40, 50)
 
+# The metrics API. The query endpoint is the only place busy, held-back and idle
+# time exist: they are "exportable": false, so never in the Prometheus export.
+METRICS_API = "https://api.telemetry.confluent.cloud/v2/metrics/cloud"
+STATEMENT_METRICS = {"cfu": "io.confluent.flink/statement_utilization/current_cfus",
+                     "recordsIn": "io.confluent.flink/num_records_in",
+                     "recordsOut": "io.confluent.flink/num_records_out",
+                     "pending": "io.confluent.flink/pending_records",
+                     "busyMsPerS": "io.confluent.flink/task/busy_time_ms_per_second",
+                     "heldBackMsPerS": "io.confluent.flink/task/backpressure_time_ms_per_second",
+                     "idleMsPerS": "io.confluent.flink/task/idle_time_ms_per_second"}
+
 
 def run_cli(args, timeout=600):
     """The real Confluent CLI. Returns (exit code, stdout, stderr)."""
     p = subprocess.run(["confluent"] + list(args), capture_output=True, text=True, timeout=timeout)
     return p.returncode, p.stdout, p.stderr
+
+
+def run_docker(args, timeout=240):
+    """The real docker command. Returns (exit code, stdout, stderr)."""
+    p = subprocess.run(["docker"] + list(args), capture_output=True, text=True, timeout=timeout)
+    return p.returncode, p.stdout, p.stderr
+
+
+def http_json(url, auth_b64, body=None, timeout=60):
+    """One call to the metrics API. Returns (HTTP status, parsed reply or text)."""
+    import urllib.request
+    import urllib.error
+    req = urllib.request.Request(url, data=json.dumps(body).encode() if body is not None else None,
+                                 headers={"Authorization": "Basic " + auth_b64,
+                                          "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            text = r.read().decode()
+            status = r.status
+    except urllib.error.HTTPError as e:
+        text, status = e.read().decode(), e.code
+    try:
+        return status, json.loads(text)
+    except ValueError:
+        return status, text
+
+
+def parse_offsets(text, topic):
+    """kafka-get-offsets.sh output -> (total, {partition: offset}). Pure."""
+    per = {}
+    for line in text.split():
+        parts = line.strip().split(":")
+        if len(parts) == 3 and parts[0] == topic and parts[1].isdigit() and parts[2].isdigit():
+            per[int(parts[1])] = int(parts[2])
+    return sum(per.values()), per
+
+
+def minutes_of(reply):
+    """A metrics query reply -> [(ISO minute, value)], sorted. Values arrive as
+    numbers or strings; both are read as floats. Pure."""
+    rows = []
+    for r in (reply or {}).get("data") or []:
+        try:
+            rows.append((str(r["timestamp"]), float(r["value"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return sorted(rows)
 
 
 def estimate_usd(cases, passes, case_minutes=6.0, settle_cases=6, gb_per_case=6.0, fill_gb=20.0,
@@ -102,11 +184,23 @@ class ConfluentCloud(Platform):
         # run caps it, so a busy suite cannot quietly cost $7 an hour.
         self.max_ecku = int(raw.get("maxEcku", 10))
         self.estimate = raw.get("estimateUsd")          # set by the caller from the suite plan
+        # The pool `up` makes for setup statements and the fill: each fill job
+        # used 1 CFU when measured, so this is also how many fill jobs can run.
+        self.setup_cfu = int(raw.get("setupCfu", 20))
+        if self.setup_cfu not in POOL_SIZES:
+            raise Refusal("rig", f"platform.setupCfu {self.setup_cfu} is not a size Confluent allows: "
+                                 f"{', '.join(map(str, POOL_SIZES))}")
+        self.kafka_image = raw.get("kafkaImage", "apache/kafka:3.9.2")
         self.run = runner or run_cli
+        self.docker = raw.get("_docker") or run_docker
+        self.http = raw.get("_http") or http_json
+        self.retry_wait_s = 30
         self.log = log
         self.state_path = os.path.join(raw.get("stateDir") or state_dir, "confluent-state.json")
         self.state = self._load_state()
         self.state.setdefault("statements", [])
+        self.state.setdefault("pools", [])
+        self.state.setdefault("casePool", None)
         self.environment = self.state.get("environment") or (
             self.environment_ref if self.environment_ref.startswith("env-") else None)
 
@@ -116,7 +210,7 @@ class ConfluentCloud(Platform):
             return json.load(open(self.state_path))
         except (OSError, ValueError):
             return {"environment": None, "environmentCreated": False, "cluster": None, "pool": None,
-                    "keys": [], "statements": []}
+                    "casePool": None, "pools": [], "keys": [], "statements": []}
 
     def _save_state(self):
         os.makedirs(os.path.dirname(self.state_path) or ".", exist_ok=True)
@@ -199,15 +293,17 @@ class ConfluentCloud(Platform):
                              f"Kafka cluster {self.state['cluster']}")
         if not self.state.get("pool"):
             p = self.cli_json("flink", "compute-pool", "create", f"{self.prefix}-flink", "--cloud", self.cloud,
-                              "--region", self.region, "--max-cfu", str(POOL_SIZES[0]))
+                              "--region", self.region, "--max-cfu", str(self.setup_cfu))
             self.state["pool"] = p[F["id"]]
+            self.state["pools"].append(p[F["id"]])
             self._save_state()
         self._wait(lambda: self.cli_json("flink", "compute-pool", "describe", self.state["pool"]),
                    f"Flink compute pool {self.state['pool']}")
         secrets = {}
         if not self.state.get("keys"):
             for label, extra in (("KAFKA", ["--resource", self.state["cluster"]]),
-                                 ("FLINK", ["--resource", "flink", "--cloud", self.cloud, "--region", self.region])):
+                                 ("FLINK", ["--resource", "flink", "--cloud", self.cloud, "--region", self.region]),
+                                 ("METRICS", ["--resource", "cloud"])):
                 k = self.cli_json("api-key", "create", *extra, "--description", f"{self.prefix} {label.lower()}",
                                   quiet=True)
                 self.state["keys"].append(k[F["api_key"]])
@@ -266,19 +362,42 @@ class ConfluentCloud(Platform):
             raise Refusal("rig", f"the credentials file was not written as intended (mode {oct(mode)})")
 
     def set_size(self, units):
-        if int(units) not in POOL_SIZES:
+        """A new pool of exactly this size for the next case, and the last
+        case's pool deleted. A pool cannot be made smaller, and a pool reused
+        across cases would carry one case's scaling into the next."""
+        units = int(units)
+        if units not in POOL_SIZES:
             raise Refusal("rig", f"a Confluent Cloud compute pool cannot be {units} CFU: its size can only "
                                  f"be {', '.join(map(str, POOL_SIZES))}. Set cases to sizes from that list, "
                                  f"for example 5, 10 and 20")
-        self.cli("flink", "compute-pool", "update", self.state["pool"], "--max-cfu", str(int(units)))
+        old = self.state.get("casePool")
+        if old:
+            self._clear_pool(old)
+            self.cli("flink", "compute-pool", "delete", old, "--force")
+            self.state["pools"] = [x for x in self.state["pools"] if x != old]
+            self.state["casePool"] = None
+            self._save_state()
+        n = len(self.state.get("statements") or []) + len(self.state["pools"])
+        p = self.cli_json("flink", "compute-pool", "create", f"{self.prefix}-case{units}-{n}", "--cloud",
+                          self.cloud, "--region", self.region, "--max-cfu", str(units))
+        self.state["casePool"] = p[F["id"]]
+        self.state["pools"].append(p[F["id"]])
+        self._save_state()
+        self._wait(lambda: self.cli_json("flink", "compute-pool", "describe", p[F["id"]]),
+                   f"Flink compute pool {p[F['id']]}")
+
+    def case_pool(self):
+        """The pool a case's job runs in: the case's own, else the setup pool."""
+        return self.state.get("casePool") or self.state["pool"]
 
     def read_size(self):
-        d = self.cli_json("flink", "compute-pool", "describe", self.state["pool"]) or {}
+        d = self.cli_json("flink", "compute-pool", "describe", self.case_pool()) or {}
         return int(d.get(F["max_cfu"], -1))
 
     def current_cfu(self):
-        """What the pool is using now, as Confluent reports it."""
-        d = self.cli_json("flink", "compute-pool", "describe", self.state["pool"]) or {}
+        """What the pool is using now, as the CLI reports it. Measured
+        2026-10-03: this read 0 while a job ran; use statement_minutes."""
+        d = self.cli_json("flink", "compute-pool", "describe", self.case_pool()) or {}
         return int(d.get(F["current_cfu"], 0))
 
     # A statement's states, as its describe reports them. `--wait` returns once a
@@ -295,16 +414,41 @@ class ConfluentCloud(Platform):
         detail = d.get("status_detail") or d.get("detail") or d.get("status_message") or ""
         return status, str(detail), d
 
-    def run_statement(self, name, sql, database, timeout_s=600):
+    # A table just created is sometimes not visible to the next statement yet.
+    # Seen 2026-10-03: an INSERT right after its CREATE TABLE failed with
+    # "Cannot find table"; the same INSERT ran when retried 30 s later.
+    LATE_TABLE = "Cannot find table"
+    late_table_tries = 5
+
+    def run_statement(self, name, sql, database, timeout_s=600, pool=None):
         """Create a statement and wait until Confluent reports it running or
-        completed. A failure stops with Confluent's own detail; a reply this
-        code does not recognise stops with the reply itself."""
+        completed. Returns its status; the name it ran under is in
+        `last_statement` (a retry runs under a new name). A failure stops with
+        Confluent's own detail; a reply this code does not recognise stops
+        with the reply itself."""
+        for attempt in range(1, self.late_table_tries + 1):
+            nm = name if attempt == 1 else f"{name}-r{attempt}"
+            try:
+                status = self._run_statement(nm, sql, database, timeout_s, pool)
+                self.last_statement = nm
+                return status
+            except Refusal as e:
+                if self.LATE_TABLE not in e.msg or attempt == self.late_table_tries:
+                    raise
+                self.log(f"  confluent-cloud: statement {nm} could not see a table created just before it; "
+                         f"retrying in {self.retry_wait_s} s as {name}-r{attempt + 1}")
+                self.cli("flink", "statement", "delete", nm, "--cloud", self.cloud, "--region", self.region,
+                         "--force")
+                time.sleep(self.retry_wait_s)
+
+    def _run_statement(self, name, sql, database, timeout_s, pool):
         if not name.startswith(self.prefix):
             raise Refusal("rig", f"statement {name!r} does not carry the run's prefix {self.prefix!r}, so "
                                  f"teardown would not find it")
         try:
-            self.cli("flink", "statement", "create", name, "--sql", sql, "--compute-pool", self.state["pool"],
-                     "--database", database, "--cloud", self.cloud, "--region", self.region)
+            self.cli("flink", "statement", "create", name, "--sql", sql, "--compute-pool",
+                     pool or self.case_pool(), "--database", database, "--cloud", self.cloud,
+                     "--region", self.region)
         except Refusal as e:
             # Seen 2026-10-03 in a new environment: "already exists" for a name
             # never used before. Whatever made it, describe what is there.
@@ -327,22 +471,27 @@ class ConfluentCloud(Platform):
                                      f"{timeout_s} s: {json.dumps(whole)[:600]}")
             time.sleep(self.poll_s)
 
-    def _statements(self):
-        if not self.state.get("pool"):
-            return []
-        rows = self.cli_json("flink", "statement", "list", "--compute-pool", self.state["pool"],
-                             "--cloud", self.cloud, "--region", self.region) or []
-        listed = [r[F["name"]] for r in rows if str(r.get(F["name"], "")).startswith(self.prefix)]
+    def _statements(self, pool=None):
+        pools = [pool] if pool else [x for x in dict.fromkeys([self.state.get("pool")] + self.state["pools"]) if x]
+        listed = []
+        for x in pools:
+            rows = self.cli_json("flink", "statement", "list", "--compute-pool", x,
+                                 "--cloud", self.cloud, "--region", self.region) or []
+            listed += [r[F["name"]] for r in rows if str(r.get(F["name"], "")).startswith(self.prefix)]
         return sorted(set(listed))
 
-    def clear_size(self):
-        names = self._statements()
+    def _clear_pool(self, pool=None):
+        names = self._statements(pool)
         if names:
             self.cli("flink", "statement", "delete", *names, "--cloud", self.cloud, "--region", self.region,
                      "--force")
-        left = self._statements()
+        left = self._statements(pool)
         if left:
             raise Refusal("rig", f"statements still in the pool after deleting them: {', '.join(left)}")
+
+    def clear_size(self):
+        """No statement left in any pool the run created, confirmed by listing."""
+        self._clear_pool()
 
     def surviving(self):
         """Everything this run's prefix names that still exists, as Confluent lists it."""
@@ -373,7 +522,7 @@ class ConfluentCloud(Platform):
         except Refusal as e:
             problems.append(e.msg)
         for kind, ids, cmd in (("API key", list(self.state.get("keys") or []), ["api-key", "delete"]),
-                               ("pool", [self.state["pool"]] if self.state.get("pool") else [],
+                               ("pool", [x for x in dict.fromkeys([self.state.get("pool")] + self.state["pools"]) if x],
                                 ["flink", "compute-pool", "delete"]),
                                ("cluster", [self.state["cluster"]] if self.state.get("cluster") else [],
                                 ["kafka", "cluster", "delete"])):
@@ -397,10 +546,72 @@ class ConfluentCloud(Platform):
             self.log(f"  confluent-cloud: deleted environment {self.environment_ref}, which up created")
         self.environment = None
         self.state = {"environment": None, "environmentCreated": False, "cluster": None, "pool": None,
-                      "keys": [], "statements": []}
+                      "casePool": None, "pools": [], "keys": [], "statements": []}
         self._save_state()
         self.log("  confluent-cloud down: nothing with prefix " + self.prefix + " survives")
         return True
+
+    # ------------------------------------------------------------ readings
+    def _secret(self, name):
+        """One value from the owner-only credentials file. Never logged."""
+        for line in open(self.credentials):
+            if line.startswith(name + "="):
+                return line.rstrip("\n").split("=", 1)[1]
+        raise Refusal("rig", f"{name} is not in the credentials file {self.credentials}; run up first")
+
+    def kafka_tool(self, tool, *args):
+        """One Kafka command-line tool against the cloud cluster, from the Kafka
+        image, with an owner-only client file removed afterwards. Returns
+        (exit code, stdout, stderr); stderr is never a secret."""
+        import tempfile
+        d = tempfile.mkdtemp(prefix="fsk-kafka-")
+        client = os.path.join(d, "client.properties")
+        try:
+            fd = os.open(client, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as f:
+                f.write("security.protocol=SASL_SSL\nsasl.mechanism=PLAIN\n"
+                        "sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required "
+                        f"username=\"{self._secret('KAFKA_API_KEY')}\" "
+                        f"password=\"{self._secret('KAFKA_API_SECRET')}\";\n")
+            return self.docker(["run", "--rm", "-v", f"{d}:/fsk:ro", self.kafka_image,
+                                f"/opt/kafka/bin/{tool}", "--bootstrap-server", self._secret("KAFKA_BOOTSTRAP"),
+                                "--command-config", "/fsk/client.properties", *args])
+        finally:
+            if os.path.exists(client):
+                os.remove(client)
+            os.rmdir(d)
+
+    def log_end(self, topic):
+        """The topic's log end on the cloud cluster: (total, {partition: offset})."""
+        rc, out, err = self.kafka_tool("kafka-get-offsets.sh", "--topic", topic)
+        if rc:
+            raise Refusal("rig", f"could not read the log end of {topic} on Confluent Cloud: {err.strip()[-300:]}")
+        total, per = parse_offsets(out, topic)
+        if not per:
+            raise Refusal("rig", f"the log end of {topic} came back empty: {out.strip()[:200]}")
+        return total, per
+
+    def statement_minutes(self, statement, t0, t1):
+        """Confluent's per-minute readings for one statement between t0 and t1
+        (epoch seconds): {reading: [(minute, value)]} for every name in
+        STATEMENT_METRICS. They arrive about three minutes late."""
+        import base64
+        auth = base64.b64encode(f"{self._secret('METRICS_API_KEY')}:{self._secret('METRICS_API_SECRET')}"
+                                .encode()).decode()
+        iso = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+        out = {}
+        for key, metric in STATEMENT_METRICS.items():
+            body = {"aggregations": [{"metric": metric}], "group_by": ["resource.flink_statement.name"],
+                    "filter": {"op": "AND", "filters": [
+                        {"field": "resource.compute_pool.id", "op": "EQ", "value": self.case_pool()},
+                        {"field": "resource.flink_statement.name", "op": "EQ", "value": statement}]},
+                    "granularity": "PT1M", "intervals": [f"{iso(t0)}/{iso(t1)}"], "limit": 1000}
+            status, reply = self.http(f"{METRICS_API}/query", auth, body)
+            if status != 200:
+                raise Refusal("rig", f"Confluent's metrics API answered HTTP {status} for {metric}: "
+                                     f"{str(reply)[:300]}")
+            out[key] = minutes_of(reply)
+        return out
 
     # ------------------------------------------------------------ phase 3
     def _not_yet(self, what):

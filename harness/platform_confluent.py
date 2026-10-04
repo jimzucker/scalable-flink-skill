@@ -69,6 +69,23 @@ READY = {"UP", "PROVISIONED", "RUNNING", "READY"}
 # two doublings -- and never 1, 2, 4.
 POOL_SIZES = (5, 10, 20, 30, 40, 50)
 
+# Watermark alignment is on by default on Confluent Cloud: a partition whose
+# event times run ahead of the others is paused ("Blocked" in the Query
+# Profiler) until the slow ones catch up. Measured 2026-10-04 (flink-training
+# findings §8): 18 of 24 partitions paused 20-66% of the time; with the
+# allowed drift raised to a day none paused and the copy read 46-47 M/min
+# against 30.6-31.6. The laptop's jobs have no alignment, so every job
+# statement the harness runs turns it off, and reads the setting back.
+ALIGNMENT_OFF = {"sql.tables.scan.watermark-alignment.max-allowed-drift": "1 d"}
+
+
+def uneven_cases(partitions, cases):
+    """Pure. The cases whose subtask count does not divide the partitions:
+    1 CFU ran one subtask (Query Profiler, findings §8), so a case's size is
+    its subtask count, and the laptop's rule applies unchanged."""
+    return [n for n in cases if partitions % n]
+
+
 # The metrics API. The query endpoint is the only place busy, held-back and idle
 # time exist: they are "exportable": false, so never in the Prometheus export.
 METRICS_API = "https://api.telemetry.confluent.cloud/v2/metrics/cloud"
@@ -104,6 +121,24 @@ def http_json(url, auth_b64, body=None, timeout=60):
         with urllib.request.urlopen(req, timeout=timeout) as r:
             text = r.read().decode()
             status = r.status
+    except urllib.error.HTTPError as e:
+        text, status = e.read().decode(), e.code
+    try:
+        return status, json.loads(text)
+    except ValueError:
+        return status, text
+
+
+def rest_json(method, url, auth_b64, body=None, timeout=60):
+    """One call to the Flink REST API. Returns (HTTP status, parsed reply or text)."""
+    import urllib.request
+    import urllib.error
+    ctype = "application/json-patch+json" if method == "PATCH" else "application/json"
+    req = urllib.request.Request(url, method=method, data=json.dumps(body).encode() if body is not None else None,
+                                 headers={"Authorization": "Basic " + auth_b64, "Content-Type": ctype})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            text, status = r.read().decode(), r.status
     except urllib.error.HTTPError as e:
         text, status = e.read().decode(), e.code
     try:
@@ -194,6 +229,7 @@ class ConfluentCloud(Platform):
         self.run = runner or run_cli
         self.docker = raw.get("_docker") or run_docker
         self.http = raw.get("_http") or http_json
+        self.rest = raw.get("_rest") or rest_json
         self.retry_wait_s = 30
         self.log = log
         self.state_path = os.path.join(raw.get("stateDir") or state_dir, "confluent-state.json")
@@ -322,22 +358,48 @@ class ConfluentCloud(Platform):
         """A new stack takes minutes before Confluent will run a statement in it.
         Measured 2026-10-03 in a new environment: the same CREATE TABLE failed
         0.7 min after up ("technical difficulties on our end") and completed at
-        2.7 min. So up ends by running a tiny statement until one completes."""
+        2.7 min. So up ends by running a tiny statement until one completes.
+
+        A table that can be created is not yet a stack that works. Measured
+        2026-10-04 (findings §8): two stacks ran their first CREATE TABLE in 5
+        and 7 s, and a table created next stayed invisible to every INSERT for
+        two and a half minutes; the ten stacks that took 102-108 s all worked.
+        So ready means: a table created, a row written into it, and that row
+        found on its Kafka topic. If that never happens, up tears the stack
+        down and says so, before a fill is spent on it."""
         t0 = time.time()
         name_db = cluster.get(F["name"]) or self.state["cluster"]
         last = None
         for i in range(self.ready_tries):
             try:
-                self.run_statement(f"{self.prefix}-ready{i}", f"CREATE TABLE {self.prefix.replace('-', '_')}_ready{i} (a INT)",
-                                   name_db, timeout_s=240)
+                table = f"{self.prefix.replace('-', '_')}_ready{i}"
+                self.run_statement(f"{self.prefix}-ready{i}", f"CREATE TABLE {table} (a INT)", name_db, timeout_s=240)
                 self.state["readyAfterS"] = round(time.time() - t0, 1)
                 self._save_state()
                 self.log(f"  confluent-cloud: the stack ran its first statement {self.state['readyAfterS']:.0f} s "
                          f"after it was created")
+                try:
+                    self.run_statement(f"{self.prefix}-ready{i}-write", f"INSERT INTO {table} VALUES (1)", name_db,
+                                       timeout_s=240)
+                    end, _ = self.log_end(table)
+                    if end < 1:
+                        raise Refusal("rig", f"the row written to {table} is not on its Kafka topic (log end {end})")
+                except Refusal as e:
+                    self.log(f"  confluent-cloud: the stack is not usable: {e.msg}. Tearing it down.")
+                    try:
+                        self.down()
+                    finally:
+                        raise Refusal("rig", f"the new stack could create a table but not use it ({e.msg}). It was "
+                                             f"torn down; run up again to get a new one")
+                self.state["usableAfterS"] = round(time.time() - t0, 1)
+                self._save_state()
+                self.log(f"  confluent-cloud: a row written to a new table was read back from Kafka "
+                         f"{self.state['usableAfterS']:.0f} s after the stack was created")
                 return
             except Refusal as e:
                 last = e.msg
-                if "technical difficulties" not in e.msg and "not ready" not in e.msg.lower():
+                if "was torn down" in e.msg or (
+                        "technical difficulties" not in e.msg and "not ready" not in e.msg.lower()):
                     raise
             time.sleep(self.ready_wait_s)
         raise Refusal("rig", f"the stack never ran a statement in {self.ready_tries} tries over "
@@ -405,11 +467,20 @@ class ConfluentCloud(Platform):
     # 2026-10-03 four statements failed and the probe that created them read
     # success. The status is read back, never the exit code.
     STATEMENT_OK = {"RUNNING", "COMPLETED"}
-    STATEMENT_BAD = {"FAILED", "FAILING", "STOPPED", "DEGRADED", "DELETED"}
+    STATEMENT_BAD = {"FAILED", "FAILING", "STOPPED", "DEGRADED", "DELETED", "GONE"}
 
     def statement_status(self, name):
-        """(status, detail, the whole reply) for one statement, as Confluent describes it."""
-        d = self.cli_json("flink", "statement", "describe", name, "--cloud", self.cloud, "--region", self.region) or {}
+        """(status, detail, the whole reply) for one statement, as Confluent
+        describes it. A statement that no longer exists is "GONE", not an
+        error: measured 2026-10-04, a probe that read the status of a
+        statement deleted under it stopped and tore its stack down."""
+        try:
+            d = self.cli_json("flink", "statement", "describe", name, "--cloud", self.cloud,
+                              "--region", self.region) or {}
+        except Refusal as e:
+            if "does not exist" in e.msg or "not found" in e.msg.lower():
+                return "GONE", f"statement {name} no longer exists", {}
+            raise
         status = str(d.get("status") or d.get("phase") or "").upper()
         detail = d.get("status_detail") or d.get("detail") or d.get("status_message") or ""
         return status, str(detail), d
@@ -420,7 +491,7 @@ class ConfluentCloud(Platform):
     LATE_TABLE = "Cannot find table"
     late_table_tries = 5
 
-    def run_statement(self, name, sql, database, timeout_s=600, pool=None):
+    def run_statement(self, name, sql, database, timeout_s=600, pool=None, properties=None):
         """Create a statement and wait until Confluent reports it running or
         completed. Returns its status; the name it ran under is in
         `last_statement` (a retry runs under a new name). A failure stops with
@@ -429,7 +500,7 @@ class ConfluentCloud(Platform):
         for attempt in range(1, self.late_table_tries + 1):
             nm = name if attempt == 1 else f"{name}-r{attempt}"
             try:
-                status = self._run_statement(nm, sql, database, timeout_s, pool)
+                status = self._run_statement(nm, sql, database, timeout_s, pool, properties)
                 self.last_statement = nm
                 return status
             except Refusal as e:
@@ -441,14 +512,17 @@ class ConfluentCloud(Platform):
                          "--force")
                 time.sleep(self.retry_wait_s)
 
-    def _run_statement(self, name, sql, database, timeout_s, pool):
+    def _run_statement(self, name, sql, database, timeout_s, pool, properties=None):
         if not name.startswith(self.prefix):
             raise Refusal("rig", f"statement {name!r} does not carry the run's prefix {self.prefix!r}, so "
                                  f"teardown would not find it")
         try:
+            extra = []
+            for k, v in (properties or {}).items():
+                extra += ["--property", f"{k}={v}"]
             self.cli("flink", "statement", "create", name, "--sql", sql, "--compute-pool",
                      pool or self.case_pool(), "--database", database, "--cloud", self.cloud,
-                     "--region", self.region)
+                     "--region", self.region, *extra)
         except Refusal as e:
             # Seen 2026-10-03 in a new environment: "already exists" for a name
             # never used before. Whatever made it, describe what is there.
@@ -627,6 +701,92 @@ class ConfluentCloud(Platform):
                                      f"{str(reply)[:300]}")
             out[key] = minutes_of(reply)
         return out
+
+    # ------------------------------------------------------------ a case's job
+    def _rest_auth(self):
+        import base64
+        return base64.b64encode(f"{self._secret('FLINK_API_KEY')}:{self._secret('FLINK_API_SECRET')}"
+                                .encode()).decode()
+
+    def _organization(self):
+        if not self.state.get("organization"):
+            orgs = self.cli_json("organization", "list") or []
+            cur = [o for o in orgs if o.get("is_current")] or orgs[:1]
+            if not cur:
+                raise Refusal("rig", "the Confluent CLI lists no organization; log in with `confluent login`")
+            self.state["organization"] = cur[0][F["id"]]
+            self._save_state()
+        return self.state["organization"]
+
+    def _statement_url(self, name):
+        return (f"https://flink.{self.region}.{self.cloud}.confluent.cloud/sql/v1/organizations/"
+                f"{self._organization()}/environments/{self.environment}/statements/{name}")
+
+    def set_baseline(self, name, units):
+        """GUARD: the statement keeps at least `units` CFU. Without it the
+        autoscaler decides how much of the pool to use: measured 2026-10-04, it
+        stopped at 10 CFU of 20 and reported "OK" with 62 million records
+        waiting (findings §8, run 06). The CLI has no flag for it, so the Flink
+        REST API sets it, and the value is read back from the statement."""
+        status, reply = self.rest("PATCH", self._statement_url(name), self._rest_auth(),
+                                  [{"op": "add", "path": "/spec/scaling", "value": {"baseline_cfu": int(units)}}])
+        status, reply = self.rest("GET", self._statement_url(name), self._rest_auth())
+        got = ((reply.get("spec") or {}).get("scaling") or {}).get("baseline_cfu") if isinstance(reply, dict) else None
+        if status != 200 or got != int(units):
+            raise Refusal("rig", f"the baseline of {units} CFU did not apply to statement {name}: the statement "
+                                 f"reports {got!r} (HTTP {status})")
+        return got
+
+    def start_job(self, name, sql, database, units, properties=None):
+        """Start a case's job in the case's pool, with watermark alignment off
+        and the baseline at the pool's size, both read back. Returns the name
+        it runs under."""
+        props = dict(ALIGNMENT_OFF, **(properties or {}))
+        self.run_statement(name, sql, database, properties=props)
+        name = self.last_statement
+        _, _, whole = self.statement_status(name)
+        got = whole.get("properties") or {}
+        missing = {k: v for k, v in props.items() if str(got.get(k)) != str(v)}
+        if missing:
+            raise Refusal("rig", f"statement {name} does not report the settings it was given: "
+                                 + ", ".join(f"{k} should be {v!r}, reads {got.get(k)!r}" for k, v in missing.items()))
+        self.set_baseline(name, units)
+        return name
+
+    at_size_wait_s = 900      # a statement took 3-5 minutes to reach its pool's size (findings §8)
+
+    def wait_at_size(self, name, units, t_started):
+        """GUARD: the window opens only once the statement uses its whole pool,
+        the cloud's "every slot in use". Confluent's per-minute CFU reading
+        arrives about three minutes late, so this waits on it, and stops if
+        the statement never gets there."""
+        t0 = time.time()
+        last = []
+        while True:
+            last = self.statement_minutes(name, t_started - 60, time.time())["cfu"]
+            if last and last[-1][1] >= units:
+                return last[-1][0]
+            if time.time() - t0 > self.at_size_wait_s:
+                seen = ", ".join(f"{m[11:16]} {v:g}" for m, v in last[-5:]) or "no reading"
+                raise Refusal("rig", f"statement {name} never used its {units} CFU pool in "
+                                     f"{self.at_size_wait_s // 60} minutes (CFU by minute: {seen}). Check that "
+                                     f"its baseline reads {units}")
+            time.sleep(self.poll_s * 6)
+
+    def check_partitions(self, topic, cases):
+        """GUARD: the input divides evenly across every case's subtasks, read
+        back from Kafka, not from the configuration. The 24-partition topic
+        the first cloud probes used does not divide by 5, 10 or 20."""
+        _, per = self.log_end(topic)
+        bad = uneven_cases(len(per), cases)
+        if bad:
+            step = 1
+            for n in cases:
+                step = step * n // __import__("math").gcd(step, n)
+            raise Refusal("rig", f"topic {topic} has {len(per)} partitions, which do not divide evenly by "
+                                 f"{', '.join(map(str, bad))} subtasks (1 CFU runs one subtask). Use a multiple of "
+                                 f"{step}, for example {step}, {2 * step} or {3 * step}")
+        return len(per)
 
     # ------------------------------------------------------------ phase 3
     def _not_yet(self, what):

@@ -1672,8 +1672,14 @@ def cmd_selftest(live=True, topic=None):
                 pool = flag("--compute-pool")
                 return ok([v for v in self.statements.values() if pool in (None, v.get("pool"))])
             if a[:3] == ["flink", "statement", "delete"]:
-                for n in a[3:]:
-                    if not n.startswith("--"): self.statements.pop(n, None)
+                names = [n for i, n in enumerate(a[3:], 3)
+                         if not n.startswith("--") and not a[i - 1].startswith("--")]
+                for n in names:
+                    if n not in self.statements or n in getattr(self, "ghosts", set()):
+                        self.ghosts.discard(n) if hasattr(self, "ghosts") else None
+                        self.statements.pop(n, None)
+                        return 1, "", f'Error: Flink SQL statement "{n}" not found'
+                    self.statements.pop(n, None)
                 return ok()
             return 1, "", f"the fake does not know {' '.join(a)}"
 
@@ -1830,6 +1836,19 @@ def cmd_selftest(live=True, topic=None):
             p.down()
     expect("confluent: a table that never becomes visible stops, quoting Confluent",
            on_confluent(cc_late_table_gives_up, fail={"late"}), "Cannot find table 'orders'")
+
+    def cc_ghost_statement(fake, mk, said, raw):
+        # As on 2026-10-04: the list still names a statement already deleted.
+        p = mk(); p.up()
+        L.P.set_and_read_back(p, 20)
+        p.run_statement("fsk-t-job", "INSERT INTO t SELECT 1", "db")
+        p.run_statement("fsk-t-ddl", "CREATE TABLE t (a INT)", "db")
+        fake.ghosts = {"fsk-t-job"}
+        L.P.set_and_read_back(p, 5)               # deletes the last case's pool and its statements
+        p.down()
+        assert not fake.pools and not fake.statements, (fake.pools, fake.statements)
+    expect("confluent: a statement already deleted but still listed does not stop the teardown, and no "
+           "pool is left behind (must not fire)", on_confluent(cc_ghost_statement), "", should_fire=False)
 
     def cc_readings(fake, mk, said, raw):
         seen = {}

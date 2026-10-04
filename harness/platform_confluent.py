@@ -480,14 +480,29 @@ class ConfluentCloud(Platform):
             listed += [r[F["name"]] for r in rows if str(r.get(F["name"], "")).startswith(self.prefix)]
         return sorted(set(listed))
 
+    clear_tries = 6          # the self-test sets poll_s 0, so these cost nothing there
+
     def _clear_pool(self, pool=None):
-        names = self._statements(pool)
-        if names:
-            self.cli("flink", "statement", "delete", *names, "--cloud", self.cloud, "--region", self.region,
-                     "--force")
+        """Delete every statement the run owns in `pool` (every pool when None),
+        one at a time, then list until none is left. Measured 2026-10-04: the
+        list still named a statement deleted moments before; deleting the list
+        in one command then stopped on "not found" and left a 20 CFU pool
+        behind. A statement already gone counts as deleted."""
         left = self._statements(pool)
-        if left:
-            raise Refusal("rig", f"statements still in the pool after deleting them: {', '.join(left)}")
+        for _ in range(self.clear_tries):
+            for name in left:
+                try:
+                    self.cli("flink", "statement", "delete", name, "--cloud", self.cloud, "--region", self.region,
+                             "--force")
+                except Refusal as e:
+                    if "not found" not in e.msg.lower():
+                        raise
+            left = self._statements(pool)
+            if not left:
+                return
+            time.sleep(self.poll_s)
+        raise Refusal("rig", f"statements still in the pool after deleting them {self.clear_tries} times: "
+                             f"{', '.join(left)}")
 
     def clear_size(self):
         """No statement left in any pool the run created, confirmed by listing."""

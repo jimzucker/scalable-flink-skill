@@ -1589,7 +1589,26 @@ def cmd_selftest(live=True, topic=None):
             self.clusters, self.pools, self.keys, self.calls = {}, {}, {}, []
             self.envs = {"env-test": "test-env", "env-dflt": "default"}
             self.statements = {}
+            self.written = {}          # topic -> rows written by INSERT ... VALUES
+            self.partitions = {}       # topic -> partition count, for the partition guard
             self.ignore_update, self.fail, self.n = ignore_update, set(fail), 0
+
+        def docker(self, args):
+            """The Kafka tools, as kafka-get-offsets.sh answers."""
+            t = args[args.index("--topic") + 1]
+            parts = self.partitions.get(t, 1)
+            rows = [f"{t}:{i}:{self.written.get(t, 0) if i == 0 else 0}" for i in range(parts)]
+            return 0, "\n".join(rows) + "\n", ""
+
+        def rest(self, method, url, auth, body=None):
+            """The Flink REST API for one statement: GET and the baseline PATCH."""
+            name = url.rsplit("/", 1)[1]
+            st = self.statements.get(name)
+            if st is None:
+                return 404, {"errors": [{"detail": f"statement {name} not found"}]}
+            if method == "PATCH" and "baseline" not in self.fail:
+                st["scaling"] = body[0]["value"]
+            return 200, {"name": name, "spec": {"scaling": st.get("scaling"), "properties": st.get("properties")}}
 
         def __call__(self, args):
             a = [x for i, x in enumerate(args) if not (x in ("--environment", "-o") or
@@ -1599,6 +1618,8 @@ def cmd_selftest(live=True, topic=None):
             def flag(name, default=None):
                 return a[a.index(name) + 1] if name in a else default
             self.n += 1
+            if a[:2] == ["organization", "list"]:
+                return ok([{"id": "org-test", "name": "Test", "is_current": True}])
             if a[:2] == ["environment", "list"]:
                 return ok([{"id": i, "name": n} for i, n in self.envs.items()])
             if a[:2] == ["environment", "create"]:
@@ -1648,10 +1669,14 @@ def cmd_selftest(live=True, topic=None):
             if a[:3] == ["flink", "statement", "create"]:
                 if a[3] in self.statements:
                     return 1, "", f'Error: Statement with name "{a[3]}" already exists.'
+                props = dict(a[i + 1].split("=", 1) for i, x in enumerate(a) if x == "--property")
                 self.statements[a[3]] = {"name": a[3], "status": "PENDING", "sql": flag("--sql"),
-                                         "pool": flag("--compute-pool")}
+                                         "pool": flag("--compute-pool"),
+                                         "properties": {} if "props" in self.fail else props}
                 return ok()
             if a[:3] == ["flink", "statement", "describe"]:
+                if a[3] not in self.statements:      # as the real CLI answers (2026-10-04)
+                    return 1, "", f"Error: Statement resource={a[3]} does not exist"
                 st = self.statements[a[3]]
                 if st["status"] == "PENDING":
                     self.ran = getattr(self, "ran", 0) + 1
@@ -1667,6 +1692,10 @@ def cmd_selftest(live=True, topic=None):
                             and getattr(self, "late_left", 0) > 0):
                         self.late_left -= 1          # as seen 2026-10-03, right after CREATE TABLE
                         st["status"], st["status_detail"] = "FAILED", "Cannot find table 'orders' in 'db'."
+                    m = re.match(r"INSERT INTO (\w+) VALUES", st["sql"] or "")
+                    if m and st["status"] == "COMPLETED" or (m and st["status"] == "RUNNING"):
+                        st["status"] = "COMPLETED"
+                        self.written[m.group(1)] = self.written.get(m.group(1), 0) + 1
                 return ok(st)
             if a[:3] == ["flink", "statement", "list"]:
                 pool = flag("--compute-pool")
@@ -1688,7 +1717,8 @@ def cmd_selftest(live=True, topic=None):
             with tempfile.TemporaryDirectory() as tdir:
                 fake = FakeConfluent(**fake_kw); said = []
                 raw = {"environment": "env-test", "prefix": "fsk-t", "stateDir": tdir,
-                       "credentials": os.path.join(tdir, "creds", "flink-skill.env")}
+                       "credentials": os.path.join(tdir, "creds", "flink-skill.env"),
+                       "_docker": fake.docker, "_rest": fake.rest}
                 mk = lambda extra=None: PC.ConfluentCloud(dict(raw, **(extra or {})), runner=fake, log=said.append)
                 PC.ConfluentCloud.poll_s = 0
                 PC.ConfluentCloud.ready_wait_s = 0
@@ -1783,7 +1813,7 @@ def cmd_selftest(live=True, topic=None):
     def cc_cold_stack(fake, mk, said, raw):
         p = mk(); p.up()
         assert any("ran its first statement" in l for l in said), said
-        assert sum(1 for n in fake.statements if "ready" in n) == 3, list(fake.statements)
+        assert sum(1 for n in fake.statements if "ready" in n and "write" not in n) == 3, list(fake.statements)
         p.down()
     expect("confluent: up waits until a new stack runs a statement, as measured (must not fire)",
            on_confluent(cc_cold_stack, cold=2), "", should_fire=False)
@@ -1853,6 +1883,8 @@ def cmd_selftest(live=True, topic=None):
     def cc_readings(fake, mk, said, raw):
         seen = {}
         def docker(args):
+            if args[args.index("--topic") + 1] != "orders":
+                return fake.docker(args)         # the readiness row
             seen["args"] = list(args)
             mount = args[args.index("-v") + 1].split(":")[0]
             client = os.path.join(mount, "client.properties")
@@ -1888,6 +1920,103 @@ def cmd_selftest(live=True, topic=None):
             p.down()
     expect("confluent: a metrics API that will not answer stops with its own reason",
            on_confluent(cc_metrics_refused), "answered HTTP 401")
+
+    def cc_ready_round_trip(fake, mk, said, raw):
+        p = mk(); p.up()
+        assert any("read back from Kafka" in l for l in said), said
+        assert fake.written.get("fsk_t_ready0") == 1, fake.written
+        p.down()
+    expect("confluent: up proves a new table can be written and read back before the stack counts as ready "
+           "(must not fire)", on_confluent(cc_ready_round_trip), "", should_fire=False)
+
+    def cc_ready_table_invisible(fake, mk, said, raw):
+        # As measured 2026-10-04: a stack ready in 5-7 s whose new tables never became visible.
+        fake.late_left = 99
+        p = mk(); p.retry_wait_s = 0
+        try:
+            p.up()
+        finally:
+            assert not fake.clusters and not fake.pools and not fake.keys, \
+                f"an unusable stack was left up: {fake.clusters} {fake.pools} {fake.keys}"
+    expect("confluent: a stack that can create a table but not use it is torn down before anything is filled",
+           on_confluent(cc_ready_table_invisible, fail={"late"}), "could create a table but not use it")
+
+    def cc_start_job(fake, mk, said, raw):
+        p = mk(); p.up()
+        L.P.set_and_read_back(p, 20)
+        nm = p.start_job("fsk-t-job", "INSERT INTO out SELECT * FROM orders", "db", 20)
+        st = fake.statements[nm]
+        assert st["properties"] == PC.ALIGNMENT_OFF, st["properties"]
+        assert st["scaling"] == {"baseline_cfu": 20}, st.get("scaling")
+        assert st["pool"] == p.state["casePool"], "the job ran outside its case's pool"
+        p.down()
+    expect("confluent: a case's job runs with watermark alignment off and its baseline at the pool's size, "
+           "both read back (must not fire)", on_confluent(cc_start_job), "", should_fire=False)
+
+    def cc_job_without(fake, mk, said, raw):
+        p = mk(); p.up()
+        L.P.set_and_read_back(p, 20)
+        try:
+            p.start_job("fsk-t-job", "INSERT INTO out SELECT * FROM orders", "db", 20)
+        finally:
+            p.down()
+    expect("confluent: a job that does not report alignment off stops before it is measured",
+           on_confluent(cc_job_without, fail={"props"}),
+           "sql.tables.scan.watermark-alignment.max-allowed-drift should be '1 d'")
+    expect("confluent: a baseline the statement does not report stops before the case is measured",
+           on_confluent(cc_job_without, fail={"baseline"}), "the baseline of 20 CFU did not apply")
+
+    def cc_wait_at_size(fake, mk, said, raw):
+        calls = {"n": 0}
+        def http(url, auth, body):
+            metric = body["aggregations"][0]["metric"]
+            if metric.endswith("current_cfus"):
+                calls["n"] += 1
+                rows = [{"timestamp": f"2026-10-04T00:0{i}:00Z", "value": v}
+                        for i, v in enumerate([1, 1, 9, 20][:min(4, calls["n"] + 1)])]
+                return 200, {"data": rows}
+            return 200, {"data": []}
+        p = mk({"_http": http}); p.up()
+        assert p.wait_at_size("fsk-t-job", 20, 0) == "2026-10-04T00:03:00Z"
+        assert calls["n"] == 3, calls
+        p.down()
+    expect("confluent: the window waits until the statement uses its whole pool (must not fire)",
+           on_confluent(cc_wait_at_size), "", should_fire=False)
+
+    def cc_never_at_size(fake, mk, said, raw):
+        def http(url, auth, body):
+            m = body["aggregations"][0]["metric"]
+            return 200, {"data": [{"timestamp": "2026-10-04T00:09:00Z", "value": 10}] if m.endswith("current_cfus") else []}
+        p = mk({"_http": http}); p.up(); p.at_size_wait_s = 0
+        try:
+            p.wait_at_size("fsk-t-job", 20, 0)
+        finally:
+            p.down()
+    expect("confluent: a statement that never uses its whole pool stops the case, with what it did use",
+           on_confluent(cc_never_at_size), "never used its 20 CFU pool")
+
+    def cc_partitions(fake, mk, said, raw):
+        p = mk(); p.up()
+        fake.partitions["orders40"] = 40
+        assert p.check_partitions("orders40", [5, 10, 20]) == 40
+        fake.partitions["orders24"] = 24
+        try:
+            p.check_partitions("orders24", [5, 10, 20])
+        finally:
+            p.down()
+    expect("confluent: an input topic whose partitions do not divide by every case stops, naming sizes that do",
+           on_confluent(cc_partitions), "do not divide evenly by 5, 10, 20 subtasks (1 CFU runs one subtask). "
+           "Use a multiple of 20, for example 20, 40 or 60")
+    expect("confluent: partitions that divide by every case are accepted (must not fire)",
+           lambda: (PC.uneven_cases(40, [5, 10, 20]) == [] or (_ for _ in ()).throw(Exception("40 rejected"))),
+           "", should_fire=False)
+
+    def cc_gone(fake, mk, said, raw):
+        p = mk(); p.up()
+        assert p.statement_status("fsk-t-never-made")[0] == "GONE"
+        p.down()
+    expect("confluent: reading the status of a statement that no longer exists says it is gone, and does not "
+           "stop the run (must not fire)", on_confluent(cc_gone), "", should_fire=False)
 
     def cc_estimate():
         est = PC.estimate_usd([5, 10, 20], 3)

@@ -225,10 +225,22 @@ A reader can then see what was assumed rather than agreed.
    **A managed service — Confluent Cloud, Amazon MSK with Managed Service for
    Apache Flink, Google Cloud — cannot be measured yet.** `platform` in
    `pipeline.json` names one. Confluent Cloud can already create its own stack
-   under a budget and tear it down, proving nothing is left; the job and the
-   readings a case is judged on are not built yet, and the run stops there and
-   says so. The other two stop before anything is created. If the user asks
-   for one, say so and build for the laptop with the same pipeline.
+   under a budget, prove it usable, start a case's job and tear everything
+   down, proving nothing is left; the window and the report a case is judged
+   on are not built yet, and the run stops there and says so. The other two
+   stop before anything is created. If the user asks for one, say so and build
+   for the laptop with the same pipeline.
+
+   **A managed service does not run the job you gave it until you read back
+   what it ran.** Three Confluent Cloud defaults made a 20 CFU case measure
+   something other than its pool: the autoscaler used 10 CFU of 20 and said
+   "OK"; watermark alignment, on by default, paused most input partitions;
+   and 24 partitions cannot divide over 20 subtasks (one CFU ran one
+   subtask). The harness's `submit` on Confluent Cloud turns alignment off,
+   sets the baseline to the pool's size, checks the input's partitions against
+   every case, reads each back and waits for the whole pool; there is no other
+   way to start a job there. On any new platform, list the defaults the
+   laptop's job does not have and read each one back per case.
 
 ## 1a. Then the plan, and stop
 

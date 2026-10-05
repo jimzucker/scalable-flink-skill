@@ -213,7 +213,12 @@ class ConfluentCloud(Platform):
             raise Refusal("rig", f"platform.prefix {self.prefix!r} must be lower-case letters, digits "
                                  f"and dashes: every resource the run creates carries it")
         self.credentials = os.path.expanduser(raw.get("credentials", "~/.confluent/flink-skill.env"))
-        self.budget = float(raw.get("budgetUsd", 150.0))
+        # The budget is for the whole piece of work, not one run: what Confluent
+        # has charged since `budgetSince` (default: the first of this month)
+        # counts against it. Set by the user: $150 on 2026-10-03, $250 on
+        # 2026-10-05, after the first $137.77 had been charged.
+        self.budget = float(raw.get("budgetUsd", 250.0))
+        self.budget_since = raw.get("budgetSince") or time.strftime("%Y-%m-01")
         # A Basic cluster scales itself up to 50 eCKUs by default ("max_ecku": 50
         # in its own description), each after the first billed by the hour. The
         # run caps it, so a busy suite cannot quietly cost $7 an hour.
@@ -265,7 +270,7 @@ class ConfluentCloud(Platform):
     # the teardown that found it. `organization list` answered the same on
     # 2026-10-04, when a confirming case asked it for the baseline's REST URL.
     NO_ENVIRONMENT = (("api-key", "delete"), ("environment", "list"), ("environment", "create"),
-                      ("environment", "delete"), ("organization", "list"))
+                      ("environment", "delete"), ("organization", "list"), ("billing", "cost"))
 
     def cli(self, *args, quiet=False):
         """Run one CLI command with the environment set where the command takes
@@ -322,11 +327,31 @@ class ConfluentCloud(Platform):
         return self.environment
 
     # ------------------------------------------------------------ the contract
+    def spent_usd(self):
+        """What Confluent has charged since budget_since, before any promo
+        credit: a credit pays the bill, it does not make the work cheaper.
+        Confluent's cost list lags by up to a day, so this is a floor."""
+        rows = self.cli_json("billing", "cost", "list", "--start-date", self.budget_since,
+                             "--end-date", time.strftime("%Y-%m-%d", time.gmtime(time.time() + 86400))) or []
+        total = 0.0
+        for r in rows:
+            if str(r.get("line_type", "")).upper() == "PROMO_CREDIT":
+                continue
+            total += float(str(r.get("amount", 0)).replace("$", "").replace(",", "") or 0)
+        return round(total, 2)
+
     def up(self):
-        # Budget first, before anything is created or paid for.
-        if self.estimate is not None and float(self.estimate) > self.budget:
-            raise Refusal("rig", f"this run is estimated at ${float(self.estimate):.2f}, over the "
-                                 f"${self.budget:.2f} budget. Nothing was created.")
+        # Budget first, before anything is created or paid for: what has
+        # already been charged plus this run's estimate.
+        if self.estimate is not None:
+            spent = self.spent_usd()
+            if spent + float(self.estimate) > self.budget:
+                raise Refusal("rig", f"this run is estimated at ${float(self.estimate):.2f}, and "
+                                     f"${spent:.2f} has been charged since {self.budget_since}: "
+                                     f"${spent + float(self.estimate):.2f} would be over the ${self.budget:.2f} "
+                                     f"budget. Nothing was created.")
+            self.log(f"  confluent-cloud: budget ${self.budget:.2f}; charged since {self.budget_since} "
+                     f"${spent:.2f}; this run estimated at ${float(self.estimate):.2f}")
         self._environment(create=True)
         if not self.state.get("cluster"):
             c = self.cli_json("kafka", "cluster", "create", f"{self.prefix}-kafka", "--cloud", self.cloud,

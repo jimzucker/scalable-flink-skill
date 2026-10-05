@@ -1603,8 +1603,16 @@ def cmd_selftest(live=True, topic=None):
             return 0, "\n".join(rows) + "\n", ""
 
         def rest(self, method, url, auth, body=None):
-            """The Flink REST API for one statement: GET and the baseline PATCH."""
+            """The Flink REST API for one statement: GET, the baseline PATCH, and its results."""
+            if url.endswith("/results"):
+                name = url.rsplit("/", 2)[1]
+                rows = getattr(self, "results", {}).get(name, [])
+                return 200, {"results": {"data": [{"op": 0, "row": r} for r in rows]}, "metadata": {"next": None}}
             name = url.rsplit("/", 1)[1]
+            if name in getattr(self, "schemas", {}):
+                return 200, {"name": name, "status": {"phase": "COMPLETED",
+                                                      "traits": {"schema": {"columns": [{"name": c} for c in
+                                                                                        self.schemas[name]]}}}}
             st = self.statements.get(name)
             if st is None:
                 return 404, {"errors": [{"detail": f"statement {name} not found"}]}
@@ -2067,7 +2075,7 @@ def cmd_selftest(live=True, topic=None):
         nm = p.submit(20, "g1")
         st = fake.statements[nm]
         assert st["properties"] == PC.ALIGNMENT_OFF and st["scaling"] == {"baseline_cfu": 20}, st
-        assert p.partitions_checked == 40, p.partitions_checked
+        assert p.partitions_checked == "orders", p.partitions_checked     # the topic it checked
         p.down()
     expect("confluent: submit starts every job with alignment off, the baseline at the pool's size and the "
            "partitions checked, and waits for the whole pool (must not fire)", on_confluent(cc_submit), "",
@@ -2233,6 +2241,67 @@ def cmd_selftest(live=True, topic=None):
            ddl_both, "", should_fire=False)
     expect("tables: a platform with no table definition yet says so",
            lambda: L.P.table_ddl("aws", "orders", [("a", "INT")], 4), "no table definition for platform 'aws'")
+
+    def rows_same():
+        m, e = L.rows_differ([{"account": 1, "n": 10}, {"account": 2, "n": "5"}],
+                             [{"n": 5, "account": "2"}, {"account": "1", "n": 10.0}])
+        if m or e:
+            raise Exception(f"equal rows reported different: {m} {e}")
+    expect("cloud completeness: the same rows in any order and number format match (must not fire)", rows_same,
+           "", should_fire=False)
+    def rows_lost():
+        m, e = L.rows_differ([{"account": 1, "n": 10}, {"account": 2, "n": 5}], [{"account": 1, "n": 10}])
+        if m:
+            raise Refusal("case", f"rows missing from the outputs: {m}")
+    expect("cloud completeness: a row the outputs do not have is named", rows_lost, "rows missing from the outputs")
+
+    fill_raw = {"tables": {"orders": {"columns": [["order_id", "STRING"], ["account", "INT"]]}},
+                "fill": {"jobs": 3, "perJob": ["CREATE TABLE base_{i} (a INT)",
+                                               "INSERT INTO {topic} SELECT * FROM base_{i}"]}}
+
+    def cc_fill(fake, mk, said, raw):
+        calls = {"n": 0}
+        def docker(args):
+            t = args[args.index("--topic") + 1]
+            if t == "orders":
+                calls["n"] += 1
+                return 0, f"orders:0:{400 * calls['n']}\n", ""
+            return fake.docker(args)
+        p = mk(dict(fill_raw, _docker=docker)); p.up(); p.fill_poll_s = 0
+        p.create_table("orders", partitions=40)
+        ddl = [v["sql"] for v in fake.statements.values() if v["sql"].startswith("CREATE TABLE orders")]
+        assert ddl == ["CREATE TABLE orders (order_id STRING, account INT) DISTRIBUTED INTO 40 BUCKETS"], ddl
+        assert p.fill_topic("orders", 1000) == 1200
+        inserts = [n for n, v in fake.statements.items() if v["sql"].startswith("INSERT INTO orders")]
+        assert inserts == [], f"fill jobs left running: {inserts}"
+        assert sum(1 for v in fake.statements.values() if v["sql"].startswith("CREATE TABLE base_")) == 3
+        p.down()
+    expect("cloud fill: generator jobs side by side until the topic holds the count, then deleted (must not fire)",
+           on_confluent(cc_fill), "", should_fire=False)
+
+    def cc_fill_stalls(fake, mk, said, raw):
+        def docker(args):
+            t = args[args.index("--topic") + 1]
+            return (0, "orders:0:400\n", "") if t == "orders" else fake.docker(args)
+        p = mk(dict(fill_raw, _docker=docker)); p.up(); p.fill_poll_s = 0; p.fill_stall_s = 0
+        try:
+            p.fill_topic("orders", 1000)
+        finally:
+            assert not [n for n, v in fake.statements.items() if v["sql"].startswith("INSERT INTO orders")], \
+                "a stalled fill left its jobs running"
+            p.down()
+    expect("cloud fill: a fill that stops writing stops, says how far it got, and deletes its jobs",
+           on_confluent(cc_fill_stalls), "the fill stopped writing: orders held 400 of 1,000 records")
+
+    def cc_rows(fake, mk, said, raw):
+        p = mk(); p.up()
+        fake.schemas = {"fsk-t-count": ["account", "n"]}
+        fake.results = {"fsk-t-count": [[1, 10], [2, 5]]}
+        rows = p.statement_rows("fsk-t-count", "SELECT account, COUNT(*) AS n FROM orders GROUP BY account")
+        assert rows == [{"account": 1, "n": 10}, {"account": 2, "n": 5}], rows
+        p.down()
+    expect("cloud rows: a bounded statement's rows come back by column name (must not fire)", on_confluent(cc_rows),
+           "", should_fire=False)
 
     def cc_gone(fake, mk, said, raw):
         p = mk(); p.up()
@@ -3622,6 +3691,8 @@ def cmd_tinyproof():
     """Two cases on a small backlog, a short checkpoint interval so a window fits,
     ratio bounded, then every guard broken on purpose."""
     c = cfg()
+    if L.on_confluent():
+        return cmd_tinyproof_cloud()
     topic = f"{c.topic_in}-tiny"
     man = L.fill(topic, c.tiny, c.seed + 1, "manifest-tiny.json")
     L._CFG.topic_in = topic  # the case measures the tiny topic
@@ -3880,8 +3951,137 @@ def cmd_tinyproof():
 
 # ------------------------------------------------------------------------ fill
 
+# ---------------------------------------------------------------- Confluent Cloud
+# The same three steps as on the laptop -- fill, completeness, tiny proof --
+# with the parts the service owns done its way: tables written for it, a fill
+# of generator jobs side by side, a backlog counted as a reader sees it, and
+# no worker to kill (the service restarts its own).
+
+def cloud_manifest(topic, name):
+    """Count a topic the way a reader sees it: platform.manifestSql, bounded,
+    with {topic}; its rows each carry `n`, the records in that row's group.
+    The topic's log end counted 7-8% more than any reader got (findings §8)."""
+    c = cfg()
+    p = c.plat
+    if not p.manifest_sql:
+        raise Refusal("rig", "platform.manifestSql is not set: a bounded SELECT over {topic} whose rows carry n, "
+                             "the records in each group, and the totals completeness compares")
+    rows = p.statement_rows(f"{p.prefix}-count-{name}", p.manifest_sql.replace("{topic}", topic))
+    total = sum(int(float(r.get("n") or 0)) for r in rows)
+    end, _ = p.log_end(topic)
+    man = {c.count_field: total, "rows": rows, "topic": topic, "logEnd": end,
+           "countedAs": "records a reader gets (a bounded SELECT), not the topic's log end"}
+    save_json(f"{name}.json", man)
+    log(f"  {topic}: {total:,} records a reader gets; the log end says {end:,}")
+    return man
+
+
+def cmd_fill_cloud():
+    c = cfg()
+    p = c.plat
+    p.create_table(c.topic_in, partitions=c.partitions)
+    for t in c.topics_out:
+        p.create_table(t, partitions=c.partitions)
+    p.fill_topic(c.topic_in, c.backlog)
+    man = cloud_manifest(c.topic_in, "manifest")
+    print(f"backlog {man[c.count_field]:,} readable records on {c.topic_in}; manifest results/manifest.json")
+    return 0
+
+
+def cmd_tinyproof_cloud():
+    """The two smallest cases on a small backlog through run_case_cloud, the
+    step held to the laptop's band, then the guard self-test."""
+    c = cfg()
+    p = c.plat
+    topic = f"{c.topic_in}_tiny"
+    p.create_table(c.topic_in, as_name=topic, partitions=c.partitions)
+    p.fill_topic(topic, c.tiny)
+    lo, hi = sorted(c.cases)[:2]
+    out = {"build": build_hash(), "topic": topic, "cases": [lo, hi], "runs": [],
+           "at": time.strftime("%Y-%m-%d %H:%M:%S")}
+    p.input_now = topic
+    try:
+        for units in (lo, hi):
+            try:
+                rec, _ = L.run_case_cloud(units, "tiny", "tiny", None, units == lo, {})
+            except CaseRefused as e:
+                rec = e.rec
+            out["runs"].append(rec)
+    finally:
+        p.input_now = None
+    a, b = out["runs"]
+    ok = a.get("status") == "OK" and b.get("status") == "OK"
+    ratio = (b["recordsPerSec"] / a["recordsPerSec"]) if ok and a.get("recordsPerSec") else None
+    ideal = hi / lo
+    lo_band, hi_band = T["tinyRatioLo"] * ideal / 2, T["tinyRatioHi"] * ideal / 2
+    out["ratio"], out["band"] = ratio, [lo_band, hi_band]
+    out["selftest"] = "PASS" if cmd_selftest(live=False) == 0 else "FAIL"
+    out["result"] = "PASS" if (ratio and lo_band <= ratio <= hi_band and out["selftest"] == "PASS") else "FAIL"
+    save_json("tinyproof.json", out)
+    why = ("" if out["result"] == "PASS" else
+           f": cases {a.get('status')} and {b.get('status')}, step {ratio and f'{ratio:.2f}x'} against "
+           f"{lo_band:.2f}-{hi_band:.2f}x, self-test {out['selftest']}")
+    log(f"tiny proof on Confluent Cloud: {out['result']}{why}")
+    return 0 if out["result"] == "PASS" else 1
+
+
+def cmd_completeness_cloud():
+    """A small backlog drained to the last record by the job at the baseline
+    size, then platform.verifySql over the outputs compared with the manifest
+    rows exactly. Killing a worker mid-drain is not possible here: the service
+    restarts its own workers, and the record says so."""
+    c = cfg()
+    p = c.plat
+    if not p.verify_sql:
+        raise Refusal("rig", "platform.verifySql is not set: a bounded SELECT over the outputs whose rows have the "
+                             "same columns as manifestSql's, so the two can be compared row for row")
+    topic = f"{c.topic_in}_small"
+    p.create_table(c.topic_in, as_name=topic, partitions=c.partitions)
+    for t in c.topics_out:
+        p.create_table(t, partitions=c.partitions)
+    p.fill_topic(topic, c.small)
+    man = cloud_manifest(topic, "manifest-small")
+    units = c.baseline
+    out = {"build": build_hash(), "records": man[c.count_field], "cores": units, "unit": p.unit,
+           "killArm": f"not checked on {p.kind}: the service restarts its own workers",
+           "at": time.strftime("%Y-%m-%d %H:%M:%S")}
+    L.P.set_and_read_back(p, units)
+    p.input_now = topic
+    name = None
+    try:
+        t0 = time.time()
+        name = p.submit(units, f"{c.project}-complete")
+        last, still = None, 0
+        while True:
+            n = sum(p.log_end(t)[0] for t in c.topics_out)
+            still = still + 1 if n == last else 0
+            last = n
+            waiting = p.statement_minutes(name, t0 - 60, time.time())["pending"]
+            if still >= 2 and waiting and waiting[-1][1] == 0:
+                break
+            if time.time() - t0 > 3600:
+                raise Refusal("rig", f"the small backlog had not drained after an hour ({n:,} records out)")
+            time.sleep(60)
+        got = p.statement_rows(f"{p.prefix}-verify", p.verify_sql)
+    finally:
+        p.input_now = None
+        if name:
+            p.cli("flink", "statement", "delete", name, "--cloud", p.cloud, "--region", p.region, "--force")
+    expect_rows = [{k: v for k, v in r.items()} for r in man["rows"]]
+    missing, extra = L.rows_differ(expect_rows, got)
+    out["rowsExpected"], out["rowsGot"] = len(expect_rows), len(got)
+    out["missing"], out["extra"] = missing, extra
+    out["result"] = "PASS" if not missing and not extra else "FAIL"
+    save_json("completeness.json", out)
+    log(f"completeness on Confluent Cloud: {out['result']} ({len(got)} rows against {len(expect_rows)} expected"
+        + (f"; first missing {missing[:1]}, first extra {extra[:1]}" if out["result"] != "PASS" else "") + ")")
+    return 0 if out["result"] == "PASS" else 1
+
+
 def cmd_fill():
     c = cfg()
+    if L.on_confluent():
+        return cmd_fill_cloud()
     man = L.fill(c.topic_in, c.backlog, c.seed, "manifest.json")
     print(f"backlog {c.backlog:,} records on {c.topic_in}; manifest results/manifest.json")
     return 0
@@ -3893,6 +4093,8 @@ def cmd_completeness():
     """Process a small test data set twice — once cleanly, once killed and restarted partway —
     and compare the sinks to the generator manifest with no tolerances."""
     c = cfg()
+    if L.on_confluent():
+        return cmd_completeness_cloud()
     topic = f"{c.topic_in}-small"
     cores = c.baseline
     man = L.fill(topic, c.small, c.seed + 2, "manifest-small.json")

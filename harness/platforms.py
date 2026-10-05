@@ -126,6 +126,14 @@ LAPTOP_ONLY = {
     "the Docker VM against the machine's memory (reported)": "there is no Docker VM in the stack",
     "pipeline, broker and job manager against the VM (reported)": "there is no Docker VM in the stack",
     "the VM trim command is known": "there is no Docker VM in the stack",
+    # Measured 2026-10-06: a Confluent Cloud config failed these five as if it
+    # were the laptop.
+    "retention on every topic written but never drained": "the service owns the broker's disk; storage is on the bill",
+    "the generator is deterministic": ("the service's generator has no seed, so the backlog is counted as a "
+                                       "reader gets it (a bounded SELECT), not regenerated"),
+    "slots >= parallelism x jobs": "the service runs one subtask per CFU, read back as CFU in use on every case",
+    "keys divide evenly across subtasks": "the service does not report its key-group layout",
+    "the job jar exists and hashes": "the job is SQL; its build hash covers the SQL and its tables",
 }
 
 

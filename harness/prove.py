@@ -1590,6 +1590,7 @@ def cmd_selftest(live=True, topic=None):
             self.envs = {"env-test": "test-env", "env-dflt": "default"}
             self.statements = {}
             self.written = {}          # topic -> rows written by INSERT ... VALUES
+            self.spent = 0.0           # what the billing cost list reports, before the promo credit
             self.partitions = {}       # topic -> partition count, for the partition guard
             self.ignore_update, self.fail, self.n = ignore_update, set(fail), 0
 
@@ -1618,6 +1619,11 @@ def cmd_selftest(live=True, topic=None):
             def flag(name, default=None):
                 return a[a.index(name) + 1] if name in a else default
             self.n += 1
+            if a[:3] == ["billing", "cost", "list"]:
+                if "--environment" in args:
+                    return 1, "", "Error: unknown flag: --environment"
+                return ok([{"product": "FLINK", "line_type": "FLINK_NUM_CFUS", "amount": f"${self.spent:.2f}"},
+                           {"product": None, "line_type": "PROMO_CREDIT", "amount": f"$-{self.spent:.2f}"}])
             if a[:2] == ["organization", "list"]:
                 if "--environment" in args:         # as the real CLI answers (2026-10-04)
                     return 1, "", "Error: unknown flag: --environment"
@@ -1757,11 +1763,28 @@ def cmd_selftest(live=True, topic=None):
 
     def cc_over_budget(fake, mk, said, raw):
         try:
-            mk({"estimateUsd": 200}).up()
+            mk({"estimateUsd": 300}).up()
         finally:
-            assert fake.calls == [], f"something was created over budget: {fake.calls}"
+            assert fake.calls == ["billing cost list"], f"something was created over budget: {fake.calls}"
     expect("confluent: a run estimated over budget stops before anything is created", on_confluent(cc_over_budget),
-           "over the $150.00 budget")
+           "would be over the $250.00 budget")
+
+    def cc_spent_counts(fake, mk, said, raw):
+        fake.spent = 137.77          # as billed by 2026-10-05, before the promo credit
+        try:
+            mk({"estimateUsd": 120}).up()
+        finally:
+            assert fake.calls == ["billing cost list"], f"something was created over budget: {fake.calls}"
+    expect("confluent: what has already been charged counts against the budget, not only this run's estimate",
+           on_confluent(cc_spent_counts), "$137.77 has been charged since")
+
+    def cc_within_budget(fake, mk, said, raw):
+        fake.spent = 137.77
+        p = mk({"estimateUsd": 12}); p.up()
+        assert any("charged since" in l and "$137.77" in l for l in said), said
+        p.down()
+    expect("confluent: a run that fits in what is left of the budget goes ahead, saying what is left "
+           "(must not fire)", on_confluent(cc_within_budget), "", should_fire=False)
 
     def cc_survivor(fake, mk, said, raw):
         p = mk(); p.up(); p.down()

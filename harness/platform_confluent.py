@@ -255,9 +255,10 @@ class ConfluentCloud(Platform):
 
     # Commands that take no --environment. Measured 2026-10-03: `api-key delete`
     # answered "unknown flag: --environment", and the run's Flink key survived
-    # the teardown that found it.
+    # the teardown that found it. `organization list` answered the same on
+    # 2026-10-04, when a confirming case asked it for the baseline's REST URL.
     NO_ENVIRONMENT = (("api-key", "delete"), ("environment", "list"), ("environment", "create"),
-                      ("environment", "delete"))
+                      ("environment", "delete"), ("organization", "list"))
 
     def cli(self, *args, quiet=False):
         """Run one CLI command with the environment set where the command takes

@@ -1619,6 +1619,8 @@ def cmd_selftest(live=True, topic=None):
                 return a[a.index(name) + 1] if name in a else default
             self.n += 1
             if a[:2] == ["organization", "list"]:
+                if "--environment" in args:         # as the real CLI answers (2026-10-04)
+                    return 1, "", "Error: unknown flag: --environment"
                 return ok([{"id": "org-test", "name": "Test", "is_current": True}])
             if a[:2] == ["environment", "list"]:
                 return ok([{"id": i, "name": n} for i, n in self.envs.items()])

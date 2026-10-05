@@ -764,7 +764,18 @@ class ConfluentCloud(Platform):
         t0 = time.time()
         last = []
         while True:
-            last = self.statement_minutes(name, t_started - 60, time.time())["cfu"]
+            try:
+                last = self.statement_minutes(name, t_started - 60, time.time())["cfu"]
+            except Refusal as e:
+                # Measured 2026-10-05: about a minute after a new pool was
+                # created the metrics API answered 403 "Query must filter by at
+                # least one of your authorized resources" for it, and the case
+                # stopped. A new pool is not yet one the key may ask about;
+                # wait for it like any other reading not yet in.
+                if "authorized resources" not in e.msg:
+                    raise
+                self.log(f"  confluent-cloud: the metrics API does not cover pool {self.case_pool()} yet; waiting")
+                last = []
             if last and last[-1][1] >= units:
                 return last[-1][0]
             if time.time() - t0 > self.at_size_wait_s:

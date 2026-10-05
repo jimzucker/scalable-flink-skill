@@ -1985,6 +1985,22 @@ def cmd_selftest(live=True, topic=None):
     expect("confluent: the window waits until the statement uses its whole pool (must not fire)",
            on_confluent(cc_wait_at_size), "", should_fire=False)
 
+    def cc_new_pool_not_authorized(fake, mk, said, raw):
+        calls = {"n": 0}
+        def http(url, auth, body):
+            calls["n"] += 1
+            if calls["n"] <= 3:          # as answered for a pool a minute old (2026-10-05)
+                return 403, {"errors": [{"status": "403", "detail": "Query must filter by at least one of your "
+                                                                     "authorized resources"}]}
+            m = body["aggregations"][0]["metric"]
+            return 200, {"data": [{"timestamp": "2026-10-05T04:10:00Z", "value": 20}] if m.endswith("current_cfus") else []}
+        p = mk({"_http": http}); p.up()
+        assert p.wait_at_size("fsk-t-job", 20, 0) == "2026-10-05T04:10:00Z"
+        assert any("does not cover pool" in l for l in said), said
+        p.down()
+    expect("confluent: a new pool the metrics API does not cover yet is waited for, not a stop (must not fire)",
+           on_confluent(cc_new_pool_not_authorized), "", should_fire=False)
+
     def cc_never_at_size(fake, mk, said, raw):
         def http(url, auth, body):
             m = body["aggregations"][0]["metric"]

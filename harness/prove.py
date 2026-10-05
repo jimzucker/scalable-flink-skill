@@ -31,6 +31,7 @@ Exit code 0 means the command's own assertion held; anything else, read the log.
 import inspect
 import json
 import os
+import calendar
 import re
 import shutil
 import sys
@@ -2088,6 +2089,89 @@ def cmd_selftest(live=True, topic=None):
            on_confluent(lambda fake, mk, said, raw: (lambda p: (p.up(), p.submit(20, "g1")))(mk())),
            "platform.jobSql is not set")
 
+    class FakeClock:
+        """time for platform_confluent, moved only by sleep: a four-minute window in no time."""
+        def __init__(self, t0=1791177300.0):
+            self.t = t0
+        def time(self):
+            return self.t
+        def sleep(self, s):
+            self.t += max(0, s)
+        def __getattr__(self, name):          # strptime, strftime, gmtime ... as the real module
+            return getattr(time, name)
+
+    def window_fake(fake, clock, out_per_s, read_per_min, cfu, pending=500_000_000):
+        t_start = clock.t
+        def docker(args):
+            t = args[args.index("--topic") + 1]
+            if t.startswith("out"):
+                return 0, f"{t}:0:{int(out_per_s * (clock.t - t_start))}\n", ""
+            return fake.docker(args)
+        def http(url, auth, body):
+            m = body["aggregations"][0]["metric"]
+            iv = body["intervals"][0].split("/")
+            a = calendar.timegm(time.strptime(iv[0][:19], "%Y-%m-%dT%H:%M:%S"))
+            z = calendar.timegm(time.strptime(iv[1][:19], "%Y-%m-%dT%H:%M:%S"))
+            val = {"current_cfus": cfu, "num_records_in": read_per_min, "pending_records": pending,
+                   "busy_time_ms_per_second": 1000, "backpressure_time_ms_per_second": 0,
+                   "idle_time_ms_per_second": 0}
+            v = next((x for k, x in val.items() if m.endswith(k)), 0)
+            rows = [{"timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t)), "value": v}
+                    for t in range(a - a % 60, z, 60)]
+            return 200, {"data": rows}
+        return docker, http
+
+    def cc_window(fake, mk, said, raw):
+        clock = FakeClock()
+        real = PC.time
+        PC.time = clock
+        try:
+            docker, http = window_fake(fake, clock, out_per_s=2_000_000, read_per_min=60_000_000, cfu=20)
+            p = mk({"_docker": docker, "_http": http}); p.poll_s = 0
+            p.up()
+            m = p.measure_window("fsk-t-job", 20, ["out_a", "out_b"], 4.0)
+        finally:
+            PC.time = real
+        assert len(m["wholeMinutes"]) >= 3, m["wholeMinutes"]
+        assert abs(m["recordsPerSec"] - 1_000_000) < 1, m["recordsPerSec"]       # 2 topics x 2M/s / 4 per input
+        assert abs(m["recordsReadPerSec"] - 1_000_000) < 1, m["recordsReadPerSec"]
+        assert m["cfuInUse"] == 20 and m["busy"] == 1.0 and m["heldBack"] == 0.0, m
+        assert m["backlogRemaining"] == 500_000_000, m["backlogRemaining"]
+    expect("confluent: a case's window reads the rate from the output topics' log end over whole minutes and "
+           "lines Confluent's own readings up with it (must not fire)", on_confluent(cc_window), "",
+           should_fire=False)
+
+    good_cloud = {"readings": 9, "wholeMinutes": ["m1", "m2", "m3", "m4"], "recordsPerSec": 700_000.0,
+                  "recordsReadPerSec": 702_000.0, "vantageDisagreement": 0.0029, "backlogRemaining": 200_000_000,
+                  "tmCapFrac": 1.0, "tmCores": 20.0, "sourceIdle": 0.0, "sourceBackpressured": 0.0}
+    def cloud_case(**kw):
+        r = dict(good_cloud, **kw)
+        return lambda: L.check_case_cloud(r, 20, False)
+    expect("cloud case: a valid record passes (must not fire)", cloud_case(), "", should_fire=False)
+    expect("cloud case: the output count and Confluent's records read disagree",
+           cloud_case(recordsReadPerSec=760_000.0, vantageDisagreement=0.0857), "the two ways of counting do not agree")
+    expect("cloud case: the backlog ran out inside the window",
+           cloud_case(backlogRemaining=10_000_000), "the data ran out before the measurement finished")
+    expect("cloud case: a job that did not use its pool is a ceiling, kept and left out of the ratios",
+           cloud_case(tmCapFrac=0.5, tmCores=10.0), "the job used 10.0 CFU of the 20 CFU pool", ceiling=True)
+    expect("cloud case: a job waiting on its input is a ceiling", cloud_case(sourceIdle=0.3),
+           "sat idle 30.0% of the window", ceiling=True)
+    expect("cloud case: too short a window to see whole minutes", cloud_case(wholeMinutes=["m1", "m2"]),
+           "only 2 whole minutes inside the window")
+
+    def cloud_bottleneck_says_cfu():
+        c = L.cfg()
+        was = c.plat
+        c.plat = type("P", (), {"unit": "CFU", "kind": "confluent-cloud"})()
+        try:
+            text = L.bottleneck({"cores": 20, "tmCapFrac": 1.0, "sourceIdle": 0.0, "kafkaCores": None})
+        finally:
+            c.plat = was
+        if "its 20 CFU" not in text:
+            raise Exception(f"the bottleneck sentence does not name the unit: {text}")
+    expect("cloud case: the bottleneck sentence counts CFU, not cores (must not fire)", cloud_bottleneck_says_cfu,
+           "", should_fire=False)
+
     def cc_gone(fake, mk, said, raw):
         p = mk(); p.up()
         assert p.statement_status("fsk-t-never-made")[0] == "GONE"
@@ -4015,8 +4099,11 @@ def cmd_suite():
 
             rec, shape_ref = L.run_case_retrying(once, on_retry=again)
             out["runs"].append(rec)
-            log(f"  {cores}c {pass_id}: {rec['recordsPerSec']:,.0f} rec/s  tm {rec['tmCores']:.2f}/{cores} "
-                f"({rec['tmCapFrac']:.1%})  kafka {rec['kafkaCores']:.2f}/{c.kafka_cap:g}  "
+            unit = rec.get("unit") or "cores"
+            kafka = (f"kafka {rec['kafkaCores']:.2f}/{c.kafka_cap:g}" if rec.get("kafkaCores") is not None
+                     else "kafka cores not measured on this platform")
+            log(f"  {cores} {unit} {pass_id}: {rec['recordsPerSec']:,.0f} rec/s  in use {rec['tmCores']:.2f}/{cores} "
+                f"({rec['tmCapFrac']:.1%})  {kafka}  "
                 f"srcIdle {rec['sourceIdle']:.1%}  srcBP {rec['sourceBackpressured']:.1%}  "
                 f"headroom {rec['headroomS']:.0f}s  vantage {rec['vantageDisagreement']:.2%}")
         except CaseRefused as e:

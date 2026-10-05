@@ -183,6 +183,10 @@ T = {
     # (harness live test: a 6 s window against a 10 s reporter held none)
     "reporterS": 10,
     "minBpSamples": 3,
+    # A cloud case's backlog must still hold this much work at the window's
+    # last whole minute. Confluent reports records waiting by the minute, so
+    # one minute is the finest headroom it can show.
+    "cloudHeadroomS": 60.0,
     # the tiny proof: superlinear has been an artefact every time (run 8: 3.73x
     # from a chained baseline)
     "tinyRatioLo": 1.5,
@@ -2839,7 +2843,9 @@ def bottleneck(rec):
     n = rec.get("cores")
     # "99% of its cores" leaves the reader asking how many. Say the number when
     # the record carries it.
-    its = f"its {n} cores" if n else "the cores it was given"
+    plat = getattr(cfg(), "plat", None) if _CFG is not None else None
+    unit = getattr(plat, "unit", None) if plat else None
+    its = (f"its {n} {unit}" if unit else f"its {n} cores") if n else "the cores it was given"
     if (rec.get("brokerLimitHits") or 0) > T["brokerLimitHits"] and cap < T["brokerHitsCapExempt"]:
         return (f"Kafka's memory, blocking higher throughput. Kafka hit its limit "
                 f"{rec['brokerLimitHits']:,} times and had to read the test data back off disk, so the "
@@ -3605,6 +3611,112 @@ def check_shape(shape, shape_ref):
         raise Refusal("rig", f"job graph shape differs from the other cases:\n{a}\nvs\n{b}")
 
 
+def check_case_cloud(rec, units, is_baseline):
+    """Pure guards on a finished Confluent Cloud case record. The laptop's
+    check_case reads committed offsets, garbage collection and a task
+    manager's CPU, none of which Confluent Cloud has; these are the same
+    questions asked of what it does have (findings §8)."""
+    if (rec.get("readings") or 0) < 4:
+        raise Refusal("case", f"only {rec.get('readings') or 0} readings of the output's log end inside the window, "
+                              f"and 4 are needed")
+    if len(rec.get("wholeMinutes") or []) < T["minBpSamples"]:
+        raise Refusal("case", f"only {len(rec.get('wholeMinutes') or [])} whole minutes inside the window, and "
+                              f"{T['minBpSamples']} are needed: Confluent reports CFU in use, busy and held-back "
+                              f"time by the minute, so a shorter window cannot say whether the pool was used")
+    if (rec.get("recordsPerSec") or 0) <= 0:
+        raise Refusal("case", f"measured rate is not positive: {rec.get('recordsPerSec')} records/s")
+    if rec.get("recordsReadPerSec") is None:
+        raise Refusal("case", "Confluent reported no records read for the window, so the transport rate has "
+                              "nothing to be checked against")
+    if rec["vantageDisagreement"] > T["vantageTol"]:
+        raise Refusal("case", f"the two ways of counting do not agree. The output topics say "
+                              f"{rec['recordsPerSec']:,.0f} input records a second went through; Confluent's own "
+                              f"count of records read says {rec['recordsReadPerSec']:,.0f}. That is "
+                              f"{rec['vantageDisagreement']:.1%} apart and the limit is {T['vantageTol']:.0%}. Check "
+                              f"outputsPerInput: the output rate is divided by it")
+    if rec.get("backlogRemaining") is None or rec["backlogRemaining"] < rec["recordsPerSec"] * T["cloudHeadroomS"]:
+        raise Refusal("case", f"the data ran out before the measurement finished: Confluent reported "
+                              f"{rec.get('backlogRemaining') or 0:,.0f} records waiting at the window's last whole "
+                              f"minute, which is under {T['cloudHeadroomS']:.0f} s of work at this rate. Make the "
+                              f"backlog bigger: count it as the records a reader gets, not the topic's log end "
+                              f"(findings §8)")
+    floor = T["capFloorBaseline"] if is_baseline else T["capFloorOther"]
+    if rec["tmCapFrac"] < floor:
+        raise Ceiling(f"the job used {rec['tmCores']:.1f} CFU of the {units} CFU pool on average ({rec['tmCapFrac']:.1%}), "
+                      f"and it needs {floor:.0%} to count. This case shows where scaling stops; it is kept in the "
+                      f"table and left out of the ratios.", rec)
+    if (rec.get("sourceIdle") or 0) > T["sourceIdleCeil"]:
+        raise Ceiling(f"the job sat idle {rec['sourceIdle']:.1%} of the window and the limit is "
+                      f"{T['sourceIdleCeil']:.0%}. It spent that time waiting for input, so whatever feeds it is "
+                      f"the bottleneck, not the pool.", rec)
+
+
+def run_case_cloud(cores, pass_id, run_id, shape_ref, is_baseline, manifest, **_ignored):
+    """One measured case on Confluent Cloud: a new pool of the case's size,
+    the job started through submit (partitions checked, alignment off,
+    baseline at the pool's size, whole pool in use), the window measured from
+    the output topics' log end, judged by check_case_cloud. The job is
+    deleted on every exit path."""
+    c = cfg()
+    p = c.plat
+    group = f"{c.project}-{run_id}-c{cores}-{pass_id}"
+    rec = {"cores": cores, "pass": pass_id, "group": group, "platform": p.kind, "unit": p.unit}
+    name = None
+    try:
+        rec["sizeReadBack"] = P.set_and_read_back(p, cores)
+        rec["parallelism"] = cores                      # one CFU ran one subtask (findings §8)
+        rec["tSubmit"] = time.time()
+        name = p.submit(cores, group)
+        rec["jobId"] = name
+        rec["tSteady"] = time.time()
+        if not c.out_per_in:
+            raise Refusal("rig", "outputsPerInput is not set: on Confluent Cloud the rate is read from the "
+                                 "output topics' log end and divided by it, so it has to be a fixed number")
+        m = p.measure_window(name, cores, list(c.topics_out), c.out_per_in)
+        rec["tOpen"], rec["tClose"] = m["readings"][0][0], m["readings"][-1][0]
+        rec["readings"] = len(m["readings"])
+        rec["readingsLog"] = m["readings"]
+        rec["intervalRates"] = m["intervalRates"]
+        rec["wholeMinutes"] = m["wholeMinutes"]
+        rec["boundaries"] = len(m["readings"]) - 1
+        rec["elapsedS"] = round(m["elapsedS"], 1)
+        rec["recordsPerSec"] = round(m["recordsPerSec"], 1)
+        rec["recordsConsumed"] = round(m["recordsConsumed"])
+        rec["outputRecsPerSec"] = round(m["recordsPerSec"] * c.out_per_in, 1)
+        rec["rateSource"] = "Kafka log end of the output topics, divided by outputs per input"
+        rec["vantageSource"] = "Confluent's records read, the same whole minutes"
+        rec["recordsReadPerSec"] = m["recordsReadPerSec"]
+        rec["vantageDisagreement"] = (round(abs(m["recordsReadPerSec"] - m["recordsPerSec"]) / m["recordsPerSec"], 4)
+                                      if m["recordsReadPerSec"] and m["recordsPerSec"] else 1.0)
+        rec["tmCores"] = round(m["cfuInUse"] or 0, 2)
+        rec["tmCapFrac"] = round((m["cfuInUse"] or 0) / cores, 4)
+        rec["kafkaCores"] = None                         # the service's own; not readable as cores
+        rec["sourceBusy"], rec["sourceBackpressured"], rec["sourceIdle"] = m["busy"], m["heldBack"], m["idle"]
+        rec["bpSamples"] = len(m["wholeMinutes"])
+        rec["backlogRemaining"] = m["backlogRemaining"]
+        rec["headroomS"] = round((m["backlogRemaining"] or 0) / m["recordsPerSec"], 1) if m["recordsPerSec"] else 0.0
+        rec["gcNames"], rec["gcFracOfCapacity"] = None, None
+        check_case_cloud(rec, cores, is_baseline)
+        rec["status"] = "OK"
+        return rec, shape_ref
+    except Ceiling as e:
+        rec["status"] = "CEILING"
+        rec["ceiling"] = e.msg
+        raise CaseRefused(rec, Refusal("ceiling", e.msg))
+    except Refusal as e:
+        rec["status"] = "DROPPED"
+        rec["refusalScope"] = e.scope
+        rec["refusal"] = e.msg
+        raise CaseRefused(rec, e)
+    finally:
+        if name:
+            try:
+                p.cli("flink", "statement", "delete", name, "--cloud", p.cloud, "--region", p.region, "--force")
+            except Refusal as e:
+                if "not found" not in e.msg.lower() and "does not exist" not in e.msg:
+                    raise
+
+
 def run_case(cores, pass_id, run_id, shape_ref, is_baseline, manifest,
              min_boundaries=None, min_window_s=None, ckpt_ms=None, warmup_max_s=None, reporter_s=None,
              kafka_cap=None, parallelism=None, manifest_path=None):
@@ -3614,6 +3726,8 @@ def run_case(cores, pass_id, run_id, shape_ref, is_baseline, manifest,
     parallelism: slots and job parallelism, when they are not the core count
     (plan 12 phase 1C: the one-core case at the suite's parallelism)."""
     c = cfg()
+    if c.plat and getattr(c.plat, "kind", "") == "confluent-cloud":
+        return run_case_cloud(cores, pass_id, run_id, shape_ref, is_baseline, manifest)
     kafka_cap = kafka_cap or c.kafka_cap
     par = parallelism or cores
     min_boundaries = min_boundaries or T["minBoundaries"]

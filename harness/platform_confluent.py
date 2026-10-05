@@ -834,6 +834,69 @@ class ConfluentCloud(Platform):
                                  f"{step}, for example {step}, {2 * step} or {3 * step}")
         return len(per)
 
+    # ------------------------------------------------------------ a case's window
+    window_every_s = 30          # the self-test sets 0
+    window_min_s = 240           # four whole minutes: Confluent's readings come by the minute
+    metrics_lag_s = 200          # they arrive about three minutes late (findings §8)
+
+    def _out_end(self, topics):
+        return sum(self.log_end(t)[0] for t in topics)
+
+    def measure_window(self, name, units, out_topics, out_per_in):
+        """Measure a running case. The rate comes from the transport: the log
+        end of the output topics, read every window_every_s seconds, divided by
+        the outputs each input makes -- there are no committed offsets to read
+        on Confluent Cloud (findings §8). The window runs for window_min_s and
+        is then cut to whole minutes, because every other reading -- CFU in
+        use, busy, held-back and idle time, records read, records waiting --
+        comes from Confluent by the minute. Returns the readings; judging them
+        is check_case_cloud's job."""
+        readings = []
+        t0 = time.time()
+        while True:
+            readings.append((time.time(), self._out_end(out_topics)))
+            if readings[-1][0] - t0 >= self.window_min_s and len(readings) >= 4:
+                break
+            time.sleep(self.window_every_s)
+        time.sleep(self.metrics_lag_s)
+        t_open, t_close = readings[0][0], readings[-1][0]
+        minutes = self.statement_minutes(name, t_open - 120, t_close + 120)
+        import calendar
+        iso_s = lambda m: calendar.timegm(time.strptime(m[:19], "%Y-%m-%dT%H:%M:%S"))
+        whole = sorted({m for m, _ in minutes["recordsIn"]
+                        if iso_s(m) >= t_open and iso_s(m) + 60 <= t_close})
+
+        def at(t):
+            """The output's log end at time t, between the two readings around it."""
+            for (ta, na), (tb, nb) in zip(readings, readings[1:]):
+                if ta <= t <= tb:
+                    return na + (nb - na) * (t - ta) / max(tb - ta, 1e-9)
+            return readings[-1][1]
+
+        def mean(key):
+            got = dict(minutes[key])
+            vals = [got[m] for m in whole if m in got]
+            return sum(vals) / len(vals) if vals else None
+        span = (len(whole) * 60) or (t_close - t_open)
+        first = iso_s(whole[0]) if whole else t_open
+        transport = (at(first + span) - at(first)) / span / out_per_in
+        records_in = mean("recordsIn")
+        pending = dict(minutes["pending"])
+        return {
+            "readings": [[round(t, 1), n] for t, n in readings],
+            "wholeMinutes": whole, "elapsedS": span,
+            "recordsPerSec": transport,
+            "recordsConsumed": transport * span,
+            "intervalRates": [round((nb - na) / max(tb - ta, 1e-9) / out_per_in, 1)
+                              for (ta, na), (tb, nb) in zip(readings, readings[1:])],
+            "recordsReadPerSec": records_in / 60.0 if records_in is not None else None,
+            "cfuInUse": mean("cfu"),
+            "busy": (mean("busyMsPerS") or 0) / 1000.0 if mean("busyMsPerS") is not None else None,
+            "heldBack": (mean("heldBackMsPerS") or 0) / 1000.0 if mean("heldBackMsPerS") is not None else None,
+            "idle": (mean("idleMsPerS") or 0) / 1000.0 if mean("idleMsPerS") is not None else None,
+            "backlogRemaining": pending.get(whole[-1]) if whole else None,
+        }
+
     # ------------------------------------------------------------ phase 3
     def _not_yet(self, what):
         raise Refusal("rig", f"{what} on Confluent Cloud is not built yet: the stack can be created, "

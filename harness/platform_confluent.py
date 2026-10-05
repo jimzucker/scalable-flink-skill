@@ -715,6 +715,20 @@ class ConfluentCloud(Platform):
             raise Refusal("rig", f"the log end of {topic} came back empty: {out.strip()[:200]}")
         return total, per
 
+    def cluster_minutes(self, metric, t0, t1):
+        """Confluent's per-minute readings for the Kafka cluster: [(minute, value)]."""
+        import base64
+        auth = base64.b64encode(f"{self._secret('METRICS_API_KEY')}:{self._secret('METRICS_API_SECRET')}"
+                                .encode()).decode()
+        iso = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+        body = {"aggregations": [{"metric": metric}],
+                "filter": {"field": "resource.kafka.id", "op": "EQ", "value": self.state["cluster"]},
+                "granularity": "PT1M", "intervals": [f"{iso(t0)}/{iso(t1)}"], "limit": 1000}
+        status, reply = self.http(f"{METRICS_API}/query", auth, body)
+        if status != 200:
+            raise Refusal("rig", f"Confluent's metrics API answered HTTP {status} for {metric}: {str(reply)[:300]}")
+        return minutes_of(reply)
+
     def statement_minutes(self, statement, t0, t1):
         """Confluent's per-minute readings for one statement between t0 and t1
         (epoch seconds): {reading: [(minute, value)]} for every name in
@@ -882,7 +896,17 @@ class ConfluentCloud(Platform):
         transport = (at(first + span) - at(first)) / span / out_per_in
         records_in = mean("recordsIn")
         pending = dict(minutes["pending"])
+        # The Kafka cluster's size over the same minutes. Measured 2026-10-05
+        # (findings §8, runs 17 and 18): with the cluster capped at 10 eCKU the
+        # copy's 10->20 CFU step read 1.38x; capped at 50, where it sat for
+        # both cases, 1.77x. A cluster at its cap is the limit, not the pool.
+        ecku = dict(self.cluster_minutes("io.confluent.kafka.server/elastic_cku_count",
+                                         t_open - 120, t_close + 120))
+        ecku_whole = [ecku[m] for m in whole if m in ecku]
         return {
+            "kafkaEcku": round(sum(ecku_whole) / len(ecku_whole), 2) if ecku_whole else None,
+            "kafkaEckuMinutesAtLimit": sum(1 for v in ecku_whole if v >= self.max_ecku),
+            "kafkaEckuLimit": self.max_ecku,
             "readings": [[round(t, 1), n] for t, n in readings],
             "wholeMinutes": whole, "elapsedS": span,
             "recordsPerSec": transport,

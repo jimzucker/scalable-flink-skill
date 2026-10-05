@@ -2100,7 +2100,7 @@ def cmd_selftest(live=True, topic=None):
         def __getattr__(self, name):          # strptime, strftime, gmtime ... as the real module
             return getattr(time, name)
 
-    def window_fake(fake, clock, out_per_s, read_per_min, cfu, pending=500_000_000):
+    def window_fake(fake, clock, out_per_s, read_per_min, cfu, pending=500_000_000, ecku=6):
         t_start = clock.t
         def docker(args):
             t = args[args.index("--topic") + 1]
@@ -2114,7 +2114,7 @@ def cmd_selftest(live=True, topic=None):
             z = calendar.timegm(time.strptime(iv[1][:19], "%Y-%m-%dT%H:%M:%S"))
             val = {"current_cfus": cfu, "num_records_in": read_per_min, "pending_records": pending,
                    "busy_time_ms_per_second": 1000, "backpressure_time_ms_per_second": 0,
-                   "idle_time_ms_per_second": 0}
+                   "idle_time_ms_per_second": 0, "elastic_cku_count": ecku}
             v = next((x for k, x in val.items() if m.endswith(k)), 0)
             rows = [{"timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t)), "value": v}
                     for t in range(a - a % 60, z, 60)]
@@ -2137,13 +2137,15 @@ def cmd_selftest(live=True, topic=None):
         assert abs(m["recordsReadPerSec"] - 1_000_000) < 1, m["recordsReadPerSec"]
         assert m["cfuInUse"] == 20 and m["busy"] == 1.0 and m["heldBack"] == 0.0, m
         assert m["backlogRemaining"] == 500_000_000, m["backlogRemaining"]
+        assert m["kafkaEcku"] == 6 and m["kafkaEckuLimit"] == 10 and m["kafkaEckuMinutesAtLimit"] == 0, m
     expect("confluent: a case's window reads the rate from the output topics' log end over whole minutes and "
            "lines Confluent's own readings up with it (must not fire)", on_confluent(cc_window), "",
            should_fire=False)
 
     good_cloud = {"readings": 9, "wholeMinutes": ["m1", "m2", "m3", "m4"], "recordsPerSec": 700_000.0,
                   "recordsReadPerSec": 702_000.0, "vantageDisagreement": 0.0029, "backlogRemaining": 200_000_000,
-                  "tmCapFrac": 1.0, "tmCores": 20.0, "sourceIdle": 0.0, "sourceBackpressured": 0.0}
+                  "tmCapFrac": 1.0, "tmCores": 20.0, "sourceIdle": 0.0, "sourceBackpressured": 0.0,
+                  "kafkaEcku": 6.0, "kafkaEckuLimit": 10, "kafkaEckuMinutesAtLimit": 0}
     def cloud_case(**kw):
         r = dict(good_cloud, **kw)
         return lambda: L.check_case_cloud(r, 20, False)
@@ -2156,6 +2158,13 @@ def cmd_selftest(live=True, topic=None):
            cloud_case(tmCapFrac=0.5, tmCores=10.0), "the job used 10.0 CFU of the 20 CFU pool", ceiling=True)
     expect("cloud case: a job waiting on its input is a ceiling", cloud_case(sourceIdle=0.3),
            "sat idle 30.0% of the window", ceiling=True)
+    expect("cloud case: a Kafka cluster at its eCKU limit for the whole window is a ceiling, not a scaling result",
+           cloud_case(kafkaEcku=10.0, kafkaEckuMinutesAtLimit=4), "sat at its 10 eCKU limit for every minute",
+           ceiling=True)
+    expect("cloud case: a cluster that reached its limit for part of the window is not a ceiling (must not fire)",
+           cloud_case(kafkaEcku=8.5, kafkaEckuMinutesAtLimit=2), "", should_fire=False)
+    expect("cloud case: no eCKU reading for the window", cloud_case(kafkaEcku=None),
+           "no eCKU count for the Kafka cluster")
     expect("cloud case: too short a window to see whole minutes", cloud_case(wholeMinutes=["m1", "m2"]),
            "only 2 whole minutes inside the window")
 
@@ -2171,6 +2180,13 @@ def cmd_selftest(live=True, topic=None):
             raise Exception(f"the bottleneck sentence does not name the unit: {text}")
     expect("cloud case: the bottleneck sentence counts CFU, not cores (must not fire)", cloud_bottleneck_says_cfu,
            "", should_fire=False)
+    def cloud_bottleneck_kafka_capacity():
+        got = L.bottleneck_short({"cores": 20, "tmCapFrac": 1.0, "sourceIdle": 0.0, "kafkaEcku": 10.0,
+                                  "kafkaEckuLimit": 10})
+        if got != "Kafka capacity":
+            raise Exception(f"a cluster at its eCKU limit is labelled {got!r}")
+    expect("cloud case: a cluster at its eCKU limit is named as the bottleneck (must not fire)",
+           cloud_bottleneck_kafka_capacity, "", should_fire=False)
 
     def cc_gone(fake, mk, said, raw):
         p = mk(); p.up()

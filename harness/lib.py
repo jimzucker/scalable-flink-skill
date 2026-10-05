@@ -461,7 +461,8 @@ class Cfg:
         # platforms.py existed. Anything else is asked through the platform.
         self.platform = P.platform_kind(c)
         self.plat = P.platform_for(self.platform, dict(c.get("platform") if isinstance(c.get("platform"), dict)
-                                                       else {}, stateDir=self.results))
+                                                       else {}, stateDir=self.results, _cases=self.cases,
+                                                       _topicIn=self.topic_in))
         self.guarantee = c["guarantee"]
         self.log_path = os.path.join(self.results, "harness.log")
         # Three ways to run: no worker memory settings at all (the default, and

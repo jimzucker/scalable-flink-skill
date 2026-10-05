@@ -2029,6 +2029,42 @@ def cmd_selftest(live=True, topic=None):
            lambda: (PC.uneven_cases(40, [5, 10, 20]) == [] or (_ for _ in ()).throw(Exception("40 rejected"))),
            "", should_fire=False)
 
+    def cfu_http(units):
+        def http(url, auth, body):
+            m = body["aggregations"][0]["metric"]
+            return 200, {"data": [{"timestamp": "2026-10-05T05:16:00Z", "value": units}] if m.endswith("current_cfus") else []}
+        return http
+
+    def cc_submit(fake, mk, said, raw):
+        fake.partitions["orders"] = 40
+        p = mk({"jobSql": "INSERT INTO out SELECT * FROM orders", "_cases": [5, 10, 20], "_topicIn": "orders",
+                "_http": cfu_http(20)}); p.up()
+        L.P.set_and_read_back(p, 20)
+        nm = p.submit(20, "g1")
+        st = fake.statements[nm]
+        assert st["properties"] == PC.ALIGNMENT_OFF and st["scaling"] == {"baseline_cfu": 20}, st
+        assert p.partitions_checked == 40, p.partitions_checked
+        p.down()
+    expect("confluent: submit starts every job with alignment off, the baseline at the pool's size and the "
+           "partitions checked, and waits for the whole pool (must not fire)", on_confluent(cc_submit), "",
+           should_fire=False)
+
+    def cc_submit_bad_partitions(fake, mk, said, raw):
+        fake.partitions["orders"] = 24
+        p = mk({"jobSql": "INSERT INTO out SELECT * FROM orders", "_cases": [5, 10, 20], "_topicIn": "orders",
+                "_http": cfu_http(20)}); p.up()
+        L.P.set_and_read_back(p, 20)
+        try:
+            p.submit(20, "g1")
+        finally:
+            assert not any(n.startswith("fsk-t-job") for n in fake.statements), "a job started on an uneven input"
+            p.down()
+    expect("confluent: submit stops before starting a job when the input's partitions do not divide by every case",
+           on_confluent(cc_submit_bad_partitions), "do not divide evenly by 5, 10, 20 subtasks")
+    expect("confluent: submit with no job SQL stops and says what to set",
+           on_confluent(lambda fake, mk, said, raw: (lambda p: (p.up(), p.submit(20, "g1")))(mk())),
+           "platform.jobSql is not set")
+
     def cc_gone(fake, mk, said, raw):
         p = mk(); p.up()
         assert p.statement_status("fsk-t-never-made")[0] == "GONE"

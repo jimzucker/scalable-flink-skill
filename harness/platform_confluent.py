@@ -231,6 +231,13 @@ class ConfluentCloud(Platform):
         self.http = raw.get("_http") or http_json
         self.rest = raw.get("_rest") or rest_json
         self.retry_wait_s = 30
+        # The job a case runs: one Flink SQL INSERT, the same text at every size.
+        # `submit` is the only way the harness starts it, so every case gets the
+        # settings findings §8 found missing (see start_job, wait_at_size).
+        self.job_sql = raw.get("jobSql")
+        self.cases = list(raw.get("_cases") or [])
+        self.topic_in = raw.get("_topicIn")
+        self.partitions_checked = None
         self.log = log
         self.state_path = os.path.join(raw.get("stateDir") or state_dir, "confluent-state.json")
         self.state = self._load_state()
@@ -328,6 +335,8 @@ class ConfluentCloud(Platform):
             self._save_state()
         cluster = self._wait(lambda: self.cli_json("kafka", "cluster", "describe", self.state["cluster"]),
                              f"Kafka cluster {self.state['cluster']}")
+        self.state["database"] = cluster.get(F["name"]) or self.state["cluster"]
+        self._save_state()
         if not self.state.get("pool"):
             p = self.cli_json("flink", "compute-pool", "create", f"{self.prefix}-flink", "--cloud", self.cloud,
                               "--region", self.region, "--max-cfu", str(self.setup_cfu))
@@ -807,7 +816,25 @@ class ConfluentCloud(Platform):
                              f"on come next")
 
     def submit(self, par, group, ckpt_ms=None):
-        self._not_yet("submitting the job")
+        """Start a case's job: the input's partitions checked against every
+        case (once per run), the job started with watermark alignment off and
+        its baseline at the pool's size (both read back), and returned only
+        once it uses its whole pool. The only way the harness starts a job on
+        Confluent Cloud, so none of these can be skipped."""
+        if not self.job_sql:
+            raise Refusal("rig", "platform.jobSql is not set: give the Flink SQL INSERT the job runs on Confluent "
+                                 "Cloud. The same statement runs at every size; the harness sets its size")
+        if self.topic_in and self.cases and self.partitions_checked is None:
+            self.partitions_checked = self.check_partitions(self.topic_in, self.cases)
+        units = int(par)
+        n = len(self.state.get("statements") or [])
+        t0 = time.time()
+        name = self.start_job(f"{self.prefix}-job{units}-{n}", self.job_sql.format(group=group),
+                              self.state.get("database") or self.state["cluster"], units)
+        self.wait_at_size(name, units, t0)
+        self.log(f"  confluent-cloud: job {name} runs at {units} CFU with watermark alignment off and its baseline "
+                 f"read back")
+        return name
 
     def cpu_stat(self, component):
         self._not_yet("reading the engine's and broker's use")

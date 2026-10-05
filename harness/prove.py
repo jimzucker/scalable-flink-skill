@@ -2188,6 +2188,52 @@ def cmd_selftest(live=True, topic=None):
     expect("cloud case: a cluster at its eCKU limit is named as the bottleneck (must not fire)",
            cloud_bottleneck_kafka_capacity, "", should_fire=False)
 
+    def lf(files):
+        def read(p):
+            if p not in files:
+                raise OSError("not found")
+            return files[p]
+        return read
+    good_files = {"/w/local/pipeline.json": {"results": "results", "job": {"sql": "INSERT INTO out\n SELECT * FROM orders;"}},
+                  "/w/local/results/completeness.json": {"result": "PASS"},
+                  "/w/local/results/tinyproof.json": {"result": "PASS"}}
+    cloud_sql = "insert into out select * from orders"
+    expect("local first: the same app passed on the laptop, so the cloud may start (must not fire)",
+           lambda: (L.P.local_first_reason("/w/local/pipeline.json", cloud_sql, lf(good_files)) is None
+                    or (_ for _ in ()).throw(Exception(L.P.local_first_reason("/w/local/pipeline.json", cloud_sql, lf(good_files))))),
+           "", should_fire=False)
+    def lf_reason(files, sql=cloud_sql, path="/w/local/pipeline.json"):
+        def go():
+            why = L.P.local_first_reason(path, sql, lf(files))
+            if why:
+                raise Refusal("rig", why)
+        return go
+    expect("local first: no laptop run named", lf_reason(good_files, path=None), "platform.localPipeline is not set")
+    expect("local first: completeness has not passed on the laptop",
+           lf_reason(dict(good_files, **{"/w/local/results/completeness.json": {"result": "FAIL"}})),
+           "completeness has not passed on the laptop")
+    expect("local first: the tiny proof never ran on the laptop",
+           lf_reason({k: v for k, v in good_files.items() if "tinyproof" not in k}), "the tiny proof has not passed")
+    expect("local first: the laptop declares no job SQL",
+           lf_reason(dict(good_files, **{"/w/local/pipeline.json": {"results": "results", "job": {}}})),
+           "declares no job.sql")
+    expect("local first: the cloud would run a different INSERT",
+           lf_reason(good_files, sql="INSERT INTO out SELECT order_id FROM orders"), "is not the INSERT")
+
+    def ddl_both():
+        cols = [("order_id", "STRING"), ("account", "INT")]
+        cc = L.P.table_ddl("confluent-cloud", "orders", cols, 40)
+        lo = L.P.table_ddl("local", "orders", cols, 40, bootstrap="kafka:9092")
+        assert cc == "CREATE TABLE orders (order_id STRING, account INT) DISTRIBUTED INTO 40 BUCKETS", cc
+        assert lo.startswith("CREATE TABLE orders (order_id STRING, account INT) WITH ('connector' = 'kafka', "
+                             "'topic' = 'orders', 'properties.bootstrap.servers' = 'kafka:9092'"), lo
+        keyed = L.P.table_ddl("confluent-cloud", "sums", cols, 20, key=["account"])
+        assert keyed.endswith("DISTRIBUTED BY (account) INTO 20 BUCKETS"), keyed
+    expect("tables: the same name and columns on both platforms, each connected its own way (must not fire)",
+           ddl_both, "", should_fire=False)
+    expect("tables: a platform with no table definition yet says so",
+           lambda: L.P.table_ddl("aws", "orders", [("a", "INT")], 4), "no table definition for platform 'aws'")
+
     def cc_gone(fake, mk, said, raw):
         p = mk(); p.up()
         assert p.statement_status("fsk-t-never-made")[0] == "GONE"
@@ -4506,6 +4552,22 @@ def report_verdict(why, suite):
     return "STOPPED at report: the table could not be reported"
 
 
+def cmd_local_first():
+    """GUARD: a run on a paid service starts only after the same app passed on
+    the laptop, where it costs nothing: completeness, the tiny proof, and the
+    same job SQL (platforms.local_first_reason)."""
+    c = cfg()
+    raw = c.raw.get("platform") if isinstance(c.raw.get("platform"), dict) else {}
+    lp = raw.get("localPipeline")
+    if lp and not os.path.isabs(lp):
+        lp = os.path.join(c.root, lp)
+    why = L.P.local_first_reason(lp, getattr(c.plat, "job_sql", None))
+    if why:
+        raise Refusal("rig", why)
+    log(f"  the same app passed completeness and the tiny proof on the laptop ({lp})")
+    return 0
+
+
 def cmd_all(steps=None, results=None, dashboard_check=None):
     """The whole chain as one command. Run 11 spent 20 minutes of its 1.97 h in
     the gaps between commands an agent typed by hand, and wrote phases.log by
@@ -4513,8 +4575,14 @@ def cmd_all(steps=None, results=None, dashboard_check=None):
     `results` is where phases.log, all.json and DONE go — the self-test passes
     its own directory so a fake chain never lands in the live one."""
     c = cfg()
-    steps = steps or [("up", COMMANDS["up"]), ("preflight", cmd_preflight), ("completeness", cmd_completeness),
-                      ("tinyproof", cmd_tinyproof), ("fill", cmd_fill), ("suite", cmd_suite), ("report", cmd_report)]
+    if steps is None and c.plat:
+        # Before `up`: nothing is created, so nothing is paid for, until the
+        # same app has passed locally.
+        steps = [("local first", cmd_local_first)]
+    steps = (steps or []) + ([] if steps and steps[0][0] != "local first" else
+                             [("up", COMMANDS["up"]), ("preflight", cmd_preflight),
+                              ("completeness", cmd_completeness), ("tinyproof", cmd_tinyproof),
+                              ("fill", cmd_fill), ("suite", cmd_suite), ("report", cmd_report)])
     results = results or c.results
     os.makedirs(results, exist_ok=True)
     phases = os.path.join(results, "phases.log")
@@ -4563,7 +4631,8 @@ def cmd_all(steps=None, results=None, dashboard_check=None):
     t_all = time.time()
     mark("phase=all start")
     verdict = "PASS"
-    say = {"up": "starting the stack", "preflight": "preflight checks",
+    say = {"local first": "checking the same app passed on the laptop first", "up": "starting the stack",
+           "preflight": "preflight checks",
            "completeness": "proving nothing is lost, including after killing the pipeline mid-run",
            "tinyproof": "the tiny proof: every case end to end, and every guard broken on purpose",
            "fill": "filling the backlog — the long quiet one",

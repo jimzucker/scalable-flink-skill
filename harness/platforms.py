@@ -134,3 +134,69 @@ def not_checked(kind, row):
     if kind == "local" or row not in LAPTOP_ONLY:
         return None
     return f"not checked on {kind}: {LAPTOP_ONLY[row]}"
+
+
+# ------------------------------------------------------------------ one app, two platforms
+# The same SQL INSERT runs on the laptop and on a managed service; only the
+# tables around it differ, because each platform connects a table to Kafka its
+# own way. The harness writes the tables, the app writes the INSERT.
+
+def table_ddl(kind, name, columns, partitions, key=None, bootstrap=None):
+    """CREATE TABLE for one Kafka-backed table on `kind`. `columns` is a list of
+    (name, SQL type). Pure: the same name and columns on every platform, so an
+    INSERT that reads and writes these tables runs unchanged on each."""
+    cols = ", ".join(f"{c} {t}" for c, t in columns)
+    if kind == "confluent-cloud":
+        # Confluent Cloud makes the topic from the table: the partition count is
+        # DISTRIBUTED INTO, and the key, if any, is what the rows are hashed on.
+        dist = f"DISTRIBUTED BY ({', '.join(key)}) " if key else "DISTRIBUTED "
+        return f"CREATE TABLE {name} ({cols}) {dist}INTO {int(partitions)} BUCKETS"
+    if kind == "local":
+        if not bootstrap:
+            raise Refusal("rig", f"table {name}: the laptop's tables need the broker's address")
+        opts = {"connector": "kafka", "topic": name, "properties.bootstrap.servers": bootstrap,
+                "format": "json", "scan.startup.mode": "earliest-offset"}
+        if key:
+            opts["key.format"] = "json"
+            opts["key.fields"] = ";".join(key)
+        with_ = ", ".join(f"'{k}' = '{v}'" for k, v in opts.items())
+        return f"CREATE TABLE {name} ({cols}) WITH ({with_})"
+    raise Refusal("rig", f"no table definition for platform {kind!r} yet")
+
+
+def _sql_words(sql):
+    return " ".join(str(sql or "").replace(";", " ").split()).lower()
+
+
+def local_first_reason(local_pipeline, cloud_sql, read_json=None):
+    """Why a cloud run may not start yet, or None. A run on a paid service
+    starts only after the same app passed on the laptop: completeness and the
+    tiny proof, and the same job SQL. The laptop's SQL is the `job.sql` its
+    pipeline.json declares -- declared, not read back from the jar."""
+    import json as _json
+    import os as _os
+    read = read_json or (lambda p: _json.load(open(p)))
+    if not local_pipeline:
+        return ("platform.localPipeline is not set: name the laptop run's pipeline.json. A run on a paid "
+                "service starts only after the same app passed completeness and the tiny proof locally")
+    try:
+        local = read(local_pipeline)
+    except (OSError, ValueError) as e:
+        return f"the laptop run's pipeline.json could not be read ({local_pipeline}): {e}"
+    results = _os.path.join(_os.path.dirname(local_pipeline), local.get("results", "results"))
+    for name, what in (("completeness.json", "completeness"), ("tinyproof.json", "the tiny proof")):
+        try:
+            got = read(_os.path.join(results, name)).get("result")
+        except (OSError, ValueError):
+            got = None
+        if got != "PASS":
+            return (f"{what} has not passed on the laptop for this app ({_os.path.join(results, name)}: "
+                    f"{got or 'not found'}). Run it locally first; it costs nothing there")
+    local_sql = (local.get("job") or {}).get("sql")
+    if not local_sql:
+        return ("the laptop run's pipeline.json declares no job.sql, so there is no telling whether the cloud "
+                "would run the same app. Add the INSERT the laptop's job runs as job.sql")
+    if _sql_words(local_sql) != _sql_words(cloud_sql):
+        return ("the cloud's platform.jobSql is not the INSERT the laptop's job declares (job.sql). The same "
+                "app must run on both; only the tables around it differ")
+    return None

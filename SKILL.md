@@ -243,6 +243,12 @@ A reader can then see what was assumed rather than agreed.
    way to start a job there. On any new platform, list the defaults the
    laptop's job does not have and read each one back per case.
 
+   **Run on the laptop first; pay only for what already works.** A cloud chain
+   does not start until the same app — the same SQL INSERT, declared as
+   `job.sql` locally and `platform.jobSql` there — has passed completeness and
+   the tiny proof on the laptop. Only the tables around the INSERT change by
+   platform, and the harness writes those.
+
 ## 1a. Then the plan, and stop
 
 **Before building anything, describe the test, show the plan, and ask to run

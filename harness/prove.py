@@ -2158,13 +2158,21 @@ def cmd_selftest(live=True, topic=None):
            cloud_case(tmCapFrac=0.5, tmCores=10.0), "the job used 10.0 CFU of the 20 CFU pool", ceiling=True)
     expect("cloud case: a job waiting on its input is a ceiling", cloud_case(sourceIdle=0.3),
            "sat idle 30.0% of the window", ceiling=True)
-    expect("cloud case: a Kafka cluster at its eCKU limit for the whole window is a ceiling, not a scaling result",
-           cloud_case(kafkaEcku=10.0, kafkaEckuMinutesAtLimit=4), "sat at its 10 eCKU limit for every minute",
-           ceiling=True)
-    expect("cloud case: a cluster that reached its limit for part of the window is not a ceiling (must not fire)",
-           cloud_case(kafkaEcku=8.5, kafkaEckuMinutesAtLimit=2), "", should_fire=False)
-    expect("cloud case: no eCKU reading for the window", cloud_case(kafkaEcku=None),
-           "no eCKU count for the Kafka cluster")
+    # Replayed against the record: runs 18 and 19 had the cluster at its 50 eCKU
+    # limit in both cases and steps of 1.77x and 2.01x; the live harness case of
+    # 2026-10-06 at 20 CFU read 857,092/s against 840,631 records read, 1.9% apart.
+    for label, kw in (("run 18 at 10 CFU", dict(recordsPerSec=499_333.0, recordsReadPerSec=499_333.0,
+                                                 vantageDisagreement=0.0, tmCapFrac=1.0, tmCores=10.0)),
+                      ("run 19 at 20 CFU", dict(recordsPerSec=856_833.0, recordsReadPerSec=856_833.0,
+                                                 vantageDisagreement=0.0, tmCapFrac=1.0, tmCores=20.0)),
+                      ("the live case at 20 CFU", dict(recordsPerSec=857_091.6, recordsReadPerSec=840_631.5,
+                                                       vantageDisagreement=0.0192, tmCapFrac=1.0, tmCores=20.0,
+                                                       backlogRemaining=196_802_143))):
+        expect(f"cloud case: a cluster at its eCKU limit does not decide a case on its own -- {label} "
+               f"(must not fire)", cloud_case(kafkaEcku=50.0, kafkaEckuLimit=50, kafkaEckuMinutesAtLimit=4, **kw),
+               "", should_fire=False)
+    expect("cloud case: no eCKU reading is recorded as missing and does not decide the case (must not fire)",
+           cloud_case(kafkaEcku=None), "", should_fire=False)
     expect("cloud case: too short a window to see whole minutes", cloud_case(wholeMinutes=["m1", "m2"]),
            "only 2 whole minutes inside the window")
 
@@ -2181,11 +2189,12 @@ def cmd_selftest(live=True, topic=None):
     expect("cloud case: the bottleneck sentence counts CFU, not cores (must not fire)", cloud_bottleneck_says_cfu,
            "", should_fire=False)
     def cloud_bottleneck_kafka_capacity():
-        got = L.bottleneck_short({"cores": 20, "tmCapFrac": 1.0, "sourceIdle": 0.0, "kafkaEcku": 10.0,
+        got = L.bottleneck_short({"cores": 20, "tmCapFrac": 0.6, "sourceIdle": 0.0, "kafkaEcku": 10.0,
                                   "kafkaEckuLimit": 10})
         if got != "Kafka capacity":
             raise Exception(f"a cluster at its eCKU limit is labelled {got!r}")
-    expect("cloud case: a cluster at its eCKU limit is named as the bottleneck (must not fire)",
+    expect("cloud case: a cluster at its eCKU limit with the pool under-used is named as the likely "
+           "bottleneck (must not fire)",
            cloud_bottleneck_kafka_capacity, "", should_fire=False)
 
     def lf(files):

@@ -2344,6 +2344,19 @@ def cmd_selftest(live=True, topic=None):
     expect("cloud rows: a bounded statement's rows come back by column name (must not fire)", on_confluent(cc_rows),
            "", should_fire=False)
 
+    def cc_rows_snapshot(fake, mk, said, raw):
+        p = mk(); p.up()
+        fake.schemas = {"fsk-t-count": ["account", "n"]}
+        fake.results = {"fsk-t-count": [[1, 10]]}
+        p.statement_rows("fsk-t-count", "SELECT account, COUNT(*) AS n FROM orders GROUP BY account")
+        got = fake.statements["fsk-t-count"]["properties"]
+        p.down()
+        if got.get("sql.snapshot.mode") != "now":
+            raise Refusal("rig", f"the count ran without sql.snapshot.mode=now ({got}): a plain GROUP BY reads two "
+                                 f"change-log rows per record")
+    expect("cloud rows: every count runs as a snapshot query, which gives only its final rows (must not fire)",
+           on_confluent(cc_rows_snapshot), "", should_fire=False)
+
     def cc_rows_changelog(fake, mk, said, raw):
         p = mk(); p.up(); p.results_wait_s = 0
         fake.schemas = {"fsk-t-count": ["account", "n"]}

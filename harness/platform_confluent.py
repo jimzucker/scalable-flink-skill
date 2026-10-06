@@ -76,6 +76,8 @@ POOL_SIZES = (5, 10, 20, 30, 40, 50)
 # allowed drift raised to a day none paused and the copy read 46-47 M/min
 # against 30.6-31.6. The laptop's jobs have no alignment, so every job
 # statement the harness runs turns it off, and reads the setting back.
+# A bounded count that gives only its final rows (findings §8, 2026-10-06).
+SNAPSHOT = {"sql.snapshot.mode": "now"}
 ALIGNMENT_OFF = {"sql.tables.scan.watermark-alignment.max-allowed-drift": "1 d"}
 
 
@@ -1006,7 +1008,7 @@ class ConfluentCloud(Platform):
 
     results_wait_s = 2           # the self-test sets 0
 
-    def statement_rows(self, name, sql, timeout_s=1800):
+    def statement_rows(self, name, sql, timeout_s=1800, properties=None):
         """Run a bounded statement and read its result rows over the Flink REST
         API: [{column: value}]. For counting what a reader gets from a topic --
         the log end counted 7-8% more than any reader got (findings §8).
@@ -1016,8 +1018,17 @@ class ConfluentCloud(Platform):
         So the results are read page by page while it runs, a 409 is asked
         again, and every page's change log is applied -- an update or delete
         takes back a row given earlier -- so a GROUP BY reads as its final
-        totals."""
-        self.run_statement(name, sql, self.database(), pool=self.state["pool"], timeout_s=timeout_s)
+        totals.
+
+        Measured 2026-10-06: a plain bounded GROUP BY gave two change-log rows
+        per input record, read at about 500,000 records a minute -- about 140
+        minutes for 70 million, and the first full chain stopped on it at 30.
+        Run as a snapshot query (sql.snapshot.mode = now) the same count gave
+        only its four final rows, for ~34 million records in 72 s. So every
+        count is a snapshot query unless `properties` says otherwise."""
+        props = SNAPSHOT if properties is None else properties
+        self.run_statement(name, sql, self.database(), pool=self.state["pool"], timeout_s=timeout_s,
+                           properties=props)
         nm = self.last_statement
         st, desc = self.rest("GET", self._statement_url(nm), self._rest_auth())
         cols = [c.get("name") for c in (((((desc or {}).get("status") or {}).get("traits") or {}).get("schema") or {})

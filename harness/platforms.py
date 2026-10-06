@@ -158,7 +158,10 @@ def table_ddl(kind, name, columns, partitions, key=None, bootstrap=None):
         # Confluent Cloud makes the topic from the table: the partition count is
         # DISTRIBUTED INTO, and the key, if any, is what the rows are hashed on.
         dist = f"DISTRIBUTED BY ({', '.join(key)}) " if key else "DISTRIBUTED "
-        return f"CREATE TABLE {name} ({cols}) {dist}INTO {int(partitions)} BUCKETS"
+        # IF NOT EXISTS: completeness, the tiny proof and the fill each make the
+        # outputs they need, and the second CREATE of the same table would stop
+        # the chain with "already exists".
+        return f"CREATE TABLE IF NOT EXISTS `{name}` ({cols}) {dist}INTO {int(partitions)} BUCKETS"
     if kind == "local":
         if not bootstrap:
             raise Refusal("rig", f"table {name}: the laptop's tables need the broker's address")

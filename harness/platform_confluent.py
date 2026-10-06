@@ -1034,9 +1034,13 @@ class ConfluentCloud(Platform):
         cols = [c.get("name") for c in (((((desc or {}).get("status") or {}).get("traits") or {}).get("schema") or {})
                                         .get("columns") or [])] if isinstance(desc, dict) else []
         rows, url, t0 = [], self._statement_url(nm) + "/results", time.time()
+        late = lambda: Refusal("rig", f"statement {nm} had not given all its results after {timeout_s // 60} minutes")
+        # Every page is read once. The page with no next link is the end of the
+        # results; reading it again while the statement still said RUNNING added
+        # its rows again -- each account three times (2026-10-06).
         while True:
             if time.time() - t0 > timeout_s:
-                raise Refusal("rig", f"statement {nm} had not given all its results after {timeout_s // 60} minutes")
+                raise late()
             st, res = self.rest("GET", url, self._rest_auth())
             if st == 409:                                  # "Results for Statement=... not ready"
                 time.sleep(self.results_wait_s)
@@ -1051,17 +1055,20 @@ class ConfluentCloud(Platform):
                 elif op in (1, 3) and row in rows:         # update before, delete
                     rows.remove(row)
             nxt = (res.get("metadata") or {}).get("next")
-            if nxt:
-                url = nxt
-                if not (res.get("results") or {}).get("data"):
-                    time.sleep(self.results_wait_s)
-                continue
+            if not nxt:
+                break
+            url = nxt
+            if not (res.get("results") or {}).get("data"):
+                time.sleep(self.results_wait_s)
+        while True:                                        # the statement's own word that it is done
             phase = (((self.rest("GET", self._statement_url(nm), self._rest_auth())[1] or {}).get("status") or {})
                      .get("phase"))
             if phase == "COMPLETED":
                 break
             if phase in ("FAILED", "STOPPED", "DELETED"):
                 raise Refusal("rig", f"statement {nm} ended {str(phase).lower()} before giving all its results")
+            if time.time() - t0 > timeout_s:
+                raise late()
             time.sleep(self.results_wait_s)
         return [dict(zip(cols, r)) if cols else {"row": list(r)} for r in rows]
 

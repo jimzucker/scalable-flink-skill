@@ -1618,7 +1618,13 @@ def cmd_selftest(live=True, topic=None):
                 return 200, {"results": {"data": pages[i]}, "metadata": {"next": nxt}}
             name = url.rsplit("/", 1)[1]
             if name in getattr(self, "schemas", {}):
-                return 200, {"name": name, "status": {"phase": "COMPLETED",
+                # Measured 2026-10-06: the last page (no next link) came while the
+                # statement still said RUNNING, for two more reads.
+                phase = "COMPLETED"
+                if getattr(self, "running_reads", 0) > 0:
+                    self.running_reads -= 1
+                    phase = "RUNNING"
+                return 200, {"name": name, "status": {"phase": phase,
                                                       "traits": {"schema": {"columns": [{"name": c} for c in
                                                                                         self.schemas[name]]}}}}
             st = self.statements.get(name)
@@ -2369,6 +2375,18 @@ def cmd_selftest(live=True, topic=None):
         p.down()
     expect("cloud rows: results read while the statement runs, through 'not ready' and every page, with updates "
            "and deletes applied (must not fire)", on_confluent(cc_rows_changelog), "", should_fire=False)
+
+    def cc_rows_last_page_once(fake, mk, said, raw):
+        p = mk(); p.up(); p.results_wait_s = 0
+        fake.schemas = {"fsk-t-count": ["account", "n"]}
+        fake.pages = {"fsk-t-count": [[{"op": 0, "row": [1, 10]}], [{"op": 0, "row": [2, 5]}]]}
+        fake.running_reads = 2
+        rows = p.statement_rows("fsk-t-count", "SELECT account, COUNT(*) AS n FROM orders GROUP BY account")
+        p.down()
+        if sorted(rows, key=lambda r: r["account"]) != [{"account": 1, "n": 10}, {"account": 2, "n": 5}]:
+            raise Refusal("rig", f"the last page was read more than once: {rows}")
+    expect("cloud rows: the last page is read once, though the statement still says running (must not fire)",
+           on_confluent(cc_rows_last_page_once), "", should_fire=False)
 
     def cc_gone(fake, mk, said, raw):
         p = mk(); p.up()

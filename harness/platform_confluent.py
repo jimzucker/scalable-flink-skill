@@ -216,8 +216,9 @@ class ConfluentCloud(Platform):
         # The budget is for the whole piece of work, not one run: what Confluent
         # has charged since `budgetSince` (default: the first of this month)
         # counts against it. Set by the user: $150 on 2026-10-03, $250 on
-        # 2026-10-05, after the first $137.77 had been charged.
-        self.budget = float(raw.get("budgetUsd", 250.0))
+        # 2026-10-05 after the first $137.77 had been charged, $350 on
+        # 2026-10-05 after $187.85.
+        self.budget = float(raw.get("budgetUsd", 350.0))
         self.budget_since = raw.get("budgetSince") or time.strftime("%Y-%m-01")
         # A Basic cluster scales itself up to 50 eCKUs by default ("max_ecku": 50
         # in its own description), each after the first billed by the hour. The

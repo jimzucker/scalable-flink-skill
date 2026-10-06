@@ -1785,16 +1785,16 @@ def cmd_selftest(live=True, topic=None):
 
     def cc_over_budget(fake, mk, said, raw):
         try:
-            mk({"estimateUsd": 300}).up()
+            mk({"estimateUsd": 400}).up()
         finally:
             assert fake.calls == ["billing cost list"], f"something was created over budget: {fake.calls}"
     expect("confluent: a run estimated over budget stops before anything is created", on_confluent(cc_over_budget),
-           "would be over the $250.00 budget")
+           "would be over the $350.00 budget")
 
     def cc_spent_counts(fake, mk, said, raw):
         fake.spent = 137.77          # as billed by 2026-10-05, before the promo credit
         try:
-            mk({"estimateUsd": 120}).up()
+            mk({"estimateUsd": 220}).up()
         finally:
             assert fake.calls == ["billing cost list"], f"something was created over budget: {fake.calls}"
     expect("confluent: what has already been charged counts against the budget, not only this run's estimate",

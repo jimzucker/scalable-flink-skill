@@ -2855,9 +2855,11 @@ def bottleneck(rec):
                 f"of the time cleaning up memory instead of working. More memory may help, but that "
                 f"has not been measured here: try it on this case and compare.")
     lim = rec.get("kafkaEckuLimit")
-    if lim and rec.get("kafkaEcku") is not None and rec["kafkaEcku"] >= lim:
-        return (f"Kafka's capacity, blocking higher throughput. The Kafka cluster sat at its {lim} eCKU limit, "
-                f"so the pipeline was waiting on Kafka rather than using its pool.")
+    if (lim and rec.get("kafkaEcku") is not None and rec["kafkaEcku"] >= lim
+            and (rec.get("tmCapFrac") or 0) < T["capFloorOther"]):
+        return (f"Kafka's capacity, likely. The Kafka cluster sat at its {lim} eCKU limit while the pipeline used "
+                f"only {rec.get('tmCapFrac') or 0:.0%} of its pool. A cluster at its limit is not proof on its own "
+                f"(it sits there under half the load too); raise platform.maxEcku and compare.")
     if (rec.get("sourceIdle") or 0) > T["sourceIdleCeil"]:
         return (f"Nothing to read, blocking higher throughput. The pipeline sat idle "
                 f"{rec['sourceIdle']:.0%} of the time waiting for input, so whatever feeds it is the "
@@ -3645,16 +3647,11 @@ def check_case_cloud(rec, units, is_baseline):
                               f"minute, which is under {T['cloudHeadroomS']:.0f} s of work at this rate. Make the "
                               f"backlog bigger: count it as the records a reader gets, not the topic's log end "
                               f"(findings §8)")
-    if rec.get("kafkaEcku") is None:
-        raise Refusal("case", "Confluent reported no eCKU count for the Kafka cluster over the window, so there is "
-                              "no telling whether Kafka or the pool was the limit")
-    at_limit = rec.get("kafkaEckuMinutesAtLimit") or 0
-    if at_limit and at_limit == len(rec.get("wholeMinutes") or []):
-        raise Ceiling(f"the Kafka cluster sat at its {rec['kafkaEckuLimit']} eCKU limit for every minute of the "
-                      f"window, so Kafka, not the {units} CFU pool, was the limit. Raise platform.maxEcku: with it "
-                      f"at 10 the copy's 10->20 CFU step read 1.38x, at 50 it read 1.77x (findings §8). Each eCKU "
-                      f"after the first costs about $0.14 an hour. This case is kept in the table and left out of "
-                      f"the ratios.", rec)
+    # The Kafka cluster's eCKU count is recorded and reported, never a reason
+    # on its own: a Basic cluster sat at its limit for a 10 CFU case carrying
+    # half the traffic of the 20 CFU case beside it, and that step read 1.77x
+    # and 2.01x (findings §8, runs 18 and 19). The first version of this check
+    # made every such case a ceiling, and would have thrown out both tables.
     floor = T["capFloorBaseline"] if is_baseline else T["capFloorOther"]
     if rec["tmCapFrac"] < floor:
         raise Ceiling(f"the job used {rec['tmCores']:.1f} CFU of the {units} CFU pool on average ({rec['tmCapFrac']:.1%}), "

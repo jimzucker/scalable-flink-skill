@@ -2247,6 +2247,17 @@ def cmd_selftest(live=True, topic=None):
                 raise Refusal("rig", why)
         return go
     expect("local first: no laptop run named", lf_reason(good_files, path=None), "platform.localPipeline is not set")
+    def shared(cloud_results):
+        def run():
+            why = L.P.shared_results_reason("/w/app/pipeline.json", cloud_results,
+                                            read_json=lambda p: {"results": "results"})
+            if why:
+                raise Refusal("rig", why)
+        return run
+    expect("local first: the cloud run would write into the laptop's results", shared("/w/app/results"),
+           "same folder")
+    expect("local first: the cloud run has its own results folder (must not fire)", shared("/w/app/results-cloud"),
+           "", should_fire=False)
     expect("local first: completeness has not passed on the laptop",
            lf_reason(dict(good_files, **{"/w/local/results/completeness.json": {"result": "FAIL"}})),
            "completeness has not passed on the laptop")
@@ -4848,6 +4859,11 @@ def cmd_local_first():
     if lp and not os.path.isabs(lp):
         lp = os.path.join(c.root, lp)
     why = L.P.local_first_reason(lp, getattr(c.plat, "job_sql", None))
+    if why:
+        raise Refusal("rig", why)
+    # GUARD: the cloud run must not write over the laptop evidence this gate
+    # reads. Both configs sat in one folder and shared results/ (2026-10-06).
+    why = L.P.shared_results_reason(lp, c.results)
     if why:
         raise Refusal("rig", why)
     log(f"  the same app passed completeness and the tiny proof on the laptop ({lp})")

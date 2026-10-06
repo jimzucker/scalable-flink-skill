@@ -949,12 +949,22 @@ def disk_projection(tiny_topic, tiny_count, last_case_rec):
     return d
 
 
+def on_confluent():
+    c = cfg()
+    return bool(c.plat) and getattr(c.plat, "kind", "") == "confluent-cloud"
+
+
 def build_hash():
     """The jar and what the job is started with. Arguments change what the job
     does as surely as code does, and a hash of the jar alone let a changed
-    job.args keep a completeness pass it never earned (clean-room run 51, S19)."""
+    job.args keep a completeness pass it never earned (clean-room run 51, S19).
+    On Confluent Cloud there is no jar: the job is its SQL and the tables
+    around it."""
     c = cfg()
     h = hashlib.sha256()
+    if on_confluent():
+        h.update(json.dumps({"sql": c.plat.job_sql, "tables": c.plat.tables}, sort_keys=True).encode())
+        return "sql-" + h.hexdigest()[:12]
     with open(c.jar, "rb") as f:
         for b in iter(lambda: f.read(1 << 20), b""):
             h.update(b)
@@ -3729,6 +3739,19 @@ def run_case_cloud(cores, pass_id, run_id, shape_ref, is_baseline, manifest, **_
             except Refusal as e:
                 if "not found" not in e.msg.lower() and "does not exist" not in e.msg:
                     raise
+
+
+def rows_differ(expected, got):
+    """Pure. The rows in one multiset and not the other, as text, at most ten
+    of each: completeness on Confluent Cloud compares what the job wrote with
+    what was put in, with no tolerance (SKILL.md §4)."""
+    norm = lambda r: json.dumps({k: (float(v) if isinstance(v, (int, float)) or
+                                    (isinstance(v, str) and v.replace('.', '', 1).lstrip('-').isdigit()) else v)
+                                 for k, v in sorted(r.items())}, sort_keys=True)
+    from collections import Counter
+    a, b = Counter(map(norm, expected)), Counter(map(norm, got))
+    missing, extra = list((a - b).elements())[:10], list((b - a).elements())[:10]
+    return missing, extra
 
 
 def run_case(cores, pass_id, run_id, shape_ref, is_baseline, manifest,

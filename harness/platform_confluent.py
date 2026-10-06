@@ -240,6 +240,16 @@ class ConfluentCloud(Platform):
         # `submit` is the only way the harness starts it, so every case gets the
         # settings findings §8 found missing (see start_job, wait_at_size).
         self.job_sql = raw.get("jobSql")
+        # The tables the job reads and writes, written by the harness for this
+        # platform (platforms.table_ddl): {name: {"columns": [[name, type]...], "key": [...]}}.
+        self.tables = raw.get("tables") or {}
+        # How the backlog is made here: Confluent's generator has no seed, so a
+        # fill is N jobs side by side ({"jobs": N, "perJob": [SQL with {i} and {topic}]}),
+        # and the backlog is then counted as a reader sees it (manifestSql).
+        self.fill_spec = raw.get("fill") or {}
+        self.manifest_sql = raw.get("manifestSql")
+        self.verify_sql = raw.get("verifySql")
+        self.input_now = None          # completeness and the tiny proof point the job at their own topic
         self.cases = list(raw.get("_cases") or [])
         self.topic_in = raw.get("_topicIn")
         self.partitions_checked = None
@@ -433,8 +443,13 @@ class ConfluentCloud(Platform):
                 return
             except Refusal as e:
                 last = e.msg
-                if "was torn down" in e.msg or (
-                        "technical difficulties" not in e.msg and "not ready" not in e.msg.lower()):
+                # Not ready yet, as Confluent has answered a new stack: "technical
+                # difficulties" (2026-10-03), and a schema registry it could not
+                # reach yet, "failed registering schemas ... connection reset by
+                # peer" (2026-10-06).
+                transient = ("technical difficulties" in e.msg or "not ready" in e.msg.lower()
+                             or "failed registering schemas" in e.msg)
+                if "was torn down" in e.msg or not transient:
                     raise
             time.sleep(self.ready_wait_s)
         raise Refusal("rig", f"the stack never ran a statement in {self.ready_tries} tries over "
@@ -921,6 +936,123 @@ class ConfluentCloud(Platform):
             "backlogRemaining": pending.get(whole[-1]) if whole else None,
         }
 
+    # ------------------------------------------------------------ tables, fill, rows
+    def database(self):
+        return self.state.get("database") or self.state["cluster"]
+
+    def create_table(self, name, as_name=None, partitions=None):
+        """CREATE TABLE for one table in platform.tables, under its own name or
+        `as_name` (completeness and the tiny proof use their own input)."""
+        from platforms import table_ddl
+        spec = self.tables.get(name)
+        if not spec:
+            raise Refusal("rig", f"platform.tables has no table {name!r}: give its columns, so the harness can "
+                                 f"write it for Confluent Cloud")
+        target = as_name or name
+        self.run_statement(f"{self.prefix}-ddl-{target.replace('_', '-')}",
+                           table_ddl(self.kind, target, spec["columns"], partitions or spec.get("partitions", 1),
+                                     key=spec.get("key")),
+                           self.database(), pool=self.state["pool"])
+        return target
+
+    fill_poll_s = 120
+    fill_stall_s = 600
+
+    def fill_topic(self, topic, count, max_s=7200):
+        """Fill `topic` with the generator jobs side by side until its log end
+        holds `count`, then delete them. Measured (findings §8): one job used
+        1 CFU and wrote 12,700-18,400 records a second; 24 side by side,
+        264,000-300,000. Stops, saying what was written, if the log end does
+        not move for fill_stall_s."""
+        jobs = int(self.fill_spec.get("jobs", 1))
+        per_job = self.fill_spec.get("perJob") or []
+        if not per_job:
+            raise Refusal("rig", "platform.fill.perJob is not set: the SQL each fill job runs, with {i} and "
+                                 "{topic}; the last statement for each job is the one that writes")
+        running = []
+        try:
+            for i in range(1, jobs + 1):
+                for k, tmpl in enumerate(per_job):
+                    sql = tmpl.replace("{i}", str(i)).replace("{topic}", topic)
+                    self.run_statement(f"{self.prefix}-fill-{topic.replace('_', '-')}-{i}-{k}", sql,
+                                       self.database(), pool=self.state["pool"])
+                    if k == len(per_job) - 1:
+                        running.append(self.last_statement)
+            t0, last, moved = time.time(), -1, time.time()
+            while True:
+                n, _ = self.log_end(topic)
+                if n != last:
+                    last, moved = n, time.time()
+                self.log(f"  confluent-cloud fill: {n:,} of {count:,} records on {topic} "
+                         f"({(time.time() - t0) / 60:.0f} min)")
+                if n >= count:
+                    return n
+                if time.time() - moved > self.fill_stall_s:
+                    raise Refusal("rig", f"the fill stopped writing: {topic} held {n:,} of {count:,} records and did "
+                                         f"not move for {self.fill_stall_s // 60} minutes")
+                if time.time() - t0 > max_s:
+                    raise Refusal("rig", f"the fill was still running after {max_s // 3600} hours with {n:,} of "
+                                         f"{count:,} records on {topic}")
+                time.sleep(self.fill_poll_s)
+        finally:
+            for nm in running:
+                try:
+                    self.cli("flink", "statement", "delete", nm, "--cloud", self.cloud, "--region", self.region,
+                             "--force")
+                except Refusal as e:
+                    if "not found" not in e.msg.lower() and "does not exist" not in e.msg:
+                        raise
+
+    results_wait_s = 2           # the self-test sets 0
+
+    def statement_rows(self, name, sql, timeout_s=1800):
+        """Run a bounded statement and read its result rows over the Flink REST
+        API: [{column: value}]. For counting what a reader gets from a topic --
+        the log end counted 7-8% more than any reader got (findings §8).
+
+        Measured 2026-10-06: a bounded SELECT left unread until it finished
+        ended STOPPED, and its results then answered 409 "not ready" for good.
+        So the results are read page by page while it runs, a 409 is asked
+        again, and every page's change log is applied -- an update or delete
+        takes back a row given earlier -- so a GROUP BY reads as its final
+        totals."""
+        self.run_statement(name, sql, self.database(), pool=self.state["pool"], timeout_s=timeout_s)
+        nm = self.last_statement
+        st, desc = self.rest("GET", self._statement_url(nm), self._rest_auth())
+        cols = [c.get("name") for c in (((((desc or {}).get("status") or {}).get("traits") or {}).get("schema") or {})
+                                        .get("columns") or [])] if isinstance(desc, dict) else []
+        rows, url, t0 = [], self._statement_url(nm) + "/results", time.time()
+        while True:
+            if time.time() - t0 > timeout_s:
+                raise Refusal("rig", f"statement {nm} had not given all its results after {timeout_s // 60} minutes")
+            st, res = self.rest("GET", url, self._rest_auth())
+            if st == 409:                                  # "Results for Statement=... not ready"
+                time.sleep(self.results_wait_s)
+                continue
+            if st != 200 or not isinstance(res, dict):
+                raise Refusal("rig", f"the results of statement {nm} could not be read: HTTP {st} {str(res)[:200]}")
+            for item in ((res.get("results") or {}).get("data") or []):
+                row = tuple(item.get("row") if isinstance(item, dict) else item)
+                op = item.get("op", 0) if isinstance(item, dict) else 0
+                if op in (0, 2, None):                     # insert, update after
+                    rows.append(row)
+                elif op in (1, 3) and row in rows:         # update before, delete
+                    rows.remove(row)
+            nxt = (res.get("metadata") or {}).get("next")
+            if nxt:
+                url = nxt
+                if not (res.get("results") or {}).get("data"):
+                    time.sleep(self.results_wait_s)
+                continue
+            phase = (((self.rest("GET", self._statement_url(nm), self._rest_auth())[1] or {}).get("status") or {})
+                     .get("phase"))
+            if phase == "COMPLETED":
+                break
+            if phase in ("FAILED", "STOPPED", "DELETED"):
+                raise Refusal("rig", f"statement {nm} ended {str(phase).lower()} before giving all its results")
+            time.sleep(self.results_wait_s)
+        return [dict(zip(cols, r)) if cols else {"row": list(r)} for r in rows]
+
     # ------------------------------------------------------------ phase 3
     def _not_yet(self, what):
         raise Refusal("rig", f"{what} on Confluent Cloud is not built yet: the stack can be created, "
@@ -936,12 +1068,15 @@ class ConfluentCloud(Platform):
         if not self.job_sql:
             raise Refusal("rig", "platform.jobSql is not set: give the Flink SQL INSERT the job runs on Confluent "
                                  "Cloud. The same statement runs at every size; the harness sets its size")
-        if self.topic_in and self.cases and self.partitions_checked is None:
-            self.partitions_checked = self.check_partitions(self.topic_in, self.cases)
+        topic = self.input_now or self.topic_in
+        if topic and self.cases and self.partitions_checked != topic:
+            self.check_partitions(topic, self.cases)
+            self.partitions_checked = topic
         units = int(par)
         n = len(self.state.get("statements") or [])
         t0 = time.time()
-        name = self.start_job(f"{self.prefix}-job{units}-{n}", self.job_sql.format(group=group),
+        sql = self.job_sql.replace("{group}", str(group)).replace("{in}", self.input_now or self.topic_in or "")
+        name = self.start_job(f"{self.prefix}-job{units}-{n}", sql,
                               self.state.get("database") or self.state["cluster"], units)
         self.wait_at_size(name, units, t0)
         self.log(f"  confluent-cloud: job {name} runs at {units} CFU with watermark alignment off and its baseline "

@@ -2262,7 +2262,7 @@ def cmd_selftest(live=True, topic=None):
         cols = [("order_id", "STRING"), ("account", "INT")]
         cc = L.P.table_ddl("confluent-cloud", "orders", cols, 40)
         lo = L.P.table_ddl("local", "orders", cols, 40, bootstrap="kafka:9092")
-        assert cc == "CREATE TABLE orders (order_id STRING, account INT) DISTRIBUTED INTO 40 BUCKETS", cc
+        assert cc == "CREATE TABLE IF NOT EXISTS `orders` (order_id STRING, account INT) DISTRIBUTED INTO 40 BUCKETS", cc
         assert lo.startswith("CREATE TABLE orders (order_id STRING, account INT) WITH ('connector' = 'kafka', "
                              "'topic' = 'orders', 'properties.bootstrap.servers' = 'kafka:9092'"), lo
         keyed = L.P.table_ddl("confluent-cloud", "sums", cols, 20, key=["account"])
@@ -2299,8 +2299,8 @@ def cmd_selftest(live=True, topic=None):
             return fake.docker(args)
         p = mk(dict(fill_raw, _docker=docker)); p.up(); p.fill_poll_s = 0
         p.create_table("orders", partitions=40)
-        ddl = [v["sql"] for v in fake.statements.values() if v["sql"].startswith("CREATE TABLE orders")]
-        assert ddl == ["CREATE TABLE orders (order_id STRING, account INT) DISTRIBUTED INTO 40 BUCKETS"], ddl
+        ddl = [v["sql"] for v in fake.statements.values() if v["sql"].startswith("CREATE TABLE IF NOT EXISTS `orders`")]
+        assert ddl == ["CREATE TABLE IF NOT EXISTS `orders` (order_id STRING, account INT) DISTRIBUTED INTO 40 BUCKETS"], ddl
         assert p.fill_topic("orders", 1000) == 1200
         inserts = [n for n, v in fake.statements.items() if v["sql"].startswith("INSERT INTO orders")]
         assert inserts == [], f"fill jobs left running: {inserts}"

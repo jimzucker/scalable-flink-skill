@@ -443,8 +443,13 @@ class ConfluentCloud(Platform):
                 return
             except Refusal as e:
                 last = e.msg
-                if "was torn down" in e.msg or (
-                        "technical difficulties" not in e.msg and "not ready" not in e.msg.lower()):
+                # Not ready yet, as Confluent has answered a new stack: "technical
+                # difficulties" (2026-10-03), and a schema registry it could not
+                # reach yet, "failed registering schemas ... connection reset by
+                # peer" (2026-10-06).
+                transient = ("technical difficulties" in e.msg or "not ready" in e.msg.lower()
+                             or "failed registering schemas" in e.msg)
+                if "was torn down" in e.msg or not transient:
                     raise
             time.sleep(self.ready_wait_s)
         raise Refusal("rig", f"the stack never ran a statement in {self.ready_tries} tries over "

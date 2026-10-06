@@ -1701,6 +1701,11 @@ def cmd_selftest(live=True, topic=None):
                         st["status"], st["status_detail"] = "FAILED", (
                             "Unable to process the request due to technical difficulties on our end.")
                         return ok(st)
+                    if self.ran <= getattr(self, "schema_cold", 0):   # as answered on 2026-10-06
+                        st["status"], st["status_detail"] = "FAILED", (
+                            "failed registering schemas: unable to register schema on 'x-value': "
+                            "read: connection reset by peer")
+                        return ok(st)
                     st["status"] = "FAILED" if ("statement" in self.fail and "ready" not in st["name"]) else (
                         "COMPLETED" if st["sql"].upper().startswith("CREATE") else "RUNNING")
                     if st["status"] == "FAILED":
@@ -1851,6 +1856,14 @@ def cmd_selftest(live=True, topic=None):
         p.down()
     expect("confluent: up waits until a new stack runs a statement, as measured (must not fire)",
            on_confluent(cc_cold_stack, cold=2), "", should_fire=False)
+
+    def cc_schema_registry_late(fake, mk, said, raw):
+        fake.schema_cold = 2
+        p = mk(); p.up()
+        assert any("read back from Kafka" in l for l in said), said
+        p.down()
+    expect("confluent: a schema registry not reachable yet on a new stack is waited for, as measured "
+           "(must not fire)", on_confluent(cc_schema_registry_late), "", should_fire=False)
 
     def cc_never_ready(fake, mk, said, raw):
         p = mk()

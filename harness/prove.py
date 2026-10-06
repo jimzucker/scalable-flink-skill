@@ -2376,6 +2376,29 @@ def cmd_selftest(live=True, topic=None):
             raise Exception("a laptop-only row is still judged on a managed service")
     expect("platform: every laptop-only row is a real row, judged locally, reported elsewhere (must not fire)",
            laptop_rows_are_real_rows, "", should_fire=False)
+
+    def rows_reaching_the_laptop():
+        """Every preflight row whose check touches the laptop's stack (Docker, the
+        engine's REST, the cgroup) is reported as not checked on a managed
+        service. The first cloud chain stopped on one that was not."""
+        import re as _re
+        src = open(__file__).read()
+        pf = src[src.index("\ndef cmd_preflight("):]       # the definition, not this line
+        pf = pf[:pf.index("\ndef ", 10)]
+        rows = _re.findall(r'^    check\("([^"]+)",\s*([A-Za-z_]+)\)', pf, _re.M)
+        if len(rows) < 20:
+            raise Exception(f"found {len(rows)} preflight rows; the scan is not reading preflight")
+        missed = []
+        for row, fn in rows:
+            m = _re.search(r"^    def " + fn + r"\(\):\n(.*?)(?=^    def |\Z)", pf, _re.M | _re.S)
+            body = m.group(1) if m else ""
+            if _re.search(r"\brest\(|docker|dexec|tm_container|compose|cgroup|\bbroker\(", body) \
+                    and not L.P.not_checked("confluent-cloud", row):
+                missed.append(row)
+        if missed:
+            raise Exception(f"rows that reach the laptop's stack but run on a managed service: {missed}")
+    expect("platform: every row that reaches the laptop's stack is reported on a managed service (must not fire)",
+           rows_reaching_the_laptop, "", should_fire=False)
     # clean-room run 36's own measured shape (its results/tinyproof.json): 172.3 B
     # per input record, a 220M backlog = 37.9 GB, sinks capped by retention at
     # 34.4 GB, so the suite needs 92.3 GB. Re-running the tiny proof after the fill
@@ -3008,6 +3031,24 @@ def cmd_selftest(live=True, topic=None):
             raise Exception("phases.log still holds the previous chain's lines")
         raise Refusal("rig", f"chain stopped at c, d never ran, DONE says {done!r}")
     expect("all: the chain stops at the first failing step", chain, "stopped at c")
+
+    def paid_chain_tears_down():
+        downs = []
+        tmp = tempfile.mkdtemp(prefix="prove-all-selftest-")
+        try:
+            cmd_all(steps=[("up", lambda: 0), ("preflight", lambda: 1)], results=tmp,
+                    teardown=lambda: downs.append("after a stop"))
+            cmd_all(steps=[("up", lambda: 0), ("report", lambda: 0)], results=tmp,
+                    teardown=lambda: downs.append("after a pass"))
+            cmd_all(steps=[("local first", lambda: 1)], results=tmp,
+                    teardown=lambda: downs.append("with nothing created"))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        if downs != ["after a stop", "after a pass"]:
+            raise Exception(f"teardown ran {downs}; it should run after a stop and after a pass, "
+                            f"and not when nothing was created")
+    expect("all: a chain on a paid service tears its stack down however it ends (must not fire)",
+           paid_chain_tears_down, "", should_fire=False)
 
     def no_result_is_not_a_pass():
         # clean-room run 46: ten cases measured, eight thrown out, the two
@@ -4813,7 +4854,7 @@ def cmd_local_first():
     return 0
 
 
-def cmd_all(steps=None, results=None, dashboard_check=None):
+def cmd_all(steps=None, results=None, dashboard_check=None, teardown=None):
     """The whole chain as one command. Run 11 spent 20 minutes of its 1.97 h in
     the gaps between commands an agent typed by hand, and wrote phases.log by
     hand; here the harness writes it, and DONE is the file to wait on.
@@ -4944,6 +4985,18 @@ def cmd_all(steps=None, results=None, dashboard_check=None):
             verdict = (report_verdict(why, load_json("suite.json") if why else None)
                        if name == "report" else f"STOPPED at {name}" + (f": {stop_why}" if stop_why else ""))
             break
+    # GUARD: a chain on a paid service never leaves its stack running, however
+    # it ends. The first full Confluent Cloud chain (2026-10-06) stopped at
+    # preflight and left its cluster and compute pool up. On the laptop the
+    # stack stays up, as it always has. `teardown` is the self-test's way in.
+    teardown = teardown or ((lambda: L.stack_down()) if c.plat else None)
+    if teardown and any(s["step"] == "up" for s in out["steps"]):
+        try:
+            teardown()
+            mark("phase=down end rc=0: a stack on a paid service is not left running")
+        except Exception as e:
+            mark(f"phase=down end rc=1: {e}")
+            verdict += f"; the stack may still be running, check the service: {e}"
     out["verdict"] = verdict
     out["seconds"] = round(time.time() - t_all, 1)
     save_all()

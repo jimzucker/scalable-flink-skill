@@ -134,6 +134,12 @@ LAPTOP_ONLY = {
     "slots >= parallelism x jobs": "the service runs one subtask per CFU, read back as CFU in use on every case",
     "keys divide evenly across subtasks": "the service does not report its key-group layout",
     "the job jar exists and hashes": "the job is SQL; its build hash covers the SQL and its tables",
+    # Measured 2026-10-06: the first full cloud chain stopped at preflight on the
+    # back-pressure row, which asked the laptop's Flink REST and was refused a
+    # connection. The self-test now finds every row that reaches the laptop's stack.
+    "back-pressure counters exist on the endpoint read": ("busy, held-back and idle time come from the "
+                                                          "service's metrics API, read on every case"),
+    "the JDK the engine needs resolves, pinned": "the service runs its own engine and Java",
 }
 
 

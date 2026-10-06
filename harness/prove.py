@@ -1604,10 +1604,18 @@ def cmd_selftest(live=True, topic=None):
 
         def rest(self, method, url, auth, body=None):
             """The Flink REST API for one statement: GET, the baseline PATCH, and its results."""
-            if url.endswith("/results"):
-                name = url.rsplit("/", 2)[1]
-                rows = getattr(self, "results", {}).get(name, [])
-                return 200, {"results": {"data": [{"op": 0, "row": r} for r in rows]}, "metadata": {"next": None}}
+            if "/results" in url:
+                # As measured 2026-10-06: 409 "not ready" first, then pages, each
+                # with a link to the next until the statement has given everything.
+                name = url.split("/statements/")[1].split("/")[0]
+                if getattr(self, "results_409", 0) > 0:
+                    self.results_409 -= 1
+                    return 409, {"errors": [{"status": "409", "detail": f"Results for Statement={name} not ready"}]}
+                pages = getattr(self, "pages", {}).get(name) or [[{"op": 0, "row": r}
+                                                                  for r in getattr(self, "results", {}).get(name, [])]]
+                i = int(url.rsplit("page=", 1)[1]) if "page=" in url else 0
+                nxt = f"{url.split('?')[0]}?page={i + 1}" if i + 1 < len(pages) else ""
+                return 200, {"results": {"data": pages[i]}, "metadata": {"next": nxt}}
             name = url.rsplit("/", 1)[1]
             if name in getattr(self, "schemas", {}):
                 return 200, {"name": name, "status": {"phase": "COMPLETED",
@@ -2324,6 +2332,19 @@ def cmd_selftest(live=True, topic=None):
         p.down()
     expect("cloud rows: a bounded statement's rows come back by column name (must not fire)", on_confluent(cc_rows),
            "", should_fire=False)
+
+    def cc_rows_changelog(fake, mk, said, raw):
+        p = mk(); p.up(); p.results_wait_s = 0
+        fake.schemas = {"fsk-t-count": ["account", "n"]}
+        fake.results_409 = 2
+        fake.pages = {"fsk-t-count": [[{"op": 0, "row": [1, 10]}, {"op": 0, "row": [2, 3]}],
+                                      [{"op": 1, "row": [2, 3]}, {"op": 2, "row": [2, 5]}],
+                                      [{"op": 0, "row": [3, 1]}, {"op": 3, "row": [3, 1]}]]}
+        rows = p.statement_rows("fsk-t-count", "SELECT account, COUNT(*) AS n FROM orders GROUP BY account")
+        assert sorted(rows, key=lambda r: r["account"]) == [{"account": 1, "n": 10}, {"account": 2, "n": 5}], rows
+        p.down()
+    expect("cloud rows: results read while the statement runs, through 'not ready' and every page, with updates "
+           "and deletes applied (must not fire)", on_confluent(cc_rows_changelog), "", should_fire=False)
 
     def cc_gone(fake, mk, said, raw):
         p = mk(); p.up()

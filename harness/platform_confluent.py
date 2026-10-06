@@ -1003,39 +1003,55 @@ class ConfluentCloud(Platform):
                     if "not found" not in e.msg.lower() and "does not exist" not in e.msg:
                         raise
 
+    results_wait_s = 2           # the self-test sets 0
+
     def statement_rows(self, name, sql, timeout_s=1800):
         """Run a bounded statement and read its result rows over the Flink REST
         API: [{column: value}]. For counting what a reader gets from a topic --
-        the log end counted 7-8% more than any reader got (findings §8)."""
+        the log end counted 7-8% more than any reader got (findings §8).
+
+        Measured 2026-10-06: a bounded SELECT left unread until it finished
+        ended STOPPED, and its results then answered 409 "not ready" for good.
+        So the results are read page by page while it runs, a 409 is asked
+        again, and every page's change log is applied -- an update or delete
+        takes back a row given earlier -- so a GROUP BY reads as its final
+        totals."""
         self.run_statement(name, sql, self.database(), pool=self.state["pool"], timeout_s=timeout_s)
         nm = self.last_statement
-        t0 = time.time()
+        st, desc = self.rest("GET", self._statement_url(nm), self._rest_auth())
+        cols = [c.get("name") for c in (((((desc or {}).get("status") or {}).get("traits") or {}).get("schema") or {})
+                                        .get("columns") or [])] if isinstance(desc, dict) else []
+        rows, url, t0 = [], self._statement_url(nm) + "/results", time.time()
         while True:
-            st, desc = self.rest("GET", self._statement_url(nm), self._rest_auth())
-            phase = ((desc or {}).get("status") or {}).get("phase") if isinstance(desc, dict) else None
-            if phase == "COMPLETED":
-                break
-            if phase in ("FAILED", "STOPPED", "DELETED"):
-                raise Refusal("rig", f"statement {nm} did not complete ({str(phase).lower()}): "
-                                     f"{((desc or {}).get('status') or {}).get('detail')}")
             if time.time() - t0 > timeout_s:
-                raise Refusal("rig", f"statement {nm} had not completed after {timeout_s // 60} minutes")
-            time.sleep(self.poll_s)
-        cols = [c.get("name") for c in ((((desc.get("status") or {}).get("traits") or {}).get("schema") or {})
-                                        .get("columns") or [])]
-        rows, url = [], self._statement_url(nm) + "/results"
-        while url:
+                raise Refusal("rig", f"statement {nm} had not given all its results after {timeout_s // 60} minutes")
             st, res = self.rest("GET", url, self._rest_auth())
+            if st == 409:                                  # "Results for Statement=... not ready"
+                time.sleep(self.results_wait_s)
+                continue
             if st != 200 or not isinstance(res, dict):
                 raise Refusal("rig", f"the results of statement {nm} could not be read: HTTP {st} {str(res)[:200]}")
             for item in ((res.get("results") or {}).get("data") or []):
-                row = item.get("row") if isinstance(item, dict) else item
+                row = tuple(item.get("row") if isinstance(item, dict) else item)
                 op = item.get("op", 0) if isinstance(item, dict) else 0
-                if op in (0, 2) or op is None:            # insert / update-after
-                    rows.append(dict(zip(cols, row)) if cols else {"row": row})
+                if op in (0, 2, None):                     # insert, update after
+                    rows.append(row)
+                elif op in (1, 3) and row in rows:         # update before, delete
+                    rows.remove(row)
             nxt = (res.get("metadata") or {}).get("next")
-            url = nxt if nxt and nxt != url else None
-        return rows
+            if nxt:
+                url = nxt
+                if not (res.get("results") or {}).get("data"):
+                    time.sleep(self.results_wait_s)
+                continue
+            phase = (((self.rest("GET", self._statement_url(nm), self._rest_auth())[1] or {}).get("status") or {})
+                     .get("phase"))
+            if phase == "COMPLETED":
+                break
+            if phase in ("FAILED", "STOPPED", "DELETED"):
+                raise Refusal("rig", f"statement {nm} ended {str(phase).lower()} before giving all its results")
+            time.sleep(self.results_wait_s)
+        return [dict(zip(cols, r)) if cols else {"row": list(r)} for r in rows]
 
     # ------------------------------------------------------------ phase 3
     def _not_yet(self, what):

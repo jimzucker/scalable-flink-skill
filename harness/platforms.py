@@ -185,6 +185,26 @@ def _sql_words(sql):
     return " ".join(str(sql or "").replace(";", " ").split()).lower()
 
 
+def shared_results_reason(local_pipeline, cloud_results, read_json=None):
+    """Why the cloud run would write over the laptop's evidence, or None: the
+    two configs resolve to the same results folder."""
+    import json as _json
+    import os as _os
+    if not local_pipeline:
+        return None
+    read = read_json or (lambda p: _json.load(open(p)))
+    try:
+        local = read(local_pipeline)
+    except (OSError, ValueError):
+        return None
+    mine = _os.path.join(_os.path.dirname(local_pipeline), local.get("results") or "results")
+    if _os.path.normpath(mine) == _os.path.normpath(cloud_results):
+        return (f"the cloud run and the laptop run write to the same folder ({mine}), so the cloud run would "
+                f"write over the laptop evidence local first reads. Give the cloud's pipeline.json its own "
+                f"\"results\", e.g. \"results-cloud\"")
+    return None
+
+
 def local_first_reason(local_pipeline, cloud_sql, read_json=None):
     """Why a cloud run may not start yet, or None. A run on a paid service
     starts only after the same app passed on the laptop: completeness and the

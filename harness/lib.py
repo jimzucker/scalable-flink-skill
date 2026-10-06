@@ -264,7 +264,10 @@ class Cfg:
         if not re.fullmatch(r"[a-z][a-z0-9]{1,15}", p):
             raise Refusal("rig", f"project must be a short lowercase token, got {p!r}")
         self.project = p
-        self.results = os.path.join(self.root, "results")
+        # `results` names the folder next to pipeline.json (default "results"). It was
+        # read by "local first" and ignored here, so a cloud config beside its laptop
+        # config wrote into the laptop's evidence (2026-10-06).
+        self.results = os.path.join(self.root, c.get("results") or "results")
         self.stack_dir = os.path.join(self.root, "stack")
         self.net = f"{p}_default"
         self.kafka = f"{p}-kafka"

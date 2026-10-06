@@ -222,6 +222,14 @@ class ConfluentCloud(Platform):
         # 2026-10-05 after $187.85.
         self.budget = float(raw.get("budgetUsd", 350.0))
         self.budget_since = raw.get("budgetSince") or time.strftime("%Y-%m-01")
+        # Confluent's cost list lags by up to a day, so it cannot see today. On
+        # 2026-10-06 it said $170.89 while the promo credit had paid $382.02, and
+        # four $60 runs went ahead. Two current figures now count as well: the
+        # promo credit's balance, when `promoUsd` gives what it started at, and a
+        # log of every run's estimate kept next to the credentials file, counted
+        # for the days the cost list has not posted yet.
+        self.promo_usd = raw.get("promoUsd")
+        self.spend_log = os.path.join(os.path.dirname(self.credentials), "flink-skill-spend.json")
         # A Basic cluster scales itself up to 50 eCKUs by default ("max_ecku": 50
         # in its own description), each after the first billed by the hour. The
         # run caps it, so a busy suite cannot quietly cost $7 an hour.
@@ -283,7 +291,8 @@ class ConfluentCloud(Platform):
     # the teardown that found it. `organization list` answered the same on
     # 2026-10-04, when a confirming case asked it for the baseline's REST URL.
     NO_ENVIRONMENT = (("api-key", "delete"), ("environment", "list"), ("environment", "create"),
-                      ("environment", "delete"), ("organization", "list"), ("billing", "cost"))
+                      ("environment", "delete"), ("organization", "list"), ("billing", "cost"),
+                      ("billing", "promo"))
 
     def cli(self, *args, quiet=False):
         """Run one CLI command with the environment set where the command takes
@@ -340,31 +349,82 @@ class ConfluentCloud(Platform):
         return self.environment
 
     # ------------------------------------------------------------ the contract
-    def spent_usd(self):
-        """What Confluent has charged since budget_since, before any promo
-        credit: a credit pays the bill, it does not make the work cheaper.
-        Confluent's cost list lags by up to a day, so this is a floor."""
+    def charges(self):
+        """(what Confluent has charged since budget_since before any promo
+        credit, the last day its cost list shows). A credit pays the bill, it
+        does not make the work cheaper. The list lags by up to a day."""
         rows = self.cli_json("billing", "cost", "list", "--start-date", self.budget_since,
                              "--end-date", time.strftime("%Y-%m-%d", time.gmtime(time.time() + 86400))) or []
-        total = 0.0
+        total, last = 0.0, None
         for r in rows:
+            day = str(r.get("start_date") or "")[:10] or None
+            if day and (last is None or day > last):
+                last = day
             if str(r.get("line_type", "")).upper() == "PROMO_CREDIT":
                 continue
             total += float(str(r.get("amount", 0)).replace("$", "").replace(",", "") or 0)
-        return round(total, 2)
+        return round(total, 2), last
+
+    def spent_usd(self):
+        return self.charges()[0]
+
+    def unposted_estimates(self, last_day):
+        """(dollars, runs): the estimates of runs started on days the cost list
+        does not show yet, from the spend log."""
+        try:
+            entries = json.load(open(self.spend_log))
+        except (OSError, ValueError):
+            return 0.0, 0
+        after = [e for e in entries if (e.get("day") or "") > last_day] if last_day else \
+                [e for e in entries if (e.get("day") or "") >= self.budget_since]
+        return round(sum(float(e.get("estimateUsd") or 0) for e in after), 2), len(after)
+
+    def promo_used(self):
+        """(used, left) on the promo credit, or None when promoUsd is not set.
+        Confluent reports the balance as it is now, not a day late."""
+        if self.promo_usd is None:
+            return None
+        rows = self.cli_json("billing", "promo", "list") or []
+        left = sum(float(str(r.get("balance", 0)).replace("$", "").replace(",", "") or 0) for r in rows)
+        return round(float(self.promo_usd) - left, 2), round(left, 2)
+
+    def _record_spend(self, estimate):
+        try:
+            entries = json.load(open(self.spend_log))
+        except (OSError, ValueError):
+            entries = []
+        entries.append({"day": time.strftime("%Y-%m-%d", time.gmtime()), "at": time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                        time.gmtime()), "estimateUsd": float(estimate), "prefix": self.prefix})
+        os.makedirs(os.path.dirname(self.spend_log), exist_ok=True)
+        fd = os.open(self.spend_log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump(entries, f, indent=1)
 
     def up(self):
         # Budget first, before anything is created or paid for: what has
         # already been charged plus this run's estimate.
         if self.estimate is not None:
-            spent = self.spent_usd()
-            if spent + float(self.estimate) > self.budget:
-                raise Refusal("rig", f"this run is estimated at ${float(self.estimate):.2f}, and "
-                                     f"${spent:.2f} has been charged since {self.budget_since}: "
-                                     f"${spent + float(self.estimate):.2f} would be over the ${self.budget:.2f} "
-                                     f"budget. Nothing was created.")
-            self.log(f"  confluent-cloud: budget ${self.budget:.2f}; charged since {self.budget_since} "
-                     f"${spent:.2f}; this run estimated at ${float(self.estimate):.2f}")
+            est = float(self.estimate)
+            posted, last_day = self.charges()
+            unposted, runs = self.unposted_estimates(last_day)
+            promo = self.promo_used()
+            spent = posted + unposted
+            how = f"${posted:.2f} has been charged since {self.budget_since}"
+            how += f" (Confluent's cost list ends at {last_day})" if last_day else ""
+            if unposted:
+                how += (f", plus ${unposted:.2f} estimated for {runs} run{'s' if runs != 1 else ''} the cost list "
+                        f"does not show yet")
+            if promo and promo[0] > spent:
+                spent = promo[0]
+                how += f"; the promo credit says ${promo[0]:.2f} has been used, so that counts instead"
+            if spent + est > self.budget:
+                raise Refusal("rig", f"this run is estimated at ${est:.2f}, and {how}: ${spent + est:.2f} would "
+                                     f"be over the ${self.budget:.2f} budget. Nothing was created.")
+            self.log(f"  confluent-cloud: budget ${self.budget:.2f}; {how}; this run estimated at ${est:.2f}")
+            if promo and promo[1] < est:
+                self.log(f"  confluent-cloud: only ${promo[1]:.2f} of the promo credit is left, so about "
+                         f"${est - promo[1]:.2f} of this run will be charged to the card")
+            self._record_spend(est)
         self._environment(create=True)
         if not self.state.get("cluster"):
             c = self.cli_json("kafka", "cluster", "create", f"{self.prefix}-kafka", "--cloud", self.cloud,

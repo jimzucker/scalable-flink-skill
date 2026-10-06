@@ -1645,8 +1645,13 @@ def cmd_selftest(live=True, topic=None):
             if a[:3] == ["billing", "cost", "list"]:
                 if "--environment" in args:
                     return 1, "", "Error: unknown flag: --environment"
-                return ok([{"product": "FLINK", "line_type": "FLINK_NUM_CFUS", "amount": f"${self.spent:.2f}"},
-                           {"product": None, "line_type": "PROMO_CREDIT", "amount": f"$-{self.spent:.2f}"}])
+                day = {"start_date": self.posted_through} if getattr(self, "posted_through", None) else {}
+                return ok([dict(day, product="FLINK", line_type="FLINK_NUM_CFUS", amount=f"${self.spent:.2f}"),
+                           dict(day, product=None, line_type="PROMO_CREDIT", amount=f"$-{self.spent:.2f}")])
+            if a[:3] == ["billing", "promo", "list"]:
+                if "--environment" in args:
+                    return 1, "", "Error: unknown flag: --environment"
+                return ok(getattr(self, "promos", []))
             if a[:2] == ["organization", "list"]:
                 if "--environment" in args:         # as the real CLI answers (2026-10-04)
                     return 1, "", "Error: unknown flag: --environment"
@@ -1813,6 +1818,38 @@ def cmd_selftest(live=True, topic=None):
         p.down()
     expect("confluent: a run that fits in what is left of the budget goes ahead, saying what is left "
            "(must not fire)", on_confluent(cc_within_budget), "", should_fire=False)
+
+    # 2026-10-06 replayed: the cost list said $170.89 through 2026-10-05 while the
+    # FREETRIAL400 credit had $17.98 left -- $382.02 used. A $60 run must stop.
+    def cc_promo_counts(fake, mk, said, raw):
+        fake.spent, fake.posted_through = 170.89, "2026-10-05"
+        fake.promos = [{"code": "FREETRIAL400", "balance": 17.9763, "expiration": 1793613600}]
+        try:
+            mk({"estimateUsd": 60, "promoUsd": 400}).up()
+        finally:
+            assert "kafka cluster" not in " ".join(fake.calls), f"something was created over budget: {fake.calls}"
+    expect("confluent: the promo credit's balance counts when the cost list is a day behind",
+           on_confluent(cc_promo_counts), "the promo credit says $382.02 has been used")
+
+    def cc_unposted_runs_count(fake, mk, said, raw):
+        fake.spent, fake.posted_through = 170.89, "2026-10-05"
+        today = time.strftime("%Y-%m-%d", time.gmtime())
+        os.makedirs(os.path.dirname(raw["credentials"]), exist_ok=True)
+        with open(os.path.join(os.path.dirname(raw["credentials"]), "flink-skill-spend.json"), "w") as f:
+            json.dump([{"day": "2026-10-05", "estimateUsd": 60}] + [{"day": today, "estimateUsd": 60}] * 2, f)
+        try:
+            mk({"estimateUsd": 60}).up()
+        finally:
+            assert "kafka cluster" not in " ".join(fake.calls), f"something was created over budget: {fake.calls}"
+    expect("confluent: runs the cost list does not show yet count, and a posted day is not counted twice",
+           on_confluent(cc_unposted_runs_count), "plus $120.00 estimated for 2 runs")
+
+    def cc_spend_logged(fake, mk, said, raw):
+        p = mk({"estimateUsd": 12}); p.up(); p.down()
+        entries = json.load(open(os.path.join(os.path.dirname(raw["credentials"]), "flink-skill-spend.json")))
+        assert [e["estimateUsd"] for e in entries] == [12.0], entries
+    expect("confluent: every run that goes ahead is written to the spend log (must not fire)",
+           on_confluent(cc_spend_logged), "", should_fire=False)
 
     def cc_survivor(fake, mk, said, raw):
         p = mk(); p.up(); p.down()
@@ -3091,6 +3128,45 @@ def cmd_selftest(live=True, topic=None):
                             f"and not when nothing was created")
     expect("all: a chain on a paid service tears its stack down however it ends (must not fire)",
            paid_chain_tears_down, "", should_fire=False)
+
+    def crash_and_interrupt_tear_down():
+        # The first full Confluent chain crashed in its report with a KeyError
+        # and left its stack up for nine hours (2026-10-06). A crash and an
+        # interrupt must both reach the teardown and write DONE with the reason.
+        def boom():
+            raise KeyError("tmThrottledPeriodsPct")
+        def interrupted():
+            raise KeyboardInterrupt("signal 15")
+        got = []
+        for label, fn in (("crash", boom), ("interrupt", interrupted)):
+            downs = []
+            tmp = tempfile.mkdtemp(prefix="prove-all-selftest-")
+            try:
+                cmd_all(steps=[("up", lambda: 0), ("report", fn)], results=tmp,
+                        teardown=lambda: downs.append(label))
+                done = open(os.path.join(tmp, "DONE")).read().strip()
+            finally:
+                shutil.rmtree(tmp, ignore_errors=True)
+            got.append((label, downs, done))
+        crash, intr = got
+        if crash[1] != ["crash"] or "stopped with an error: KeyError" not in crash[2]:
+            raise Exception(f"a crash in a step: teardown {crash[1]}, DONE {crash[2]!r}")
+        if intr[1] != ["interrupt"] or "interrupted during report" not in intr[2]:
+            raise Exception(f"an interrupt in a step: teardown {intr[1]}, DONE {intr[2]!r}")
+    expect("all: a crash or an interrupt in a step still tears the stack down and writes DONE (must not fire)",
+           crash_and_interrupt_tear_down, "", should_fire=False)
+
+    def report_renders_cloud_records():
+        # The first full Confluent chain's own suite.json (2026-10-06): its cases
+        # have no cgroup readings, and the report crashed on the first of them.
+        out = json.load(open(os.path.join(L.HERE, "fixtures", "confluent-sqlapp-suite.json")))
+        for fn in (L.render_table, L.render_markdown):
+            try:
+                fn(out)
+            except KeyError as e:
+                raise Exception(f"{fn.__name__} still needs a laptop-only reading: {e}")
+    expect("report: a cloud case with no cgroup readings renders, with dashes (must not fire)",
+           report_renders_cloud_records, "", should_fire=False)
 
     def no_result_is_not_a_pass():
         # clean-room run 46: ten cases measured, eight thrown out, the two
@@ -4970,68 +5046,96 @@ def cmd_all(steps=None, results=None, dashboard_check=None, teardown=None):
            "tinyproof": "the tiny proof: every case end to end, and every guard broken on purpose",
            "fill": "filling the backlog — the long quiet one",
            "suite": "measuring the cases", "report": "writing the report"}
-    for i, (name, fn) in enumerate(steps):
-        t0 = time.time()
-        mark(f"phase={name} start")
-        if results == c.results:
-            L.progress(f"step {i + 1} of {len(steps)}: {say.get(name, name)}", pct=i / len(steps))
-        try:
-            rc = fn()
-        except Refusal as e:
-            log(f"STOPPED ({e.scope}): {e.msg}")
-            rc = 1
-        finally:
-            if name in ("completeness", "tinyproof", "suite"):
-                try:
-                    L.stop_sampler(); L.stop_tm()
-                except Exception:
-                    pass
-        # Every dashboard panel shows data through Grafana, checked as soon as
-        # a job has run -- minutes in, not after the hour-long suite.
-        # `dashboard_check` is the self-test's way in; the live chain asks Grafana.
-        stop_why = None
-        if name == "completeness" and not rc and (results == c.results or dashboard_check):
-            stop_why = (dashboard_check or (lambda since: L.dashboard_stop_reason(
-                L.dashboard_here(), since, time.time())))(t0)
-            if stop_why:
-                log(f"STOPPED: {stop_why}")
-                rc = 1
-        # Every series section 7 names, asked of the image actually running.
-        # Reported, never a reason to stop: a build may not use every panel.
-        if name == "completeness" and not rc and results == c.results:
+    # GUARD: a crash or an interrupt still reaches the teardown and DONE below.
+    # The first full Confluent chain crashed in its report (a KeyError) after
+    # every case was measured, never reached the teardown, and its stack sat
+    # up for nine hours with nothing in DONE to say so (2026-10-06).
+    import signal as _signal
+    def _term(signum, frame):
+        raise KeyboardInterrupt(f"signal {signum}")
+    try:
+        _old_term = _signal.signal(_signal.SIGTERM, _term)
+    except ValueError:                      # not the main thread
+        _old_term = None
+    current = None
+    try:
+        for i, (name, fn) in enumerate(steps):
+            t0 = time.time()
+            mark(f"phase={name} start")
+            if results == c.results:
+                L.progress(f"step {i + 1} of {len(steps)}: {say.get(name, name)}", pct=i / len(steps))
+            current = name
+            crash = None
             try:
-                missing = L.section7_metrics_missing(L.dashboard_here(), t0, time.time())
-                if missing is not None:
-                    save_json("section7-metrics.json", {"missing": missing,
-                                                        "checked": list(L.SECTION7_METRICS)})
-                    log(f"  {L.section7_metrics_line(missing)}")
+                rc = fn()
+            except Refusal as e:
+                log(f"STOPPED ({e.scope}): {e.msg}")
+                rc = 1
             except Exception as e:
-                log(f"  the series section 7 names were not checked: {e}")
-        if L.QUICK != quick0:
-            log(f"phase {name} left the quick flag {L.QUICK} (it was {quick0}); restoring")
-            L.QUICK = quick0
-            rc = rc or 1
-        if name == "report" and rc:
-            log("the chain measured a valid table whose step ratios do not meet the claim")
-        out["steps"].append({"step": name, "rc": rc, "seconds": round(time.time() - t0, 1)})
-        mark(f"phase={name} end rc={rc} {time.time() - t0:.0f}s")
-        save_all()
-        if rc:
-            # What a person reads when the chain is over. "FAIL at report"
-            # said nothing about what happened; the run it described had a
-            # clean table and a pipeline that missed its target. And a run
-            # that measured nothing is a third thing again -- clean-room run
-            # 46 kept two cases out of ten, both at the same core count, and
-            # this file said PASS.
-            why = None
-            if name == "report":
+                import traceback as _tb
+                crash = f"the harness itself stopped with an error: {type(e).__name__}: {e}"
+                log(f"STOPPED: {crash}\n{_tb.format_exc()}")
+                rc = 1
+            finally:
+                if name in ("completeness", "tinyproof", "suite"):
+                    try:
+                        L.stop_sampler(); L.stop_tm()
+                    except Exception:
+                        pass
+            # Every dashboard panel shows data through Grafana, checked as soon as
+            # a job has run -- minutes in, not after the hour-long suite.
+            # `dashboard_check` is the self-test's way in; the live chain asks Grafana.
+            stop_why = None
+            if name == "completeness" and not rc and (results == c.results or dashboard_check):
+                stop_why = (dashboard_check or (lambda since: L.dashboard_stop_reason(
+                    L.dashboard_here(), since, time.time())))(t0)
+                if stop_why:
+                    log(f"STOPPED: {stop_why}")
+                    rc = 1
+            # Every series section 7 names, asked of the image actually running.
+            # Reported, never a reason to stop: a build may not use every panel.
+            if name == "completeness" and not rc and results == c.results:
                 try:
-                    why = (load_json("suite.json") or {}).get("reportVerdict")
-                except Exception:
-                    why = None
-            verdict = (report_verdict(why, load_json("suite.json") if why else None)
-                       if name == "report" else f"STOPPED at {name}" + (f": {stop_why}" if stop_why else ""))
-            break
+                    missing = L.section7_metrics_missing(L.dashboard_here(), t0, time.time())
+                    if missing is not None:
+                        save_json("section7-metrics.json", {"missing": missing,
+                                                            "checked": list(L.SECTION7_METRICS)})
+                        log(f"  {L.section7_metrics_line(missing)}")
+                except Exception as e:
+                    log(f"  the series section 7 names were not checked: {e}")
+            if L.QUICK != quick0:
+                log(f"phase {name} left the quick flag {L.QUICK} (it was {quick0}); restoring")
+                L.QUICK = quick0
+                rc = rc or 1
+            if name == "report" and rc and not crash:
+                log("the chain measured a valid table whose step ratios do not meet the claim")
+            out["steps"].append({"step": name, "rc": rc, "seconds": round(time.time() - t0, 1)})
+            mark(f"phase={name} end rc={rc} {time.time() - t0:.0f}s")
+            save_all()
+            if rc:
+                # What a person reads when the chain is over. "FAIL at report"
+                # said nothing about what happened; the run it described had a
+                # clean table and a pipeline that missed its target. And a run
+                # that measured nothing is a third thing again -- clean-room run
+                # 46 kept two cases out of ten, both at the same core count, and
+                # this file said PASS.
+                why = None
+                if name == "report":
+                    try:
+                        why = (load_json("suite.json") or {}).get("reportVerdict")
+                    except Exception:
+                        why = None
+                verdict = (f"STOPPED at {name}: {crash}" if crash else
+                           report_verdict(why, load_json("suite.json") if why else None)
+                           if name == "report" else f"STOPPED at {name}" + (f": {stop_why}" if stop_why else ""))
+                break
+    except (KeyboardInterrupt, SystemExit) as e:
+        verdict = f"STOPPED: interrupted during {current} ({e or type(e).__name__})"
+        mark(f"phase={current} end rc=1 interrupted")
+    finally:
+        if _old_term is not None:
+            _signal.signal(_signal.SIGTERM, _old_term)
+
     # GUARD: a chain on a paid service never leaves its stack running, however
     # it ends. The first full Confluent Cloud chain (2026-10-06) stopped at
     # preflight and left its cluster and compute pool up. On the laptop the

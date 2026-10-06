@@ -4213,10 +4213,22 @@ def render_table(out):
             # suite.txt, no suite.md and no DONE.
             out_col = (f"{r['outputRecsPerSec']:>11,.0f}"
                        if r.get("outputRecsPerSec") is not None else f"{'-':>11}")
+            # A managed service has no cgroup to read, so a cloud case has no
+            # throttled-periods figure; the first full Confluent chain lost its
+            # report to a KeyError here (2026-10-06). Every column shows a dash
+            # when its reading does not exist.
+            def col(key, fmt, width):
+                v = r.get(key)
+                return format(v, fmt) if isinstance(v, (int, float)) else f"{'—':>{width}}"
+            tm = (f"{r['tmCores']:>6.2f}/{r['cores']:<3}" if isinstance(r.get("tmCores"), (int, float))
+                  else f"{'—':>10}")
+            kc = (f"{r['kafkaCores']:>6.2f}/{c.kafka_cap:<3g}" if isinstance(r.get("kafkaCores"), (int, float))
+                  and c.kafka_cap is not None else f"{'—':>10}")
+            hd = f"{col('headroomS', '>5.0f', 5)}s" if isinstance(r.get("headroomS"), (int, float)) else f"{'—':>6}"
             L.append(f"{r['cores']:>5} {r['pass']:>8} {r['recordsPerSec']:>11,.0f} {out_col} "
-                     f"{r['tmCores']:>6.2f}/{r['cores']:<3} {r['tmCapFrac']:>5.1%} {r['tmThrottledPeriodsPct']:>5.0f} "
-                     f"{r['kafkaCores']:>6.2f}/{c.kafka_cap:<3g} {r['sourceIdle']:>7.1%} {r['sourceBackpressured']:>6.1%} "
-                     f"{r['headroomS']:>5.0f}s {r['vantageDisagreement']:>5.1%} {r.get('status', 'OK'):>8}")
+                     f"{tm} {col('tmCapFrac', '>5.1%', 6)} {col('tmThrottledPeriodsPct', '>5.0f', 5)} "
+                     f"{kc} {col('sourceIdle', '>7.1%', 8)} {col('sourceBackpressured', '>6.1%', 7)} "
+                     f"{hd} {col('vantageDisagreement', '>5.1%', 6)} {r.get('status', 'OK'):>8}")
             if r.get("status") == "CEILING":
                 L.append(f"        ceiling: {r.get('ceiling')}")
         else:
@@ -4365,9 +4377,16 @@ def render_markdown(out):
     for r in out["runs"]:
         if r.get("status") in ("OK", "CEILING"):
             mark = " **(ceiling)**" if r.get("status") == "CEILING" else ""
-            L.append(f"| {r['cores']} | {r['pass']}{mark} | {r['recordsPerSec']:,.0f} | {r['tmCores']:.2f} | {r['tmCapFrac']:.1%} | "
-                     f"{r['tmThrottledPeriodsPct']:.0f}% | {r['kafkaCores']:.2f} / {c.kafka_cap:g} | {r['sourceIdle']:.1%} | "
-                     f"{r['sourceBackpressured']:.1%} | {r['headroomS']:.0f} s | {r['vantageDisagreement']:.2%} |")
+            # Same as the text table: a reading a platform does not have is a dash.
+            def cell(key, fmt, suffix=""):
+                v = r.get(key)
+                return format(v, fmt) + suffix if isinstance(v, (int, float)) else "—"
+            kafka = (f"{r['kafkaCores']:.2f} / {c.kafka_cap:g}" if isinstance(r.get("kafkaCores"), (int, float))
+                     and c.kafka_cap is not None else "—")
+            L.append(f"| {r['cores']} | {r['pass']}{mark} | {r['recordsPerSec']:,.0f} | {cell('tmCores', '.2f')} | "
+                     f"{cell('tmCapFrac', '.1%')} | {cell('tmThrottledPeriodsPct', '.0f', '%')} | {kafka} | "
+                     f"{cell('sourceIdle', '.1%')} | {cell('sourceBackpressured', '.1%')} | {cell('headroomS', '.0f', ' s')} | "
+                     f"{cell('vantageDisagreement', '.2%')} |")
         else:
             L.append(f"| {r['cores']} | {r['pass']} | STOPPED ({r.get('refusalScope')}) — {r.get('refusal','')[:80]} | | | | | | | | |")
     L += ["", "| cores | passes | mean records/s | spread | reportable |", "|---:|---:|---:|---:|---|"]

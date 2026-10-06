@@ -472,8 +472,8 @@ def cmd_selftest(live=True, topic=None):
     run4 = dict(reportable=True, meetsClaim=False, ratio=1.779, idealRatio=2.0,
                 ratioLowCI=1.645, ratioHighCI=1.823, adjacentPairs=[1.734, 1.734, 1.87],
                 step="2->4", **{"from": 2, "to": 4})
-    expect("verdict: reference run 4's 2->4, 1.65-1.82x, is not settled (must not fire)",
-           verdict_of(run4, "not settled"), "", should_fire=False)
+    expect("verdict: reference run 4's 2->4, 1.65-1.82x, is undecided (must not fire)",
+           verdict_of(run4, "undecided"), "", should_fire=False)
     expect("verdict: run 37's 2->4, 1.75-1.78x, wholly under 1.80x, is missed (must not fire)",
            verdict_of(dict(run4, ratio=1.77, ratioLowCI=1.752, ratioHighCI=1.776), "missed"), "",
            should_fire=False)
@@ -506,7 +506,7 @@ def cmd_selftest(live=True, topic=None):
            settles(RUN4, [2, 4, 2, 4]), "", should_fire=False)
     expect("settle: after a 2-core case, 2->4 starts at 4 (must not fire)",
            settles(RUN4[:8], [4, 2, 4]), "", should_fire=False)
-    expect("scorecard: a step that is not settled asks for more passes, not tuning (must not fire)",
+    expect("scorecard: a step that is undecided asks for more passes, not tuning (must not fire)",
            steps({}, run4, False, "more passes"), "", should_fire=False)
 
     def detail(kw, cores, step, baseline, want):
@@ -840,8 +840,8 @@ def cmd_selftest(live=True, topic=None):
                                         "(single pairs ran 1.70x to 1.98x)"), L.settle_range(step)
         done = report_verdict("not-settled", {"unsettledSteps": [
             {"step": "2->4", "ratio": 1.858, "low": 1.771, "high": 1.9, "need": 1.8, "pairs": 8}]})
-        assert done == ("STOPPED at report: not settled — 2→4 reads 1.86x, and the range its 8 pairs "
-                        "support, 1.77x to 1.90x, spans the 1.80x target. Report it as not settled and "
+        assert done == ("STOPPED at report: undecided — 2→4 reads 1.86x, and the range its 8 pairs "
+                        "support, 1.77x to 1.90x, spans the 1.80x target. Report it as undecided and "
                         "change nothing in the pipeline"), done
         assert report_verdict("claim-not-met", {}).startswith("STOPPED at report: the table is good")
         assert report_verdict(None, None) == "STOPPED at report: the table could not be reported"
@@ -2301,6 +2301,60 @@ def cmd_selftest(live=True, topic=None):
            "same folder")
     expect("local first: the cloud run has its own results folder (must not fire)", shared("/w/app/results-cloud"),
            "", should_fire=False)
+
+    def claimed(cases, steps):
+        def run():
+            why = L.P.unclaimed_cases_reason(cases, steps)
+            if why:
+                raise Refusal("rig", why)
+        return run
+    expect("cases: the first full Confluent suite's 5 CFU cases served no claimed step",
+           claimed([5, 10, 20], ["10->20"]), "the 5 CFU case is in no claimed step")
+    expect("cases: a paid run names the steps its claim is about", claimed([10, 20], None), "name the steps")
+    expect("cases: a claimed step must be between neighbouring cases", claimed([5, 10, 20], ["5->20"]),
+           "not a step between neighbouring cases")
+    expect("cases: every case serves a claimed step (must not fire)", claimed([10, 20], ["10->20"]), "",
+           should_fire=False)
+    expect("cases: both steps claimed keeps all three cases (must not fire)",
+           claimed([5, 10, 20], ["5->10", "10->20"]), "", should_fire=False)
+
+    def docker_config_without_helper():
+        home = tempfile.mkdtemp(prefix="fsk-home-")
+        try:
+            os.makedirs(os.path.join(home, ".docker", "cli-plugins"))
+            os.makedirs(os.path.join(home, ".docker", "contexts"))
+            with open(os.path.join(home, ".docker", "config.json"), "w") as f:
+                json.dump({"auths": {"x": {}}, "credsStore": "desktop", "currentContext": "desktop-linux"}, f)
+            d = L.harness_docker_config(home=home, dest=os.path.join(home, "out"))
+            got = json.load(open(os.path.join(d, "config.json")))
+            links = sorted(x for x in os.listdir(d) if os.path.islink(os.path.join(d, x)))
+        finally:
+            shutil.rmtree(home, ignore_errors=True)
+        if got != {"currentContext": "desktop-linux"} or links != ["cli-plugins", "contexts"]:
+            raise Exception(f"config {got}, links {links}")
+    expect("docker: the harness's config keeps the context and plugins, never the credential helper (must not fire)",
+           docker_config_without_helper, "", should_fire=False)
+
+    def shape_changes_the_build():
+        c = cfg()
+        jar0, tmpd = c.jar, tempfile.mkdtemp(prefix="fsk-jar-")
+        c.jar = os.path.join(tmpd, "job.jar")
+        with open(c.jar, "wb") as f:
+            f.write(b"a jar")
+        gen = c.raw.setdefault("generator", {})
+        old = gen.get("cmd")
+        try:
+            before = L.build_hash()
+            gen["cmd"] = (old or "") + " --symbols=32768"
+            after = L.build_hash()
+        finally:
+            gen["cmd"] = old
+            c.jar = jar0
+            shutil.rmtree(tmpd, ignore_errors=True)
+        if before == after:
+            raise Exception(f"the generator's settings do not change the build hash ({before} -> {after})")
+    expect("build: a changed input shape is a new build, so completeness runs again (must not fire)",
+           shape_changes_the_build, "", should_fire=False)
     expect("local first: completeness has not passed on the laptop",
            lf_reason(dict(good_files, **{"/w/local/results/completeness.json": {"result": "FAIL"}})),
            "completeness has not passed on the laptop")
@@ -2707,7 +2761,7 @@ def cmd_selftest(live=True, topic=None):
         saved = L._CFG.out_per_in
         try:
             for name, must in (("suite-no-fanout.json", ()),
-                               ("suite-run52-not-settled.json", ("not settled", "settle-6", "1->2"))):
+                               ("suite-run52-not-settled.json", ("undecided", "settle-6", "1->2"))):
                 out = json.load(open(os.path.join(here, "fixtures", name)))
                 out["table"] = L.build_table(out["runs"], quick=out.get("quickLook", False))
                 L._CFG.out_per_in = out.get("outputsPerInput")
@@ -3167,6 +3221,20 @@ def cmd_selftest(live=True, topic=None):
                 raise Exception(f"{fn.__name__} still needs a laptop-only reading: {e}")
     expect("report: a cloud case with no cgroup readings renders, with dashes (must not fire)",
            report_renders_cloud_records, "", should_fire=False)
+
+    def interval_holds_its_ratio():
+        # The first full Confluent suite printed 5->10 at 1.789x and called it met:
+        # its one same-time pair read 1.948x, and the interval sat above the point.
+        out = json.load(open(os.path.join(L.HERE, "fixtures", "confluent-sqlapp-suite.json")))
+        t = L.build_table(out["runs"])
+        s = {r["step"]: r for r in t["stepRatios"]}["5->10"]
+        if not (s["ratioLowCI"] <= s["ratio"] <= s["ratioHighCI"]):
+            raise Exception(f"5->10 prints {s['ratio']}x outside its interval {s['ratioLowCI']}-{s['ratioHighCI']}x")
+        if L.step_verdict(s) != "undecided":
+            raise Exception(f"5->10 at {s['ratio']}x with {s['ratioLowCI']}-{s['ratioHighCI']}x reads "
+                            f"{L.step_verdict(s)!r}, not undecided")
+    expect("verdict: a step printed under its target is never called met (must not fire)",
+           interval_holds_its_ratio, "", should_fire=False)
 
     def no_result_is_not_a_pass():
         # clean-room run 46: ten cases measured, eight thrown out, the two
@@ -4476,7 +4544,7 @@ def settle_suite(runs, run_one, budget, judge=None, say=None):
         # Said again whenever the open step changes: reference run 5 settled
         # 1->2 with one case and went on to 2->4 under a line naming 1 and 2.
         if step["step"] != announced:
-            say(f"  {step['step']} is not settled: {step['ratioLowCI']:.2f}x to {step['ratioHighCI']:.2f}x "
+            say(f"  {step['step']} is undecided: {step['ratioLowCI']:.2f}x to {step['ratioHighCI']:.2f}x "
                 f"spans the target. Running up to {budget - extra} more case(s) of "
                 f"{step['from']} and {step['to']} cores to decide it.")
             announced = step["step"]
@@ -4592,7 +4660,7 @@ def cmd_suite():
                 break
         if stop:
             break
-    # A step whose interval spans the target is not settled by the planned
+    # A step whose interval spans the target is undecided by the planned
     # passes. Run its two cases alternately -- each case after the first adds a
     # pair of neighbours in time -- until it settles or the budget is spent.
     # Reference run 4 (2026-09-28) read 2->4 at 1.65-1.82x from three pairs.
@@ -4774,8 +4842,8 @@ def cmd_report():
         return 1
     # A step whose interval spans the target is not a shortfall: the passes
     # cannot tell met from missed. Said as such, and never sent to tuning.
-    unsettled = [r for r in short if L.step_verdict(r) == "not settled"]
-    short = [r for r in short if L.step_verdict(r) != "not settled"]
+    unsettled = [r for r in short if L.step_verdict(r) == "undecided"]
+    short = [r for r in short if L.step_verdict(r) != "undecided"]
     if unsettled and not short:
         out["reportVerdict"] = "not-settled"
         out["unsettledSteps"] = [{"step": r["step"], "ratio": r["ratio"], "low": r["ratioLowCI"],
@@ -4784,7 +4852,7 @@ def cmd_report():
                                   "range": L.settle_range(r)}
                                  for r in unsettled]
         save_json("suite.json", out)
-        print("\nNOT SETTLED\n")
+        print("\nUNDECIDED\n")
         for u in out["unsettledSteps"]:
             for line in textwrap.wrap(f"{u['step'].replace('->', '→')} cores reads {u['ratio']:.2f}x. "
                                       f"{u['range']}, which spans the {u['need']:.2f}x target.", 86):
@@ -4795,7 +4863,7 @@ def cmd_report():
                                      if ran else ""), 86):
             print(f"  {line}")
         print()
-        print("  What to do: change nothing in the pipeline on this step. Report it as not settled,")
+        print("  What to do: change nothing in the pipeline on this step. Report it as undecided,")
         print("  with the range above; that is a result. If the claim needs it decided, run")
         print("  `prove.py suite` again — a new suite, with its own passes and settling cases —")
         print("  or raise `passes` in pipeline.json first. With nobody to ask, stop here and report.\n")
@@ -4804,7 +4872,7 @@ def cmd_report():
         t = out["table"]
         need = 2 * T["scalingFloor"]
         for r in unsettled:
-            print(f"  ({r['step']} cores is not settled: {r['ratioLowCI']:.2f}x to {r['ratioHighCI']:.2f}x "
+            print(f"  ({r['step']} cores is undecided: {r['ratioLowCI']:.2f}x to {r['ratioHighCI']:.2f}x "
                   f"spans the target.)")
 
         def why(r, pad):
@@ -4941,12 +5009,12 @@ def report_verdict(why, suite):
         return ("STOPPED at report: no scaling result — too many cases were "
                 "thrown out to compare one core count with another")
     if why == "not-settled":
-        return ("STOPPED at report: not settled — "
+        return ("STOPPED at report: undecided — "
                 + "; ".join(f"{u['step'].replace('->', '→')} reads {u['ratio']:.2f}x, and "
                             f"the range its {u['pairs']} pairs support, {u['low']:.2f}x "
                             f"to {u['high']:.2f}x, spans the {u['need']:.2f}x target"
                             for u in (suite.get("unsettledSteps") or []))
-                + ". Report it as not settled and change nothing in the pipeline")
+                + ". Report it as undecided and change nothing in the pipeline")
     if why == "claim-not-met":
         return "STOPPED at report: the table is good, the pipeline did not meet the target"
     if why == "step-missing":
@@ -4971,6 +5039,10 @@ def cmd_local_first():
     # GUARD: the cloud run must not write over the laptop evidence this gate
     # reads. Both configs sat in one folder and shared results/ (2026-10-06).
     why = L.P.shared_results_reason(lp, c.results)
+    if why:
+        raise Refusal("rig", why)
+    # GUARD: on a paid service, only the cases a claimed step needs.
+    why = L.P.unclaimed_cases_reason(c.cases, c.raw.get("claimSteps"), getattr(c.plat, "unit", "units"))
     if why:
         raise Refusal("rig", why)
     log(f"  the same app passed completeness and the tiny proof on the laptop ({lp})")
@@ -5263,6 +5335,9 @@ if __name__ == "__main__":
         if rc:
             print("not running: a threshold disagrees with the record")
             sys.exit(rc)
+    # The user's own DOCKER_CONFIG wins; otherwise no credential helper.
+    if "DOCKER_CONFIG" not in os.environ:
+        os.environ["DOCKER_CONFIG"] = L.harness_docker_config()
     try:
         rc = COMMANDS[name]()
     except Refusal as e:

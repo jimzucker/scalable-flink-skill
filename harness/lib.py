@@ -539,6 +539,33 @@ class Cfg:
 _CFG = None
 
 
+def harness_docker_config(home=None, dest=None):
+    """A Docker config for the harness's own docker calls: the user's context
+    and CLI plugins (compose is one), and no credential helper. The helper hung
+    runs and raised macOS permission prompts on this project (clean-room runs,
+    2026-09-20); the images the harness pulls are public. Returns the folder.
+    Pure apart from the files it writes under `dest`."""
+    home = home or os.path.expanduser("~")
+    dest = dest or os.path.join(home, ".cache", "scalable-flink-skill", "docker-config")
+    src = os.path.join(home, ".docker")
+    os.makedirs(dest, mode=0o700, exist_ok=True)
+    keep = {}
+    try:
+        with open(os.path.join(src, "config.json")) as f:
+            mine = json.load(f)
+        if mine.get("currentContext"):
+            keep["currentContext"] = mine["currentContext"]
+    except (OSError, ValueError):
+        pass
+    with open(os.path.join(dest, "config.json"), "w") as f:
+        json.dump(keep, f)
+    for sub in ("cli-plugins", "contexts"):
+        there, here = os.path.join(src, sub), os.path.join(dest, sub)
+        if os.path.isdir(there) and not os.path.lexists(here):
+            os.symlink(there, here)
+    return dest
+
+
 def cfg():
     global _CFG
     if _CFG is None:
@@ -965,13 +992,23 @@ def build_hash():
     around it."""
     c = cfg()
     h = hashlib.sha256()
+    # The input's shape is part of the build: a different key count or record
+    # size breaks memory, backlog sizing and the verifier's expectations as
+    # surely as a code change (symbols 4 -> 32,768 took GC to 9-10% of a case,
+    # 2026-09). The generator's settings are in the hash, so a changed shape
+    # loses its completeness pass and the chain runs again from the start. The
+    # count and seed are filled in per run and are not the shape.
+    shape = {"generator": (c.raw.get("generator") or {}).get("cmd"),
+             "manifest": (c.raw.get("generator") or {}).get("manifestCmd")}
     if on_confluent():
-        h.update(json.dumps({"sql": c.plat.job_sql, "tables": c.plat.tables}, sort_keys=True).encode())
+        h.update(json.dumps({"sql": c.plat.job_sql, "tables": c.plat.tables,
+                             "fill": getattr(c.plat, "fill_spec", None)}, sort_keys=True).encode())
         return "sql-" + h.hexdigest()[:12]
     with open(c.jar, "rb") as f:
         for b in iter(lambda: f.read(1 << 20), b""):
             h.update(b)
     h.update(f"\n{c.main_class}\n{c.job_args}".encode())
+    h.update(("\n" + json.dumps(shape, sort_keys=True)).encode())
     return h.hexdigest()[:16]
 
 
@@ -1839,7 +1876,7 @@ def probe_advice(spread, gap):
                 "steady this machine is, and that is the one to compare with the shortfall."]
     return ["That is too wide to explain anything, and more repeats will not fix it: the middle",
             "half converges on how variable this machine is, and this is that figure. Say the",
-            "machine cannot be ruled in or out here, and stop — an honest 'not settled' costs one",
+            "machine cannot be ruled in or out here, and stop — an honest 'undecided' costs one",
             "line. Look at the arms separately first: one of them is often steady enough to use."]
 
 
@@ -2389,7 +2426,7 @@ def design_diff(design, plan, topic_records, built_constraints, before_fill=Fals
                                           for op in (design.get("operators") or []))]
     for l in extra:
         rows.append({"area": "in the build only", "declared": l, "built": True,
-                     "detail": "not named in the design, which is allowed"})
+                     "detail": "not named in the design; that passes"})
 
     if not missing:
         return rows, None
@@ -2793,7 +2830,7 @@ def reads_low(step):
 
 def step_verdict(step):
     """Pure. "met" when the whole interval clears the target, "missed" when
-    the whole interval is under it, "not settled" when it spans the target,
+    the whole interval is under it, "undecided" when it spans the target,
     None when the step was not reported. Three reference runs of one build on
     2026-09-26 and 09-28 printed "missed" for a step whose interval spanned the
     target: 1.78x with a range of 1.65-1.82x is not a shortfall, it is too few
@@ -2805,7 +2842,7 @@ def step_verdict(step):
     need = step.get("idealRatio", 2) * T["scalingFloor"]
     hi = step.get("ratioHighCI")
     if step.get("ratioLowCI") and hi and hi >= need:
-        return "not settled"
+        return "undecided"
     return "missed"
 
 
@@ -2827,7 +2864,7 @@ def settle_next(runs, steps):
     target: the other end of the first such step from the case that ran last,
     so each new case makes a pair with its neighbour in time. Returns
     (cores, step) or None when every step is settled."""
-    open_steps = [r for r in steps if step_verdict(r) == "not settled"]
+    open_steps = [r for r in steps if step_verdict(r) == "undecided"]
     if not open_steps:
         return None
     step = open_steps[0]
@@ -2881,7 +2918,7 @@ def bottleneck(rec):
     kcap = getattr(c, "kafka_cap", 0) or 0
     if kcap and (rec.get("kafkaCores") or 0) / kcap >= 0.90:
         return (f"Kafka's CPU, blocking higher throughput. Kafka used {rec['kafkaCores']:.2f} of the "
-                f"{kcap:g} cores it is allowed, so the pipeline was waiting on Kafka rather than "
+                f"{kcap:g} cores it is limited to, so the pipeline was waiting on Kafka rather than "
                 f"working.")
     if cap >= T["capFloorOther"]:
         return (f"CPU at {cap:.0%} of {its}, blocking higher throughput. That is what we want, "
@@ -2973,7 +3010,7 @@ def corrective_action(rec, step=None, is_baseline=False):
             return "no usable step"
         if reads_low(step):
             return "baseline reads low"
-        if step_verdict(step) == "not settled":
+        if step_verdict(step) == "undecided":
             return "more passes"
         if not step.get("meetsClaim"):
             # Run 44 was told "investigate" twice while every column beside it
@@ -3005,9 +3042,9 @@ def action_detail(rec, cores, step=None, is_baseline=False):
         if reads_low(step):
             return (f"{n_cores(cores)}: doubling gave {ratio:.2f}x, more than the {ideal:.2f}x a doubling "
                     f"can give, so the smaller case reads too low.")
-        if step_verdict(step) == "not settled":
+        if step_verdict(step) == "undecided":
             return (f"{n_cores(cores)}: doubling gave {ratio:.2f}x. {settle_range(step)}, which "
-                    f"spans the {need:.2f}x target, so this step is not settled either way. Change "
+                    f"spans the {need:.2f}x target, so this step is undecided either way. Change "
                     f"nothing in the pipeline on it.")
         if not step.get("meetsClaim"):
             lo = step.get("ratioLowCI")
@@ -3132,11 +3169,11 @@ def scorecard(out):
         busiest = next((r for r in (out.get("runs") or []) if (r.get("hostLoadClose") or 0) == worst[1]), {})
         own = (busiest.get("cores") or 0) + c.kafka_cap + c.jm_cap
         notes.append(f"  {where}the machine's load reached {worst[1]:.1f} on {worst[2]} cores while measuring. "
-                     f"This run's own containers are allowed about {own:.1f} of them, so some or all of "
+                     f"This run's own containers are limited to about {own:.1f} of them, so some or all of "
                      f"that is the run itself. If this pass reads like the others at its size it cost "
                      f"nothing; if it does not, close what else is running and measure again.")
     L.append("")
-    L.append("  Each pair is what it was allowed and how much of that went:")
+    L.append("  Each pair is the limit it had and how much of that it used:")
     L.append("    scaling           what the step into this case gave — nothing on the baseline")
     L.append("    pipeline CPU      cores it could use / how much of them it used")
     L.append("    pipeline memory   memory it could use / share of the time spent tidying memory up")
@@ -3168,8 +3205,9 @@ def scorecard(out):
             verdict = f"above {r['idealRatio']:.2f}x, so the smaller case reads low"
         elif r.get("meetsClaim"):
             verdict = "met"
-        elif step_verdict(r) == "not settled":
-            verdict = f"not settled — {settle_range(r)[0].lower() + settle_range(r)[1:]}, which spans the target"
+        elif step_verdict(r) == "undecided":
+            verdict = (f"undecided — the readings fall on both sides of the target: "
+                       f"{settle_range(r)[0].lower() + settle_range(r)[1:]}")
         elif lo and r["ratio"] >= need:
             # the number shown clears the target and the verdict says missed,
             # which reads as a broken tool unless it says what was judged
@@ -4079,6 +4117,13 @@ def build_table(runs, cases_order=None, quick=False):
                          ratioLow=round(cb["minRecordsPerSec"] / ca["maxRecordsPerSec"], 3),
                          ratioHigh=round(cb["maxRecordsPerSec"] / ca["minRecordsPerSec"], 3),
                          efficiency=round(r / (b / a), 4), reportable=True)
+            # The interval always holds the ratio it is printed beside. The first
+            # full Confluent suite (2026-10-06) printed 5->10 at 1.789x and called
+            # it met: its one same-time pair read 1.948x, so the interval was
+            # 1.841-2.055x, above its own point. The burden is on the claim.
+            if entry.get("ratioLowCI") is not None:
+                entry["ratioLowCI"] = min(entry["ratioLowCI"], entry["ratio"])
+                entry["ratioHighCI"] = max(entry["ratioHighCI"], entry["ratio"])
         else:
             entry.update(reportable=False,
                          voidedBy=[x for x in (a, b) if not cases[x]["reportable"]],

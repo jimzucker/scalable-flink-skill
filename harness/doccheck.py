@@ -531,10 +531,10 @@ def check_dashboard_rows(fail):
                   "checkpoint duration", "job restarts", "failed checkpoints"):
         if f"| {panel}" not in sec:
             fail(f"SKILL.md \u00a77 no longer lists the {panel} panel")
-    if "With nobody to ask, report the step as not settled" not in skill:
-        fail("SKILL.md \u00a76 no longer tells an unattended agent what to do with a step that is not settled")
-    if "**not settled** when it spans 1.80" not in skill:
-        fail("SKILL.md \u00a76 no longer gives the claim its three outcomes: met, missed, not settled")
+    if "With nobody to ask, report the step as undecided" not in skill:
+        fail("SKILL.md \u00a76 no longer tells an unattended agent what to do with a step that is undecided")
+    if "**undecided** when it spans 1.80" not in skill:
+        fail("SKILL.md \u00a76 no longer gives the claim its three outcomes: met, missed, undecided")
     if "The dashboard opens on the suite" not in skill:
         fail("SKILL.md \u00a77 no longer says the harness sets the dashboard's range to the suite")
     if "The harness tests the dashboard as it tests the job" not in skill:
@@ -888,14 +888,18 @@ def check_plain_english(fail):
     banned = {"refus": "say stopped the run, or threw the case out",
               "fail at ": "say STOPPED at <step>, and why in the same line",
               "failed at ": "say stopped at <step>, and why in the same line",
-              "ran out of space": "say there is not enough disk space"}
+              "ran out of space": "say there is not enough disk space",
+              # 2026-10-06: "what does 'allowed' mean?" and "what is not settled not
+              # english" -- a check's result is PASS or STOPPED, a step's verdict is
+              # met, missed or undecided.
+              "not settled": "say undecided, and that the readings fall on both sides of the target"}
     # Keys the harness writes into its JSON for a machine to read back, and the
     # recorded expectations that go with them. Not prose, not read by a person,
     # and renaming them would break every recorded run.
     allowed = {"refusal", "refusalScope", "refusals", "refuse", "accept"}
     triples = ('"' * 3, "'" * 3)
     bad = []
-    for name in ("lib.py", "prove.py"):
+    for name in ("lib.py", "prove.py", "platform_confluent.py", "platforms.py"):
         src = read(HERE, name)
         # The text inside f-strings too: it reached a person on every stopped
         # pass ("refusal (rig): ...") and this check never read it.
@@ -918,6 +922,8 @@ def check_plain_english(fail):
                     bad.append(f"{name}:{tok.start[0]} {why} -- {text[:70]!r}")
             # A bare FAILED is a status a person reads first (run 47's F2).
             # Flink's own job state is exactly "FAILED" and stays allowed.
+            if re.search(r"(?<![-\w])allowed\b", low):
+                bad.append(f"{name}:{tok.start[0]} say PASS, or name the limit -- {text[:70]!r}")
             if "FAILED" in text and text.strip() != "FAILED":
                 bad.append(f"{name}:{tok.start[0]} say STOPPED, and why -- {text[:70]!r}")
     for b in bad:

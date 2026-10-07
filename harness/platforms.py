@@ -185,6 +185,36 @@ def _sql_words(sql):
     return " ".join(str(sql or "").replace(";", " ").split()).lower()
 
 
+def unclaimed_cases_reason(cases, claim_steps, unit="CFU"):
+    """Why a case should not run, or None: every case must be one end of a step
+    the claim is about. On a paid service each case costs money as well as time;
+    the first full Confluent suite (2026-10-06) ran its 5 CFU cases three times
+    for a claim about 10->20. `claim_steps` is like ["10->20"]."""
+    if not claim_steps:
+        return ("name the steps the claim is about as claimSteps, for example [\"10->20\"], so no case runs "
+                "that no claimed step needs. Every case costs money here")
+    need, bad = set(), []
+    order = sorted(int(c) for c in cases)
+    pairs = {(a, b) for a, b in zip(order, order[1:])}
+    for st in claim_steps:
+        try:
+            a, b = (int(x) for x in str(st).split("->"))
+        except ValueError:
+            return f"claimSteps entry {st!r} is not a step like \"10->20\""
+        if (a, b) not in pairs:
+            bad.append(st)
+        need.update((a, b))
+    if bad:
+        return (f"claimSteps names {', '.join(bad)}, which is not a step between neighbouring cases "
+                f"{order}; add the cases or fix the step")
+    extra = [c for c in order if c not in need]
+    if extra:
+        return (f"the {', '.join(f'{c} {unit}' for c in extra)} case{'s are' if len(extra) > 1 else ' is'} in no "
+                f"claimed step ({', '.join(claim_steps)}), and each one costs a full case per pass here. "
+                f"Take {'them' if len(extra) > 1 else 'it'} out of cases, or add the step to claimSteps")
+    return None
+
+
 def shared_results_reason(local_pipeline, cloud_results, read_json=None):
     """Why the cloud run would write over the laptop's evidence, or None: the
     two configs resolve to the same results folder."""

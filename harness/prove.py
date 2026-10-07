@@ -5146,7 +5146,10 @@ def cmd_all(steps=None, results=None, dashboard_check=None, teardown=None):
             except Exception as e:
                 import traceback as _tb
                 crash = f"the harness itself stopped with an error: {type(e).__name__}: {e}"
-                log(f"STOPPED: {crash}\n{_tb.format_exc()}")
+                # The self-test's own simulated crash printed a full traceback into
+                # a live run's log, which read as a real one (2026-10-06).
+                if results == c.results:
+                    log(f"STOPPED: {crash}\n{_tb.format_exc()}")
                 rc = 1
             finally:
                 if name in ("completeness", "tinyproof", "suite"):

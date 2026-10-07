@@ -2852,7 +2852,8 @@ def settle_range(step):
     anywhere from 1.77x to 1.90x" beside a table whose single pairs ran
     1.70x to 1.98x, both called what "the passes" give."""
     pairs = step.get("adjacentPairs") or []
-    text = (f"The range its {len(pairs)} pairs of passes support is {step['ratioLowCI']:.2f}x to "
+    text = (f"The range its {len(pairs)} pair{'' if len(pairs) == 1 else 's'} of passes support"
+            f"{'s' if len(pairs) == 1 else ''} is {step['ratioLowCI']:.2f}x to "
             f"{step['ratioHighCI']:.2f}x")
     if len(pairs) > 1:
         text += f" (single pairs ran {min(pairs):.2f}x to {max(pairs):.2f}x)"
@@ -2934,8 +2935,21 @@ def bottleneck(rec):
             f"throughput, and nothing we measured says what.")
 
 
+def unit_word():
+    """What a case's size is counted in, for a person: "cores" on the laptop,
+    the service's own unit ("CFU") on a managed one. The first full Confluent
+    report said "5 cores" and "check the host" about compute pools (2026-10-06)."""
+    try:
+        return cfg().plat.unit if on_confluent() else "cores"
+    except Exception:
+        return "cores"
+
+
 def n_cores(n):
-    """\"1 core\", not \"1 cores\"."""
+    """\"1 core\", not \"1 cores\"; \"10 CFU\" on Confluent Cloud."""
+    u = unit_word()
+    if u != "cores":
+        return f"{n} {u}"
     return f"{n} core" if n == 1 else f"{n} cores"
 
 
@@ -3017,8 +3031,8 @@ def corrective_action(rec, step=None, is_baseline=False):
             # said the pipeline was the constraint, the broker was idle and the
             # GC was at 0.3%. There was nothing in the rig left to investigate:
             # the step is the pipeline's, or the host's.
-            return "check the host"
-        return "add cores for more"
+            return "check the host" if unit_word() == "cores" else "check service limits"
+        return "add cores for more" if unit_word() == "cores" else f"add {unit_word()} for more"
     return {"Pipeline memory": "try more memory",
             "Kafka CPU": "more Kafka cores",
             "Kafka memory": "raise kafkaMemory",
@@ -3088,7 +3102,7 @@ def scorecard(out):
     # One definition of the widths, used by the header and by every row, so the
     # two cannot drift apart. They did: each hard-coded its own numbers.
     W = dict(cores=5, speed=13, scaling=10, cpu=14, mem=18, kcpu=13, kmem=20, blocked=16)
-    L.append(f"  {'cores':>{W['cores']}}{'speed':>{W['speed']}}{'scaling':>{W['scaling']}}   "
+    L.append(f"  {unit_word():>{W['cores']}}{'speed':>{W['speed']}}{'scaling':>{W['scaling']}}   "
              f"{'pipeline CPU':>{W['cpu']}}{'pipeline memory':>{W['mem']}}"
              f"{'Kafka CPU':>{W['kcpu']}}{'Kafka memory':>{W['kmem']}}   "
              f"{'blocked by':<{W['blocked']}}what to do")
@@ -3132,7 +3146,7 @@ def scorecard(out):
         if detail:
             notes.append("  " + detail)
         if not cs.get("reportable"):
-            notes.append(f"  * the {cs['cores']}-core row is not counted in the table: "
+            notes.append(f"  * the {n_cores(cs['cores'])} row is not counted in the table: "
                          f"{cs.get('unreportableReason')}. Its numbers are still shown, "
                          f"and what to do about them still applies.")
         # the full sentence only where it is not the answer we hoped for
@@ -3175,9 +3189,10 @@ def scorecard(out):
     L.append("")
     L.append("  Each pair is the limit it had and how much of that it used:")
     L.append("    scaling           what the step into this case gave — nothing on the baseline")
-    L.append("    pipeline CPU      cores it could use / how much of them it used")
+    L.append(f"    pipeline CPU      {unit_word()} it could use / how much of them it used")
     L.append("    pipeline memory   memory it could use / share of the time spent tidying memory up")
-    L.append("    Kafka CPU         cores Kafka could use / how much of them it used")
+    L.append("    Kafka CPU         cores Kafka could use / how much of them it used" if unit_word() == "cores"
+             else "    Kafka CPU         not measured: the service runs Kafka")
     L.append("    Kafka memory      memory Kafka could use, and how often it filled up")
     L.append("")
     for n in notes:
@@ -3195,7 +3210,7 @@ def scorecard(out):
     for r in t.get("stepRatios") or []:
         need = r["idealRatio"] * T["scalingFloor"]
         if not r.get("reportable"):
-            L.append(f"  {r['step']} cores: not reported — {r.get('reason')}")
+            L.append(f"  {r['step']} {unit_word()}: not reported — {r.get('reason')}")
             continue
         # A step above its ideal clears the target, because the target is a
         # floor -- but reporting that as a plain "met" contradicts the note
@@ -3215,7 +3230,7 @@ def scorecard(out):
                        f"as {lo:.2f}x, and that is what is judged")
         else:
             verdict = "missed"
-        L.append(f"  {r['step']} cores: doubling gave {r['ratio']:.2f}x, target {need:.2f}x"
+        L.append(f"  {r['step']} {unit_word()}: doubling gave {r['ratio']:.2f}x, target {need:.2f}x"
                  f"  ->  {verdict}")
         if verdict.startswith("missed"):
             arm = host_arm_note(r["step"])
@@ -4288,18 +4303,21 @@ def render_table(out):
         L.append(f"{cs['cores']:>5} {'MEAN':>8} {cs['meanRecordsPerSec']:>11,.0f} "
                  f"{out_col} "
                  f"{cs.get('tmCores',0):>6.2f}/{cs['cores']:<3} {cs.get('tmCapFrac',0):>5.1%} "
-                 f"{cs.get('tmThrottledPeriodsPct',0):>5.0f} {cs.get('kafkaCores',0):>6.2f}/{c.kafka_cap:<3g} "
-                 f"{cs.get('sourceIdle',0):>7.1%} {cs.get('sourceBackpressured',0):>6.1%} "
+                 + (f"{cs['tmThrottledPeriodsPct']:>5.0f} " if isinstance(cs.get('tmThrottledPeriodsPct'), (int, float))
+                    else f"{'—':>5} ")
+                 + (f"{cs['kafkaCores']:>6.2f}/{c.kafka_cap:<3g} " if isinstance(cs.get('kafkaCores'), (int, float))
+                    and c.kafka_cap is not None else f"{'—':>10} ")
+                 + f"{cs.get('sourceIdle',0):>7.1%} {cs.get('sourceBackpressured',0):>6.1%} "
                  f"{cs.get('headroomS',0):>5.0f}s {cs.get('vantageDisagreementMax') or 0:>5.1%} "
                  f"  spread {cs['spread']:.1%}{mark}")
     L.append("=" * 118)
     for r in t["stepRatios"]:
         if r["reportable"]:
-            L.append(f"STEP {r['step']} cores: {r['ratio']:.3f}x  (ideal {r['idealRatio']:.0f}x, "
+            L.append(f"STEP {r['step']} {unit_word()}: {r['ratio']:.3f}x  (ideal {r['idealRatio']:.0f}x, "
                      f"target {r['idealRatio'] * T['scalingFloor']:.2f}x, range across passes "
                      f"{r['ratioLow']:.3f}x-{r['ratioHigh']:.3f}x)")
         else:
-            L.append(f"STEP {r['step']} cores: NOT REPORTED — {r['reason']}")
+            L.append(f"STEP {r['step']} {unit_word()}: NOT REPORTED — {r['reason']}")
     L.append("order effect (descending / ascending): " +
              str({k: v.get("descOverAsc") for k, v in t["orderEffect"].items()}))
     sd = t.get("sentinel")
@@ -4366,23 +4384,24 @@ def render_markdown(out):
         if r["reportable"] and t.get("quickLook"):
             # one pass per case: min and max are the same measurement, so a
             # "range across passes" here would be an invented interval.
-            L.append(f"**{r['step'].replace('->', '→')} cores: {r['ratio']:.2f}× "
+            L.append(f"**{r['step'].replace('->', '→')} {unit_word()}: {r['ratio']:.2f}× "
                      f"(target {r['idealRatio'] * T['scalingFloor']:.2f}×) — one pass per case, no spread measured.**")
         elif r["reportable"]:
-            L.append(f"**{r['step'].replace('->', '→')} cores: {r['ratio']:.2f}× "
+            L.append(f"**{r['step'].replace('->', '→')} {unit_word()}: {r['ratio']:.2f}× "
                      f"(target {r['idealRatio'] * T['scalingFloor']:.2f}×), "
                      f"range {r['ratioLow']:.2f}–{r['ratioHigh']:.2f}× across passes.**")
         else:
-            L.append(f"**{r['step'].replace('->', '→')} cores: not reported — {r['reason']}.**")
+            L.append(f"**{r['step'].replace('->', '→')} {unit_word()}: not reported — {r['reason']}.**")
     kcap = getattr(c, "kafka_cap", 0) or 0
     step_into = {r["to"]: r for r in (t.get("stepRatios") or []) if r.get("to") is not None}
     # The configured baseline, not the lowest case left in the table: run 50 lost
     # every 1-core pass and was told "2 cores is the baseline. Do not tune it".
     lowest = out.get("baseline") or min((cs["cores"] for cs in t.get("cases", {}).values()), default=None)
-    L += ["", "| cores | speed | scaling | pipeline CPU | pipeline memory | Kafka CPU | Kafka memory | "
+    L += ["", f"| {unit_word()} | speed | scaling | pipeline CPU | pipeline memory | Kafka CPU | Kafka memory | "
           "blocked by | what to do |", "|---:|---:|---:|---|---|---|---|---|---|",
-          "| | | what the step into it gave | cores it could use / how much it used | memory it could use / share of the time "
-          "spent tidying memory up | cores Kafka could use / how much it used | memory Kafka could "
+          f"| | | what the step into it gave | {unit_word()} it could use / how much it used | memory it could use / share of the time "
+          "spent tidying memory up | " + ("cores Kafka could use / how much it used" if unit_word() == "cores"
+                                           else "not measured: the service runs Kafka") + " | memory Kafka could "
           "use / how many times it filled up | | |"]
     for cs in t.get("cases", {}).values():
         last = next((r for r in reversed(out.get("runs") or [])
@@ -4417,7 +4436,10 @@ def render_markdown(out):
         if last and bottleneck_short(last) != "Pipeline CPU":
             L.append("")
             L.append(f"**{n_cores(cs['cores'])}:** {bottleneck(last)}")
-    L += ["", "| cores | pass | records/s | tm cores | % of cap | throttled | broker cores | src idle | src BP | headroom | vantage |",
+    u = unit_word()
+    L += ["", (f"| {u} | pass | records/s | tm {u} | % of cap | throttled | broker cores | src idle | src BP | headroom | vantage |"
+               if u == "cores" else
+               f"| {u} | pass | records/s | pipeline {u} | % of {u} | throttled | broker | src idle | src BP | headroom | vantage |"),
           "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for r in out["runs"]:
         if r.get("status") in ("OK", "CEILING"):
@@ -4434,7 +4456,7 @@ def render_markdown(out):
                      f"{cell('vantageDisagreement', '.2%')} |")
         else:
             L.append(f"| {r['cores']} | {r['pass']} | STOPPED ({r.get('refusalScope')}) — {r.get('refusal','')[:80]} | | | | | | | | |")
-    L += ["", "| cores | passes | mean records/s | spread | reportable |", "|---:|---:|---:|---:|---|"]
+    L += ["", f"| {unit_word()} | passes | mean records/s | spread | reportable |", "|---:|---:|---:|---:|---|"]
     for cs in t["cases"].values():
         L.append(f"| {cs['cores']} | {cs['passes']} | {cs['meanRecordsPerSec']:,.0f} | {cs['spread']:.1%} | "
                  f"{'yes' if cs['reportable'] else 'no — ' + cs['unreportableReason']} |")

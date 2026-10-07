@@ -3236,6 +3236,22 @@ def cmd_selftest(live=True, topic=None):
     expect("verdict: a step printed under its target is never called met (must not fire)",
            interval_holds_its_ratio, "", should_fire=False)
 
+    def cloud_report_speaks_cloud():
+        # The first full Confluent report said "5 cores", "check the host",
+        # "its 1 pairs" and showed 0 and 0.00/2.5 for readings a service lacks.
+        out = json.load(open(os.path.join(L.HERE, "fixtures", "confluent-sqlapp-suite.json")))
+        real = L.unit_word
+        L.unit_word = lambda: "CFU"
+        try:
+            text = L.render_table(out) + L.render_markdown(out)
+        finally:
+            L.unit_word = real
+        bad = [w for w in (" cores", "check the host", "1 pairs", "0.00/2.5") if w in text]
+        if bad or "10 CFU" not in text:
+            raise Exception(f"the cloud report still says {bad}" if bad else "the cloud report never says CFU")
+    expect("report: a cloud report counts in CFU and says nothing about cores or the host (must not fire)",
+           cloud_report_speaks_cloud, "", should_fire=False)
+
     def no_result_is_not_a_pass():
         # clean-room run 46: ten cases measured, eight thrown out, the two
         # survivors both at four cores, stepRatios null -- and results/DONE

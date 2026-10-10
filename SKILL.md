@@ -222,15 +222,18 @@ A reader can then see what was assumed rather than agreed.
    The harness finds the broker's own tools wherever the image keeps them, and
    preflight reports whether the job jar carries anything Confluent-only.
 
-   **A managed service — Confluent Cloud, Amazon MSK with Managed Service for
-   Apache Flink, Google Cloud — cannot be measured yet.** `platform` in
-   `pipeline.json` names one. Confluent Cloud can already create its own stack
-   under a budget, prove it usable, fill and count a backlog, prove nothing
-   was lost, run the tiny proof and the suite, and tear everything down,
-   proving nothing is left. Those steps are tested against a simulated
-   Confluent; a full chain has not yet run on the real service. The other two
-   stop before anything is created. If the user asks for one, say so and build
-   for the laptop with the same pipeline.
+   **A managed service: Confluent Cloud runs the whole chain, for Flink SQL.**
+   `platform` in `pipeline.json` names one. Confluent Cloud creates its own
+   stack under a budget, proves it usable, fills and counts a backlog, proves
+   nothing was lost, runs the tiny proof and the suite, and tears everything
+   down, proving nothing is left; the first full chain ran on the real service
+   on 2026-10-06. Before anything is created, "local first" requires the same
+   SQL to have passed completeness and the tiny proof on the laptop,
+   `claimSteps` naming the steps the claim is about, and a Kafka capacity cap
+   (`maxEcku`) big enough for the largest pool. Amazon MSK with Managed Service
+   for Apache Flink and Google Cloud are named but not built: they stop before
+   anything is created. If the user asks for one of those, say so and build for
+   the laptop with the same pipeline.
 
    **A managed service does not run the job you gave it until you read back
    what it ran.** Three Confluent Cloud defaults made a 20 CFU case measure
@@ -985,7 +988,7 @@ SCORECARD
       collector, a different job graph, a cap that did not apply.
   4 cores: doubling gave 1.74x, short of the 1.80x target.
 
-  2->4 cores: doubling gave 1.74x, target 1.80x  ->  missed
+  2->4 cores: doubling gave 1.74x, target 1.80x  ->  not met — the low end of its range, 1.703x, is 5.4% under the 1.80x target
 ```
 
 **The shape is a rule, not a preference**, because it drifted back twice in one
@@ -1027,7 +1030,7 @@ the verdict up rather than take it on trust, and each carries what to do
 about it. CPU being the limit is only good news if the step into that case
 actually doubled, so the advice reads the step as well as the case: a
 baseline has nothing below it to compare against, a short step says investigate,
-and a step above 2× means the smaller case reads low. The column holds two or
+and a step above 2× is met, with a note that its smaller case probably read low. The column holds two or
 three words and the numbers go under the table, because advice written into
 the row took it to 175 characters and stopped being a table. For
 Kafka's memory it names the size to try, not just "more". *Pipeline CPU*

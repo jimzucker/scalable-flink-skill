@@ -185,6 +185,24 @@ def _sql_words(sql):
     return " ".join(str(sql or "").replace(";", " ").split()).lower()
 
 
+def ecku_cap_reason(cases, max_ecku):
+    """Why the Kafka cluster's capacity cap is too low for the cases, or None.
+    Measured on Confluent Cloud (flink-training findings §8, runs 17 and 18):
+    with the cluster capped at 10 eCKU a 10->20 CFU step read about 1.4x, and
+    with the cap at 50 it read 1.77x. The harness's own default cap was 10, so
+    the defaults walked straight into it."""
+    if max_ecku is None or not cases:
+        return None
+    top = max(int(c) for c in cases)
+    if top > 10 and int(max_ecku) <= 10:
+        return (f"the largest case is {top} CFU, but the Kafka cluster is capped at {int(max_ecku)} eCKU "
+                f"(platform.maxEcku). At that cap a 10->20 CFU step read about 1.4x; at 50 eCKU it read "
+                f"1.77x (flink-training findings §8, runs 17 and 18), so the benchmark would measure Kafka, "
+                f"not Flink. Raise platform.maxEcku (each eCKU costs about $0.135 an hour), or keep every "
+                f"case at 10 CFU or below")
+    return None
+
+
 def unclaimed_cases_reason(cases, claim_steps, unit="CFU"):
     """Why a case should not run, or None: every case must be one end of a step
     the claim is about. On a paid service each case costs money as well as time;

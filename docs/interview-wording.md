@@ -291,6 +291,11 @@ pipeline, say so and stop. Two coherent readings:
 Until that is settled the question should say which it means, or a reader who
 answers "Confluent Cloud" will expect the harness to go there.
 
+**Settled in part, 2026-10-06:** the harness now runs the whole chain on
+Confluent Cloud for Flink SQL, first end to end on that day. MSK/MSF and Google
+Cloud still stop before anything is created, so for those the first reading
+above still applies.
+
 ### 9 — say what the choice costs
 
 > **Which Flink API should we use?** DataStream, where the developer has more

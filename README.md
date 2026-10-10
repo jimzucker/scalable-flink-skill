@@ -24,7 +24,8 @@ the interview.
 
 **You need** Docker, Python 3 (the harness is standard library only), and
 JDK 17. The stack runs `flink:1.20.1-scala_2.12-java17` and
-`apache/kafka:3.9.0` on one machine.
+`apache/kafka:3.9.0` on one machine. To run on Confluent Cloud as well, you
+also need the `confluent` command-line tool, logged in to your account.
 
 ## What comes out
 
@@ -52,7 +53,9 @@ under [Evidence](#evidence).
    default: what goes in and what comes out, whether one input becomes several
    outputs, how many distinct keys, what has to be exactly right, which Flink
    API, and which Kafka. Then it writes a plan and stops for a yes. The claim
-   it tests is fixed: every doubling of cores returns 1.80× or better.
+   it tests is fixed: every doubling of cores returns 1.80× or better, with a
+   1% margin: a step passes when the low end of its measured range is above
+   1.782×, with no upper bound.
 2. **Builds it in reviewable steps.** One branch per step, each ending with the
    system running and measured rather than compiling.
 3. **Verifies the results are correct and complete.** A backlog small enough
@@ -97,9 +100,12 @@ you the rig runs clean and roughly how fast, not what the ratio is.
 
 - **Flink on Kafka, today.** The interview and the measurement rules are
   general; the harness is not.
-- **One machine.** The axis it measures is one worker growing, not workers
-  multiplying across a network — a different measurement, with fixed costs paid
-  again per worker.
+- **A laptop, or Confluent Cloud for Flink SQL.** On the laptop the axis it
+  measures is one worker growing, not workers multiplying across a network — a
+  different measurement, with fixed costs paid again per worker. On Confluent
+  Cloud it is the compute pool's size in CFU: the run creates and deletes its
+  own stack, checks your budget first, and starts only after the same SQL has
+  passed on the laptop. Amazon MSK and Google Cloud are not built yet.
 - **About an hour per full run.** The completeness gate, the tiny proof and the
   fill do not shrink with `--quick`.
 

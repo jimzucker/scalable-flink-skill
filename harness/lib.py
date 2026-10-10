@@ -125,6 +125,11 @@ T = {
     # Mac's own cores return 1.48-1.82x on memory-heavy work over the same steps,
     # and replayed against the 22 recorded steps it passes 7 where 1.90 passed 3.
     "scalingFloor": 0.90,
+    # How far under the target the low end of a step's range may sit and still
+    # count as met. The author's decision, 2026-10-10: "so gate shoujd be if more
+    # than -1% not meet" -- the 1.80x target then reads 1.782x in practice, and
+    # every report says when a step was met inside this allowance.
+    "targetAllowance": 0.01,
     # How far under the declared fan-out the completeness read-back may sit:
     # the share of input repeated on purpose (section 4), which the pipeline
     # drops. Section 4 promises 5%.
@@ -1876,7 +1881,7 @@ def probe_advice(spread, gap):
                 "steady this machine is, and that is the one to compare with the shortfall."]
     return ["That is too wide to explain anything, and more repeats will not fix it: the middle",
             "half converges on how variable this machine is, and this is that figure. Say the",
-            "machine cannot be ruled in or out here, and stop — an honest 'undecided' costs one",
+            "machine cannot be ruled in or out here, and stop — an honest 'not met' costs one",
             "line. Look at the arms separately first: one of them is often steady enough to use."]
 
 
@@ -2822,7 +2827,9 @@ def tm_mem_of(cores):
 
 def reads_low(step):
     """A step whose low end is above its ideal: more than double the work on
-    double the cores, so the smaller case read low. Never reported as met. One
+    double the cores, so the smaller case probably read low. Reported as met,
+    with that note -- the author, 2026-10-10: "doing better that goal is OK, ie
+    2.1x" (until then such a step was never reported as met). One
     test for every place that says so -- run 51's report said one step both
     "met the target" and "reads low" when two places judged it differently."""
     return (step.get("ratioLowCI") or 0) > step.get("idealRatio", 2)
@@ -2830,7 +2837,8 @@ def reads_low(step):
 
 def step_verdict(step):
     """Pure. "met" when the whole interval clears the target, "missed" when
-    the whole interval is under it, "undecided" when it spans the target,
+    the whole interval is under it, "spans" when it reaches both sides of the
+    target (said to a person as "not met", see verdict_words),
     None when the step was not reported. Three reference runs of one build on
     2026-09-26 and 09-28 printed "missed" for a step whose interval spanned the
     target: 1.78x with a range of 1.65-1.82x is not a shortfall, it is too few
@@ -2839,11 +2847,37 @@ def step_verdict(step):
         return None
     if step.get("meetsClaim"):
         return "met"
-    need = step.get("idealRatio", 2) * T["scalingFloor"]
+    need = step.get("idealRatio", 2) * T["scalingFloor"] * (1 - T["targetAllowance"])
     hi = step.get("ratioHighCI")
     if step.get("ratioLowCI") and hi and hi >= need:
-        return "undecided"
+        return "spans"
     return "missed"
+
+
+def target_gap(step):
+    """Pure. Where the step's judged low end sits against the target, in plain
+    words and percent: "the low end of its range, 1.792x, is 0.4% under the
+    1.80x target". The author, 2026-10-10: "'undecided' is not clear english,
+    should be not met and give %". The ratio stays in x; only the gap is a %."""
+    need = step.get("idealRatio", 2) * T["scalingFloor"]
+    lo = step.get("ratioLowCI")
+    what = f"the low end of its range, {lo:.3f}x," if lo else f"{step['ratio']:.3f}x"
+    v = (lo or step["ratio"])
+    pct = (v - need) / need * 100
+    size = "less than 0.1%" if abs(pct) < 0.05 else f"{abs(pct):.1f}%"
+    inside = (pct < 0 and -pct < T["targetAllowance"] * 100)
+    return (f"{what} is {size} {'over' if pct >= 0 else 'under'} the {need:.2f}x target"
+            + (f", within the {T['targetAllowance']:.0%} margin" if inside else ""))
+
+
+def verdict_words(step):
+    """Pure. "met — …" or "not met — …", with the gap to the target in percent.
+    A step whose range reaches both sides of the target is not met, and more
+    passes could change that; it is never sent to tuning."""
+    if step_verdict(step) == "met":
+        return f"met — {target_gap(step)}"
+    tail = "; more passes could change that" if step_verdict(step) == "spans" else ""
+    return f"not met — {target_gap(step)}{tail}"
 
 
 def settle_range(step):
@@ -2865,7 +2899,7 @@ def settle_next(runs, steps):
     target: the other end of the first such step from the case that ran last,
     so each new case makes a pair with its neighbour in time. Returns
     (cores, step) or None when every step is settled."""
-    open_steps = [r for r in steps if step_verdict(r) == "undecided"]
+    open_steps = [r for r in steps if step_verdict(r) == "spans"]
     if not open_steps:
         return None
     step = open_steps[0]
@@ -2874,9 +2908,10 @@ def settle_next(runs, steps):
 
 
 def met_steps(steps):
-    """Steps to call met: reportable, meeting the claim, and not reading low."""
+    """Steps to call met: reportable and meeting the claim. A step above its
+    ideal is met too, with a note that its smaller case probably read low."""
     return [r["step"] for r in steps
-            if r.get("reportable") and r.get("meetsClaim") and not reads_low(r)]
+            if r.get("reportable") and r.get("meetsClaim")]
 
 
 def bottleneck(rec):
@@ -3024,7 +3059,7 @@ def corrective_action(rec, step=None, is_baseline=False):
             return "no usable step"
         if reads_low(step):
             return "baseline reads low"
-        if step_verdict(step) == "undecided":
+        if step_verdict(step) == "spans":
             return "more passes"
         if not step.get("meetsClaim"):
             # Run 44 was told "investigate" twice while every column beside it
@@ -3056,10 +3091,9 @@ def action_detail(rec, cores, step=None, is_baseline=False):
         if reads_low(step):
             return (f"{n_cores(cores)}: doubling gave {ratio:.2f}x, more than the {ideal:.2f}x a doubling "
                     f"can give, so the smaller case reads too low.")
-        if step_verdict(step) == "undecided":
-            return (f"{n_cores(cores)}: doubling gave {ratio:.2f}x. {settle_range(step)}, which "
-                    f"spans the {need:.2f}x target, so this step is undecided either way. Change "
-                    f"nothing in the pipeline on it.")
+        if step_verdict(step) == "spans":
+            return (f"{n_cores(cores)}: doubling gave {ratio:.2f}x, not met: {target_gap(step)}. "
+                    f"More passes could change that; change nothing in the pipeline on it.")
         if not step.get("meetsClaim"):
             lo = step.get("ratioLowCI")
             # 1.93x is not short of 1.90x. What is short is the lower bound the
@@ -3217,19 +3251,13 @@ def scorecard(out):
         # above it saying the smaller case reads low. Say what it is instead.
         lo = r.get("ratioLowCI")
         if reads_low(r):
-            verdict = f"above {r['idealRatio']:.2f}x, so the smaller case reads low"
-        elif r.get("meetsClaim"):
-            verdict = "met"
-        elif step_verdict(r) == "undecided":
-            verdict = (f"undecided — the readings fall on both sides of the target: "
-                       f"{settle_range(r)[0].lower() + settle_range(r)[1:]}")
-        elif lo and r["ratio"] >= need:
-            # the number shown clears the target and the verdict says missed,
-            # which reads as a broken tool unless it says what was judged
-            verdict = (f"missed — the readings are far enough apart that it could be as low "
-                       f"as {lo:.2f}x, and that is what is judged")
+            verdict = (verdict_words(r) + f"; above {r['idealRatio']:.2f}x, which usually means the "
+                       f"smaller case read low — worth a look")
         else:
-            verdict = "missed"
+            # met or not met, with how far the judged low end sits from the
+            # target in percent; the low end is named, so a ratio shown above
+            # the target next to "not met" does not read as a broken tool.
+            verdict = verdict_words(r)
         L.append(f"  {r['step']} {unit_word()}: doubling gave {r['ratio']:.2f}x, target {need:.2f}x"
                  f"  ->  {verdict}")
         if verdict.startswith("missed"):
@@ -4185,7 +4213,10 @@ def build_table(runs, cases_order=None, quick=False):
             # floor: a ratio that might be linear has not been shown to be.
             lo = r.get("ratioLowCI")
             eff_lo = (lo / r["idealRatio"]) if lo else r["efficiency"]
-            r["meetsClaim"] = eff_lo >= T["scalingFloor"]
+            # Pass: the low end of the range is above the target less the
+            # allowance, 1.80x - 1% = 1.782x, with no upper bound (the author,
+            # 2026-10-10: "a pass is >(1.8-(1.8*.01) no upper bound").
+            r["meetsClaim"] = eff_lo > T["scalingFloor"] * (1 - T["targetAllowance"])
             r["claimJudgedOn"] = "lower bound of the ratio's interval" if lo else "point estimate"
             r["claimEfficiencyLow"] = round(eff_lo, 4)
             if not r["meetsClaim"]:

@@ -362,12 +362,14 @@ def cmd_selftest(live=True, topic=None):
             out = {"runs": runs, "table": L.build_table(runs)}
             line = [x for x in L.scorecard(out).splitlines() if "1->2" in x]
             assert line, "no 1->2 verdict line"
-            assert "met" not in line[0].split("->")[-1], \
-                f"a step above its ideal is reported as a pass: {line[0].strip()!r}"
-            assert "reads low" in line[0], f"and does not say why: {line[0].strip()!r}"
+            # The author, 2026-10-10: "doing better that goal is OK, ie 2.1x".
+            # Met, and the line still says the smaller case probably read low.
+            assert "met — " in line[0] and "not met" not in line[0], \
+                f"a step above its ideal is not reported as met: {line[0].strip()!r}"
+            assert "read low" in line[0], f"and does not say why it is worth a look: {line[0].strip()!r}"
         return go
 
-    expect("a step above 2x is not reported as met (must not fire)",
+    expect("a step above 2x is met, with a note that the smaller case may read low (must not fire)",
            verdict_not_met_above_ideal(), "", should_fire=False)
 
     def compose_is_filled_in():
@@ -472,8 +474,8 @@ def cmd_selftest(live=True, topic=None):
     run4 = dict(reportable=True, meetsClaim=False, ratio=1.779, idealRatio=2.0,
                 ratioLowCI=1.645, ratioHighCI=1.823, adjacentPairs=[1.734, 1.734, 1.87],
                 step="2->4", **{"from": 2, "to": 4})
-    expect("verdict: reference run 4's 2->4, 1.65-1.82x, is undecided (must not fire)",
-           verdict_of(run4, "undecided"), "", should_fire=False)
+    expect("verdict: reference run 4's 2->4, 1.65-1.82x, spans the target: not met, more passes could change it (must not fire)",
+           verdict_of(run4, "spans"), "", should_fire=False)
     expect("verdict: run 37's 2->4, 1.75-1.78x, wholly under 1.80x, is missed (must not fire)",
            verdict_of(dict(run4, ratio=1.77, ratioLowCI=1.752, ratioHighCI=1.776), "missed"), "",
            should_fire=False)
@@ -506,7 +508,7 @@ def cmd_selftest(live=True, topic=None):
            settles(RUN4, [2, 4, 2, 4]), "", should_fire=False)
     expect("settle: after a 2-core case, 2->4 starts at 4 (must not fire)",
            settles(RUN4[:8], [4, 2, 4]), "", should_fire=False)
-    expect("scorecard: a step that is undecided asks for more passes, not tuning (must not fire)",
+    expect("scorecard: a step whose range spans the target asks for more passes, not tuning (must not fire)",
            steps({}, run4, False, "more passes"), "", should_fire=False)
 
     def detail(kw, cores, step, baseline, want):
@@ -537,18 +539,19 @@ def cmd_selftest(live=True, topic=None):
     expect("action: a step short of the target points at the host (must not fire)",
            steps(dict(tmCapFrac=0.99), short, False, "check the host"), "", should_fire=False)
     def one_verdict_per_step():
-        # Run 51 printed "2→4 met the target" and, twenty lines lower, "2->4 ...
-        # above 2.00x, so the smaller case reads low" about one step. Whatever
-        # calls a step met and whatever says it reads low must never both apply.
+        # Run 51 printed "2→4 met the target" and, twenty lines lower, a line
+        # saying the same step read low, as if two judges disagreed. Since
+        # 2026-10-10 a step above 2.00x is met by the author's decision; both
+        # judges must now agree it is met, and only the note says it reads low.
         high = dict(step="2->4", reportable=True, meetsClaim=True, ratio=2.121,
                     ratioLowCI=2.03, idealRatio=2.0)
         noisy = dict(high, step="1->2", ratioLowCI=1.95)   # high middle, low end under 2
-        if L.met_steps([high]) or not L.reads_low(high):
-            raise Exception("a step whose low end is above 2.00x is called met")
+        if L.met_steps([high]) != ["2->4"] or not L.reads_low(high):
+            raise Exception("a step whose low end is above 2.00x is not called met, or not noted as reading low")
         if L.met_steps([noisy]) != ["1->2"] or L.reads_low(noisy):
             raise Exception("a step whose low end is under 2.00x is not called met")
         # the scorecard's own "reads low" line is pinned by the test at the top
-    expect("a step is met or reads low, never both (must not fire)", one_verdict_per_step, "",
+    expect("a step above 2x is met everywhere it is judged, with the reads-low note (must not fire)", one_verdict_per_step, "",
            should_fire=False)
     expect("action: a step above 2x says the baseline reads low (must not fire)",
            steps(dict(tmCapFrac=0.99), over, False, "baseline reads low"), "", should_fire=False)
@@ -840,9 +843,16 @@ def cmd_selftest(live=True, topic=None):
                                         "(single pairs ran 1.70x to 1.98x)"), L.settle_range(step)
         done = report_verdict("not-settled", {"unsettledSteps": [
             {"step": "2->4", "ratio": 1.858, "low": 1.771, "high": 1.9, "need": 1.8, "pairs": 8}]})
-        assert done == ("STOPPED at report: undecided — 2→4 reads 1.86x, and the range its 8 pairs "
-                        "support, 1.77x to 1.90x, spans the 1.80x target. Report it as undecided and "
-                        "change nothing in the pipeline"), done
+        assert done == ("STOPPED at report: not met — 2→4 reads 1.86x, and the low end of its range, "
+                        "1.771x, is 1.6% under the 1.80x target. More passes could change that; change "
+                        "nothing in the pipeline"), done
+        # The scorecard's verdict says met or not met and the gap in percent.
+        assert L.verdict_words(step) == ("not met — the low end of its range, 1.771x, is 1.6% under the "
+                                         "1.80x target; more passes could change that"), L.verdict_words(step)
+        met = dict(step, meetsClaim=True, ratioLowCI=1.801)
+        assert L.verdict_words(met) == ("met — the low end of its range, 1.801x, is 0.1% over "
+                                        "the 1.80x target"), L.verdict_words(met)
+        assert "less than 0.1% over" in L.verdict_words(dict(met, ratioLowCI=1.8005)), L.verdict_words(dict(met, ratioLowCI=1.8005))
         assert report_verdict("claim-not-met", {}).startswith("STOPPED at report: the table is good")
         assert report_verdict(None, None) == "STOPPED at report: the table could not be reported"
     expect("report: the not-settled range and DONE line read as written (run 52's figures) (must not fire)",
@@ -2761,7 +2771,7 @@ def cmd_selftest(live=True, topic=None):
         saved = L._CFG.out_per_in
         try:
             for name, must in (("suite-no-fanout.json", ()),
-                               ("suite-run52-not-settled.json", ("undecided", "settle-6", "1->2"))):
+                               ("suite-run52-not-settled.json", ("not met", "settle-6", "1->2"))):
                 out = json.load(open(os.path.join(here, "fixtures", name)))
                 out["table"] = L.build_table(out["runs"], quick=out.get("quickLook", False))
                 L._CFG.out_per_in = out.get("outputsPerInput")
@@ -3230,10 +3240,16 @@ def cmd_selftest(live=True, topic=None):
         s = {r["step"]: r for r in t["stepRatios"]}["5->10"]
         if not (s["ratioLowCI"] <= s["ratio"] <= s["ratioHighCI"]):
             raise Exception(f"5->10 prints {s['ratio']}x outside its interval {s['ratioLowCI']}-{s['ratioHighCI']}x")
-        if L.step_verdict(s) != "undecided":
-            raise Exception(f"5->10 at {s['ratio']}x with {s['ratioLowCI']}-{s['ratioHighCI']}x reads "
-                            f"{L.step_verdict(s)!r}, not undecided")
-    expect("verdict: a step printed under its target is never called met (must not fire)",
+        # Since 2026-10-10 a low end up to 1% under the target is met, and says
+        # so (the author: "gate shoujd be if more than -1% not meet").
+        w = L.verdict_words(s)
+        if not (w.startswith("met — ") and "within the 1% margin" in w):
+            raise Exception(f"5->10, low end {s['ratioLowCI']}x (0.6% under 1.80x), reads {w!r}")
+        past = dict(s, ratioLowCI=1.775, meetsClaim=1.775 / 2 >= 0.9 * 0.99)
+        w2 = L.verdict_words(past)
+        if not w2.startswith("not met — ") or "1.4% under" not in w2:
+            raise Exception(f"a low end 1.4% under the target reads {w2!r}")
+    expect("verdict: met within the 1% margin says so, and more than 1% under is not met (must not fire)",
            interval_holds_its_ratio, "", should_fire=False)
 
     def cloud_report_speaks_cloud():
@@ -4560,9 +4576,9 @@ def settle_suite(runs, run_one, budget, judge=None, say=None):
         # Said again whenever the open step changes: reference run 5 settled
         # 1->2 with one case and went on to 2->4 under a line naming 1 and 2.
         if step["step"] != announced:
-            say(f"  {step['step']} is undecided: {step['ratioLowCI']:.2f}x to {step['ratioHighCI']:.2f}x "
-                f"spans the target. Running up to {budget - extra} more case(s) of "
-                f"{step['from']} and {step['to']} cores to decide it.")
+            say(f"  {step['step']} is not met yet: {L.target_gap(step)}, and its range reaches "
+                f"{step['ratioHighCI']:.2f}x. Running up to {budget - extra} more case(s) of "
+                f"{step['from']} and {step['to']} cores to settle it.")
             announced = step["step"]
         extra += 1
         # "case 13 of 13", then "case 15 of 15", read as a suite that kept
@@ -4676,7 +4692,7 @@ def cmd_suite():
                 break
         if stop:
             break
-    # A step whose interval spans the target is undecided by the planned
+    # A step whose interval spans the target is not settled by the planned
     # passes. Run its two cases alternately -- each case after the first adds a
     # pair of neighbours in time -- until it settles or the budget is spent.
     # Reference run 4 (2026-09-28) read 2->4 at 1.65-1.82x from three pairs.
@@ -4858,20 +4874,20 @@ def cmd_report():
         return 1
     # A step whose interval spans the target is not a shortfall: the passes
     # cannot tell met from missed. Said as such, and never sent to tuning.
-    unsettled = [r for r in short if L.step_verdict(r) == "undecided"]
-    short = [r for r in short if L.step_verdict(r) != "undecided"]
+    unsettled = [r for r in short if L.step_verdict(r) == "spans"]
+    short = [r for r in short if L.step_verdict(r) != "spans"]
     if unsettled and not short:
         out["reportVerdict"] = "not-settled"
         out["unsettledSteps"] = [{"step": r["step"], "ratio": r["ratio"], "low": r["ratioLowCI"],
                                   "high": r["ratioHighCI"], "need": r["idealRatio"] * T["scalingFloor"],
                                   "pairs": len(r.get("adjacentPairs") or []),
-                                  "range": L.settle_range(r)}
+                                  "range": L.settle_range(r), "gap": L.target_gap(r)}
                                  for r in unsettled]
         save_json("suite.json", out)
-        print("\nUNDECIDED\n")
+        print("\nNOT MET, BY A MARGIN MORE PASSES COULD CHANGE\n")
         for u in out["unsettledSteps"]:
-            for line in textwrap.wrap(f"{u['step'].replace('->', '→')} cores reads {u['ratio']:.2f}x. "
-                                      f"{u['range']}, which spans the {u['need']:.2f}x target.", 86):
+            for line in textwrap.wrap(f"{u['step'].replace('->', '→')} cores reads {u['ratio']:.2f}x: "
+                                      f"{u['gap']}. {u['range']}.", 86):
                 print(f"  {line}")
         ran = out.get("settleCases") or 0
         for line in textwrap.wrap("That is not a shortfall: the passes cannot tell met from missed."
@@ -4879,8 +4895,8 @@ def cmd_report():
                                      if ran else ""), 86):
             print(f"  {line}")
         print()
-        print("  What to do: change nothing in the pipeline on this step. Report it as undecided,")
-        print("  with the range above; that is a result. If the claim needs it decided, run")
+        print("  What to do: change nothing in the pipeline on this step. Report it as not met,")
+        print("  with the percent above; that is a result. If the claim needs it settled, run")
         print("  `prove.py suite` again — a new suite, with its own passes and settling cases —")
         print("  or raise `passes` in pipeline.json first. With nobody to ask, stop here and report.\n")
         return 1
@@ -4888,8 +4904,7 @@ def cmd_report():
         t = out["table"]
         need = 2 * T["scalingFloor"]
         for r in unsettled:
-            print(f"  ({r['step']} cores is undecided: {r['ratioLowCI']:.2f}x to {r['ratioHighCI']:.2f}x "
-                  f"spans the target.)")
+            print(f"  ({r['step']} cores is not met: {L.target_gap(r)}; more passes could change that.)")
 
         def why(r, pad):
             """What changed across one step, for whoever has to chase it."""
@@ -5025,12 +5040,15 @@ def report_verdict(why, suite):
         return ("STOPPED at report: no scaling result — too many cases were "
                 "thrown out to compare one core count with another")
     if why == "not-settled":
-        return ("STOPPED at report: undecided — "
-                + "; ".join(f"{u['step'].replace('->', '→')} reads {u['ratio']:.2f}x, and "
-                            f"the range its {u['pairs']} pairs support, {u['low']:.2f}x "
-                            f"to {u['high']:.2f}x, spans the {u['need']:.2f}x target"
+        def gap(u):
+            pct = (u["low"] - u["need"]) / u["need"] * 100
+            size = "less than 0.1%" if abs(pct) < 0.05 else f"{abs(pct):.1f}%"
+            return f"{size} {'over' if pct >= 0 else 'under'}"
+        return ("STOPPED at report: not met — "
+                + "; ".join(f"{u['step'].replace('->', '→')} reads {u['ratio']:.2f}x, and the low end of "
+                            f"its range, {u['low']:.3f}x, is {gap(u)} the {u['need']:.2f}x target"
                             for u in (suite.get("unsettledSteps") or []))
-                + ". Report it as undecided and change nothing in the pipeline")
+                + ". More passes could change that; change nothing in the pipeline")
     if why == "claim-not-met":
         return "STOPPED at report: the table is good, the pipeline did not meet the target"
     if why == "step-missing":

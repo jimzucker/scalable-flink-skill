@@ -2328,6 +2328,19 @@ def cmd_selftest(live=True, topic=None):
     expect("cases: both steps claimed keeps all three cases (must not fire)",
            claimed([5, 10, 20], ["5->10", "10->20"]), "", should_fire=False)
 
+    def ecku(cases, cap):
+        def run():
+            why = L.P.ecku_cap_reason(cases, cap)
+            if why:
+                raise Refusal("rig", why)
+        return run
+    expect("kafka cap: a 20 CFU case on a cluster capped at 10 eCKU stops before anything is created (runs 17, 18)",
+           ecku([5, 10, 20], 10), "capped at 10 eCKU")
+    expect("kafka cap: 20 CFU with the cap at 50 eCKU goes ahead (must not fire)", ecku([5, 10, 20], 50), "",
+           should_fire=False)
+    expect("kafka cap: cases of 10 CFU or below need no more than 10 eCKU (must not fire)", ecku([5, 10], 10), "",
+           should_fire=False)
+
     def docker_config_without_helper():
         home = tempfile.mkdtemp(prefix="fsk-home-")
         try:
@@ -5073,6 +5086,11 @@ def cmd_local_first():
     # GUARD: the cloud run must not write over the laptop evidence this gate
     # reads. Both configs sat in one folder and shared results/ (2026-10-06).
     why = L.P.shared_results_reason(lp, c.results)
+    if why:
+        raise Refusal("rig", why)
+    # GUARD: Kafka's capacity cap big enough for the largest pool, before
+    # anything is created (the ninth tip, until now only advice).
+    why = L.P.ecku_cap_reason(c.cases, getattr(c.plat, "max_ecku", None))
     if why:
         raise Refusal("rig", why)
     # GUARD: on a paid service, only the cases a claimed step needs.

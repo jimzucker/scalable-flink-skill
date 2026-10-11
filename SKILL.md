@@ -291,8 +291,26 @@ and write them down — and this step should not be the one that stalls.
 
 One branch per step, squash-merged. Each step ends with the system **running and
 measured**, not compiling. Pause for review between steps; run without prompting
-inside one. Keep a journal: what drove the step, what was decided, how it was
-verified.
+inside one. Keep a journal in `JOURNAL.md` at the project root: what drove the
+step, what was decided, how it was verified.
+
+**Write `README.md` at the project root while you build, not after.** A run on
+2026-10-10 left `ASSUMPTIONS.md`, `PLAN.md` and a journal, and no README:
+nothing said how to build or run the pipeline, what each topic holds, or what a
+record looks like. The record formats existed only in code comments. Preflight
+now stops the run if the README is missing, or if it does not name every topic
+in `topics.in`, `topics.out`, `topicsAlsoWritten` and `design.inputs` and every
+entry in `design.operators`. It has these sections:
+
+| section | what goes in it |
+|---|---|
+| What it does | question 1's answer in the user's words, and the fan-out |
+| Topics | one row per topic: name, input or output, key, value format, partitions, who writes it (generator, job, harness), and which `pipeline.json` list it is in |
+| Record formats | a link to `results/records.md`: the harness reads one real record off every topic after completeness. Do not type examples |
+| How the job is built | each operator by its `design.operators` name, and what it does |
+| Correctness | what the verifier asserts, on the clean run and on the killed one |
+| How to build and run it | the build command, then the `prove.py` commands in order |
+| Results | links to `results/headline.md` (written by `prove.py report`) and `results/graph.md`. Link, never retype: a copied number goes stale |
 
 **Group the calls that do not depend on each other.** An agent's turn re-reads
 the whole conversation before it does anything, so ten one-line commands cost
@@ -349,6 +367,7 @@ bad window voids one case — so anything checkable now is checked now.
 | back-pressure counters exist on the endpoint you will read | dump the endpoint and read what is there | ten minutes on a deprecated path |
 | every case runs the same collector | the collector name off the engine's metrics, on every case | `--cpus 1` picks the serial collector and every case above it runs G1, so the baseline is a different program — worth +19% and a whole superlinear step |
 | the interview and the plan were written down | `ASSUMPTIONS.md` and `PLAN.md` exist before the stack does, and the plan names every disclosure | a run that never wrote down what it decided leaves a reader unable to tell what was agreed from what was assumed — and the six answers are the spec |
+| the README names every topic and operator | `README.md` at the project root exists and contains, as text, every topic in `topics.in`, `topics.out`, `topicsAlsoWritten` and `design.inputs`, and every `design.operators` entry. A missing name stops the run, and the message names it | a pipeline nobody else can build, run or read — the 2026-10-10 run left none |
 | nothing else is using the cores | other programs' CPU — the Docker VM and the run's own processes left out — against the core count, and the three busiest. **Reported here; each case checks again before it starts** (§6). When it says busy, show the user the programs and ask: *wait for them, or measure anyway?* With no human to ask, wait | a cap is a **share**, not a promise of cycles: on a busy host every case reads 100% of its cap and does less work for it, and no other column shows it |
 | the VM trim command is known | `docker run --rm --privileged --pid=host alpine nsenter -t 1 -m -u -n -i -- fstrim -v /var/lib/docker` | space freed inside a Docker Desktop VM never returns to the host |
 

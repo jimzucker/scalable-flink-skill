@@ -3139,6 +3139,44 @@ def cmd_selftest(live=True, topic=None):
     expect("busy machine: the Docker VM and this run's own processes are not counted (must not fire)",
            busy_own_processes_not_counted, "", should_fire=False)
 
+    # The README check: every topic and design.operators entry, by name.
+    def readme_check(text):
+        d = tempfile.mkdtemp(prefix="readme-")
+        path = os.path.join(d, "README.md")
+        if text is not None:
+            open(path, "w").write(text)
+        problem = L.readme_problem(path, c)
+        if problem:
+            raise Refusal("rig", problem)
+
+    expect("README: one that names every topic and operator passes (must not fire)",
+           lambda: readme_check(" ".join(n for _, n in L.readme_names(c)).upper()), "", should_fire=False)
+    expect("README: a missing topic is named in the message",
+           lambda: readme_check(" ".join(n for _, n in L.readme_names(c)[1:])),
+           f"does not name: topic {c.topic_in!r}")
+    expect("README: no README at the project root stops the run",
+           lambda: readme_check(None), "README.md not written")
+
+    def records_page():
+        md = L.records_markdown({"orders": ("O1", '{"id":"O1"}'), "positions": None},
+                                "abc123", {"orders": "The input.", "positions": "An output."})
+        for want in ("build `abc123`", "## orders", '{"id":"O1"}', "## positions",
+                     "Nothing to read on this topic"):
+            assert want in md, want
+    expect("records.md: every topic gets a section, empty ones say so (must not fire)",
+           records_page, "", should_fire=False)
+
+    def headline_page():
+        md = L.headline_markdown({"buildHash": "abc123", "savedAt": "2026-10-11", "table": {
+            "cases": {"2": {"cores": 2, "meanRecordsPerSec": 300000.0, "passes": 3},
+                      "4": {"cores": 4, "meanRecordsPerSec": 610000.0, "passes": 3}},
+            "stepRatios": [{"step": "2->4", "reportable": True, "ratio": 2.033, "ratioLow": 1.999,
+                            "ratioHigh": 2.066, "claimVerdict": "met"}]}})
+        for want in ("Build `abc123`", "| 4 | 610,000 | 3 |", "| 2->4 | 2.033x | 1.999x to 2.066x | met |"):
+            assert want in md, (want, md)
+    expect("headline.md: generated from suite.json, build hash first (must not fire)",
+           headline_page, "", should_fire=False)
+
     def disk_input_already_there():
         need_cold = projected(10_000)["neededBytes"]
         need_warm = projected(10_000, on_disk_gb=50)["neededBytes"]
@@ -3776,6 +3814,21 @@ def cmd_preflight():
                      + "; ".join(f"{k} (looked for {' or '.join(repr(n) for n in v)})"
                                  for k, v in absent))
 
+    def pipeline_readme():
+        """The project says what it built, in a README.md at its root.
+
+        A run on 2026-10-10 left ASSUMPTIONS.md and PLAN.md, which this check
+        already asked for, and no README: nothing said how to build or run
+        the pipeline, what each topic holds, or what a record looks like. The
+        record formats were only in code comments. Text search is loose, so a
+        missing name is listed exactly as it was looked for.
+        """
+        root = os.path.dirname(os.path.abspath(cfg().results))
+        problem = L.readme_problem(os.path.join(root, "README.md"), c)
+        if problem:
+            raise Exception(problem)
+        return f"README.md names all {len(L.readme_names(c))} topics and operators"
+
     def quiet_machine():
         """Nothing else should be competing for the cores under test.
 
@@ -4043,6 +4096,7 @@ def cmd_preflight():
     check("what this host's own cores do", host_ceiling)
     check("backlog covers warm-up, window and headroom", backlog_sizing_hint)
     check("the interview and the plan were written down", interview_and_plan)
+    check("the README names every topic and operator", pipeline_readme)
     check("the Docker VM against the machine's memory (reported)", host_memory)
     check("pipeline, broker and job manager against the VM (reported)", memory_budget)
     check("group / txn-id prefix scoped per run", scoping)
@@ -4648,6 +4702,23 @@ def cmd_completeness():
 
     try:
         a = drain(f"{c.project}-complete-clean"); a["verify"] = verify("clean drain", "clean"); out["arms"].append(a)
+        # One real record per topic, for the README to link to: on 2026-10-10
+        # the record formats existed only in code comments. Reported, never a
+        # reason to stop.
+        try:
+            names = {topic: f"The input, `{c.raw['topics']['in']}`; read off `{topic}`, the "
+                            f"completeness copy, which the same generator wrote."}
+            names.update({t: "An output the harness counts (`topics.out`)." for t in c.topics_out})
+            names.update({t: "An output of the pipeline's own (`topicsAlsoWritten`)." for t in c.topics_also})
+            names.update({t: "A second input (`design.inputs`)." for t in (c.design.get("inputs") or [])
+                          if t not in (c.raw["topics"]["in"], topic)})
+            samples = {t: L.sample_record(t) for t in names}
+            with open(os.path.join(c.results, "records.md"), "w") as f:
+                f.write(L.records_markdown(samples, out["build"], names))
+            log(f"  example records: results/records.md, {sum(1 for v in samples.values() if v)} of "
+                f"{len(samples)} topics had one")
+        except Exception as e:
+            log(f"  example records not written: {e}")
         # GUARD: the job matches the design the run wrote down. The verifier
         # checks the numbers in the topics the harness owns; this checks that
         # the operators, the inputs and the outputs the interview asked for
@@ -4945,6 +5016,7 @@ def cmd_report():
     # clean-room run 42 ended with a 0-byte suite.txt: two separate losses from
     # one bug.
     text, markdown = render_table(out) + "\n", render_markdown(out)
+    headline = L.headline_markdown(out)
     # The dashboard over the whole suite. A panel full while the suite ran and
     # empty afterwards is a time range or a retention too short, and the
     # dashboard is looked at afterwards. Reported, never a reason to stop.
@@ -4960,7 +5032,7 @@ def cmd_report():
         line = L.section7_metrics_line(named.get("missing"))
         out["section7Metrics"] = named.get("missing")
         text += f"metric names         : {line}\n"
-    for name, body in (("suite.txt", text), ("suite.md", markdown)):
+    for name, body in (("suite.txt", text), ("suite.md", markdown), ("headline.md", headline)):
         # Written whole, then moved into place. Rendering first already stops a
         # renderer crash from destroying the previous run's table; this also
         # covers dying part-way through the write, which would leave half a
@@ -4971,7 +5043,7 @@ def cmd_report():
             f.write(body)
         os.replace(tmp, final)
     save_json("suite.json", out)
-    print("wrote results/suite.txt and results/suite.md")
+    print("wrote results/suite.txt, results/suite.md and results/headline.md")
     # GUARD: a run that measured nothing is not a pass.
     #
     # Clean-room run 46 threw out eight of its ten cases -- four for source

@@ -3855,6 +3855,101 @@ def rows_differ(expected, got):
 OWN_PROCESSES = ("virtualmachine", "docker", "com.docker", "qemu", "java", "python3", "prove.py")
 
 
+def readme_names(c):
+    """Every name the project's README.md must mention: the topics the harness
+    and the design know about, and the operators design.operators names."""
+    topics = [c.topic_in] + list(c.topics_out) + list(c.topics_also) + list(c.design.get("inputs") or [])
+    ops = list(c.design.get("operators") or [])
+    seen, out = set(), []
+    for kind, names in (("topic", topics), ("operator", ops)):
+        for n in names:
+            if n and (kind, n) not in seen:
+                seen.add((kind, n))
+                out.append((kind, n))
+    return out
+
+
+def readme_missing(text, c):
+    """The names readme_names lists that the README text does not contain.
+    Text search, ignoring case: loose, and says exactly what it looked for."""
+    low = (text or "").lower()
+    return [(kind, n) for kind, n in readme_names(c) if n.lower() not in low]
+
+
+def readme_problem(path, c):
+    """None when the README at `path` names everything; otherwise what is wrong."""
+    if not os.path.exists(path):
+        return ("README.md not written at the project root. Section 2 lists what it holds: "
+                "what the pipeline does, its topics, record formats, operators, correctness, "
+                "how to build and run it, and where the results are.")
+    missing = readme_missing(open(path).read(), c)
+    if missing:
+        return ("README.md does not name: " + "; ".join(f"{k} {n!r}" for k, n in missing)
+                + ". Name every topic and every design.operators entry, as pipeline.json spells it.")
+    return None
+
+
+def sample_record(topic, timeout_ms=10000):
+    """One record off a topic, key and value, read with the broker's own
+    console consumer -- the format as it is on the wire, not as the code's
+    comments describe it. None when the topic has nothing to read."""
+    c = cfg()
+    SEP = "~~KEY-ENDS~~"   # plain text: a tab did not survive the shell
+    r = kafka(f"kafka-console-consumer.sh --bootstrap-server {c.boot_int} --topic {topic} "
+              f"--from-beginning --max-messages 1 --timeout-ms {timeout_ms} "
+              f"--property print.key=true --property key.separator={SEP}", check=False, timeout=60)
+    line = next((x for x in r.stdout.splitlines() if x.strip()), None)
+    if line is None:
+        return None
+    key, sep, value = line.partition(SEP)
+    return (key, value) if sep else (None, line)
+
+
+def records_markdown(samples, build, roles):
+    """results/records.md: one real record per topic, read after completeness.
+    samples: {topic: (key, value) or None}; roles: {topic: what it is}."""
+    out = ["# Example records", "",
+           f"One record off each topic, read by the harness after the completeness run of build `{build}`.",
+           "Copied from the topic, not typed. The README links here so the formats cannot go stale.", ""]
+    for topic, got in samples.items():
+        out.append(f"## {topic}")
+        out.append("")
+        out.append(roles.get(topic, ""))
+        out.append("")
+        if not got:
+            out += ["Nothing to read on this topic after the completeness run.", ""]
+            continue
+        key, value = got
+        cut = lambda v: v if len(v) <= 2000 else v[:2000] + " ... (cut at 2,000 characters)"
+        out += ["Key:", "", "```", cut(key) if key is not None else "(no key)", "```", "",
+                "Value:", "", "```", cut(value), "```", ""]
+    return "\n".join(out)
+
+
+def headline_markdown(out):
+    """results/headline.md: the latest numbers, generated from suite.json so
+    the README can link to them instead of retyping them."""
+    t = out.get("table") or {}
+    build = out.get("buildHash") or "unknown"
+    lines = ["# Headline numbers", "",
+             f"Build `{build}`, suite saved {out.get('savedAt', 'at an unrecorded time')}. "
+             f"Generated from `results/suite.json` by `prove.py report`; do not edit by hand.", ""]
+    if out.get("quickLook") or t.get("publishable") is False:
+        lines += ["**Not publishable:** a quick look, or a table a check threw out. See `suite.md`.", ""]
+    lines += ["| cores | mean input records per second | passes |", "|---:|---:|---:|"]
+    for k, row in sorted((t.get("cases") or {}).items(), key=lambda kv: int(kv[0])):
+        lines.append(f"| {row.get('cores', k)} | {row.get('meanRecordsPerSec', 0):,.0f} | {row.get('passes', '')} |")
+    lines += ["", "| step | ratio | lowest to highest pair | target 1.80x |", "|---|---:|---|---|"]
+    for r in t.get("stepRatios") or []:
+        if not r.get("reportable"):
+            lines.append(f"| {r['step']} | no number | | the step was thrown out: {r.get('reason', 'see suite.md')} |")
+            continue
+        lines.append(f"| {r['step']} | {r['ratio']:.3f}x | {r.get('ratioLow', r['ratio']):.3f}x to "
+                     f"{r.get('ratioHigh', r['ratio']):.3f}x | {r.get('claimVerdict', 'not judged')} |")
+    lines += ["", "The rates are records of the input topic drained per second. Full table: `suite.md`.", ""]
+    return "\n".join(lines)
+
+
 def parse_other_cpu(ps_text):
     """`ps -Ao %cpu,comm` output -> (cores used by everything that is not this
     run, [(name, percent)] busiest first, those at 5% or more)."""

@@ -474,6 +474,18 @@ Anything declared and missing **fails the run**. Anything built and not
 declared is printed and allowed — Flink adds vertices of its own, and the row
 is there so a reader can see what else is in the graph.
 
+**Completeness also draws the job, in `results/graph.md`.** It is read off the
+running plan with the same renderer as the suite report: the input topic and
+its partitions, each keyed edge with its key set and size, each output with its
+key count, and how often it is written (`design.every`). It used to be drawn
+only in the suite report, so a run that stopped earlier had no picture. On
+2026-10-10 both chains stopped at the short proof, and nothing showed what had
+been built, although completeness had had the plan in hand. The suite report
+still draws its own copy from the suite's plan, and says so if the shape
+differs from `graph.md`: the job changed after completeness proved it. Link
+`graph.md` from the README (§2). Next to it, `results/records.md` holds one
+real record off every topic, read after the clean drain.
+
 **Then fix it and run completeness again. No fill, no suite, until the diff is
 clean.** Usually the build is missing something the business case asked for, so
 the build is what changes. If instead the design named something the interview

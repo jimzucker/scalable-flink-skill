@@ -424,6 +424,7 @@ What the harness measures and how:
 | `manifest.json`, `manifest-small.json`, `manifest-tiny.json` | fill, completeness, tinyproof |
 | `completeness.json` | completeness |
 | `records.md` | completeness: one real record off every topic, key and value, for the project README to link to |
+| `graph.md` | completeness: the job graph read off the running plan, drawn as Mermaid. The suite report draws its own and says if the shape changed |
 | `suite.json`, `suite.txt`, `suite.md` | suite (and `report`, which regenerates the last two) |
 | `headline.md` | report: per-case rates and step ratios with the build hash, generated from `suite.json` for the project README to link to |
 | `ceiling.json` | ceiling |

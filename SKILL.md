@@ -1340,6 +1340,21 @@ one line.
 
 ## 9. Reporting
 
+- **Commit the evidence with the build hash, at every step boundary — a
+  stopped run's too.** The harness writes `results/.gitignore` on its first
+  command, so what is kept is not the agent's choice: the verdicts
+  (`preflight`, `completeness`, `tinyproof`, `selftest`, `suite`, every
+  `ceiling*`, `all.json`, `phases.log`, `DONE`), `records.md`, `headline.md`,
+  `graph.md`, and `manifest-summary.json`, the manifests' totals without
+  their per-key tables. Logs and full manifests are left out. The list goes by
+  name, not size: `suite.json` has reached 1.26 MB, more than any manifest. On
+  2026-10-10 the agent ignored all of `results/`, and the short proofs and the
+  final 1-, 2- and 4-core readings were on one disk only — they survived
+  because it had copied them into its journal. Replayed on that run, the rule
+  keeps 13 of its 30 files, 1.07 MB. After `down` and at the end of every
+  step the harness says what is not committed yet, and if the project's own
+  `.gitignore` hides `results/`. It reminds; it never stops a run. **A
+  number in a document points at a committed file.**
 - **Lead with the step ratio** the reader would buy — two units to four — with
   what it needed and its spread. Baseline ratio second, stating what it is against.
 - **Lead with the outcome, not the road to it**, and stop after the evidence.

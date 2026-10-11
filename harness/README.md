@@ -429,6 +429,8 @@ What the harness measures and how:
 | `ceiling.json` | ceiling |
 | `all.json`, `phases.log`, `DONE` | all (per-step rc and seconds; timestamps; the verdict to wait on) |
 | `harness.log` | everything |
+| `manifest-summary.json` | every command that ends a step: the manifests' totals, without their per-key tables |
+| `.gitignore` | every command: what is kept in git as evidence, by name. `down` and the end of each step report what is not committed yet |
 
 `suite.md` is the table for the report: header fields, step ratios with their
 range across passes, per-pass rows, per-case means with spread and

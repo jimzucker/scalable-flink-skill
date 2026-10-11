@@ -34,6 +34,7 @@ import os
 import calendar
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import textwrap
@@ -3177,6 +3178,42 @@ def cmd_selftest(live=True, topic=None):
     expect("headline.md: generated from suite.json, build hash first (must not fire)",
            headline_page, "", should_fire=False)
 
+    # The evidence: results/.gitignore keeps the verdicts and leaves the bulk out.
+    def evidence_repo(project_ignores_results=False):
+        root = tempfile.mkdtemp(prefix="evidence-")
+        results = os.path.join(root, "results")
+        subprocess.run(["git", "init", "-q", root], check=True)
+        if project_ignores_results:
+            open(os.path.join(root, ".gitignore"), "w").write("results/\n")
+        L.write_results_gitignore(results)
+        for f in ("completeness.json", "tinyproof.json", "ceiling-4core.json", "DONE",
+                  "harness.log", "fill-orders.log", "det-a.json", "manifest.json"):
+            open(os.path.join(results, f), "w").write("{}")
+        json.dump({"count": 5, "perKey": {"A": 1}}, open(os.path.join(results, "manifest.json"), "w"))
+        L.write_manifest_summary(results)
+        return root, results
+
+    def evidence_kept():
+        root, results = evidence_repo()
+        line = " ".join(L.evidence_lines(results))
+        for kept in ("completeness.json", "tinyproof.json", "ceiling-4core.json", "DONE",
+                     "manifest-summary.json", ".gitignore"):
+            assert kept in line, (kept, line)
+        for left_out in ("harness.log", "fill-orders.log", "det-a.json", "manifest.json,"):
+            assert left_out not in line, (left_out, line)
+        assert json.load(open(os.path.join(results, "manifest-summary.json"))) == {"manifest.json": {"count": 5}}
+        subprocess.run(["git", "-C", root, "add", "-A"], check=True)
+        subprocess.run(["git", "-C", root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "r"], check=True)
+        assert "every kept file" in " ".join(L.evidence_lines(results))
+    expect("evidence: the verdicts are kept, logs and manifests are left out (must not fire)",
+           evidence_kept, "", should_fire=False)
+
+    def evidence_hidden():
+        root, results = evidence_repo(project_ignores_results=True)
+        raise Refusal("rig", " ".join(L.evidence_lines(results)))
+    expect("evidence: a project .gitignore that hides results/ is named", evidence_hidden,
+           "hides results/")
+
     def disk_input_already_there():
         need_cold = projected(10_000)["neededBytes"]
         need_warm = projected(10_000, on_disk_gb=50)["neededBytes"]
@@ -5615,6 +5652,10 @@ if __name__ == "__main__":
     # The user's own DOCKER_CONFIG wins; otherwise no credential helper.
     if "DOCKER_CONFIG" not in os.environ:
         os.environ["DOCKER_CONFIG"] = L.harness_docker_config()
+    # What is kept as evidence is decided here, on the first command of a run,
+    # not by whoever writes the project's .gitignore (section 9).
+    if name not in ("replay", "selftest-pure", "selftest", "report"):
+        L.write_results_gitignore(cfg().results)
     try:
         rc = COMMANDS[name]()
     except Refusal as e:
@@ -5628,4 +5669,13 @@ if __name__ == "__main__":
                 L.stop_sampler(); L.stop_tm()
             except Exception:
                 pass
+        # A stopped run is a result too: its evidence is summarised and
+        # reported the same way as a finished one's.
+        if name in ("all", "down", "completeness", "tinyproof", "suite", "ceiling", "report"):
+            try:
+                L.write_manifest_summary(cfg().results)
+                for line in L.evidence_lines(cfg().results):
+                    log(line)
+            except Exception as e:
+                log(f"evidence: not checked ({e})")
     sys.exit(rc)

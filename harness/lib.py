@@ -3950,6 +3950,83 @@ def headline_markdown(out):
     return "\n".join(lines)
 
 
+# What a run keeps in git as its evidence, by name. Not by size: measured on
+# disk, suite.json reached 1.26 MB (clean-room run 52) and tinyproof.json
+# 328 KB (2026-10-10), while the manifests it leaves out were 0.78-0.84 MB --
+# the file most worth keeping is larger than the ones that are not, so no
+# size limit separates them (and .gitignore cannot express one).
+RESULTS_KEEP = ("preflight.json", "completeness.json", "tinyproof.json", "selftest.json",
+                "suite.json", "suite.md", "suite.txt", "ceiling*.json", "all.json", "phases.log",
+                "DONE", "records.md", "headline.md", "graph.md", "manifest-summary.json")
+
+
+def results_gitignore_text():
+    return ("# Written by prove.py on every command: what this run keeps as evidence\n"
+            "# (SKILL.md section 9). Everything else in results/ is left out of git.\n"
+            "# Edits here are overwritten.\n*\n!.gitignore\n"
+            + "".join(f"!{k}\n" for k in RESULTS_KEEP))
+
+
+def write_results_gitignore(results):
+    """results/.gitignore, written by the harness so what is kept is not left
+    to the agent. On 2026-10-10 the agent ignored all of results/ and the
+    completeness verdicts, the short proofs and the final readings stayed on
+    one disk; they survived only because it copied them into its journal."""
+    os.makedirs(results, exist_ok=True)
+    path = os.path.join(results, ".gitignore")
+    text = results_gitignore_text()
+    try:
+        if open(path).read() == text:
+            return
+    except OSError:
+        pass
+    with open(path, "w") as f:
+        f.write(text)
+
+
+def write_manifest_summary(results):
+    """The manifests' single values -- counts, totals, seeds -- without the
+    per-key tables that make them most of a megabyte (20,480 keys on
+    2026-10-10)."""
+    import glob as _glob
+    out = {}
+    for f in sorted(_glob.glob(os.path.join(results, "manifest*.json"))):
+        if f.endswith("manifest-summary.json"):
+            continue
+        try:
+            d = json.load(open(f))
+        except Exception:
+            continue
+        if isinstance(d, dict):
+            out[os.path.basename(f)] = {k: v for k, v in d.items()
+                                        if isinstance(v, (str, int, float, bool)) or v is None}
+    if out:
+        with open(os.path.join(results, "manifest-summary.json"), "w") as f:
+            json.dump(out, f, indent=2, sort_keys=True)
+    return out
+
+
+def evidence_lines(results):
+    """What git holds of the evidence. Reported after `down` and at the end of
+    the chain as a reminder; never a reason to stop."""
+    root = os.path.dirname(os.path.abspath(results))
+    rel = os.path.relpath(os.path.abspath(results), root)
+    def git(*args):
+        return subprocess.run(["git", "-C", root, *args], capture_output=True, text=True)
+    if git("rev-parse", "--is-inside-work-tree").returncode != 0:
+        return [f"evidence: {root} is not a git repository, so nothing in {rel}/ is kept. "
+                f"Section 9 asks for the kept results to be committed with the build hash."]
+    if git("check-ignore", "-q", f"{rel}/.gitignore").returncode == 0:
+        return [f"evidence: the project's own .gitignore hides {rel}/, so nothing in it is kept. "
+                f"Remove that line; {rel}/.gitignore already leaves out what should not be committed."]
+    st = git("status", "--porcelain", "--untracked-files=all", "--", rel).stdout.splitlines()
+    waiting = sorted(line[3:] for line in st if line.strip())
+    if waiting:
+        return [f"evidence: not committed yet: {', '.join(waiting)}. Commit them with the build hash "
+                f"in the message (section 9)."]
+    return [f"evidence: every kept file in {rel}/ is committed"]
+
+
 def parse_other_cpu(ps_text):
     """`ps -Ao %cpu,comm` output -> (cores used by everything that is not this
     run, [(name, percent)] busiest first, those at 5% or more)."""

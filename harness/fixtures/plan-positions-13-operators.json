@@ -1,0 +1,110 @@
+{
+ "why": "The default business case as Flink served it during completeness, 2026-10-10, build 078dc8aaf0caa40c: 4 tasks, 13 operators. The every-operator diagram is tested against it.",
+ "plan": {
+  "jid": "34810760fdb6f2e51844514474cdf04b",
+  "name": "positions",
+  "type": "STREAMING",
+  "nodes": [
+   {
+    "id": "36d4643082db3c452764d1522f499c91",
+    "parallelism": 1,
+    "operator": "",
+    "operator_strategy": "",
+    "description": "position-by-symbol<br/>:- sink-positions-by-symbol: Writer<br/>:  +- sink-positions-by-symbol: Committer<br/>+- sink-market-values-by-symbol: Writer<br/>   +- sink-market-values-by-symbol: Committer<br/>",
+    "inputs": [
+     {
+      "num": 0,
+      "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+      "ship_strategy": "HASH",
+      "exchange": "pipelined_bounded"
+     },
+     {
+      "num": 1,
+      "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+      "ship_strategy": "BROADCAST",
+      "exchange": "pipelined_bounded"
+     }
+    ],
+    "optimizer_properties": {}
+   },
+   {
+    "id": "2ec4b66bbb4aec4aa40e69c0fa20a9fc",
+    "parallelism": 1,
+    "operator": "",
+    "operator_strategy": "",
+    "description": "position-by-account<br/>:- sink-positions-by-account: Writer<br/>:  +- sink-positions-by-account: Committer<br/>+- sink-market-values-by-account: Writer<br/>   +- sink-market-values-by-account: Committer<br/>",
+    "inputs": [
+     {
+      "num": 0,
+      "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+      "ship_strategy": "HASH",
+      "exchange": "pipelined_bounded"
+     },
+     {
+      "num": 1,
+      "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+      "ship_strategy": "BROADCAST",
+      "exchange": "pipelined_bounded"
+     }
+    ],
+    "optimizer_properties": {}
+   },
+   {
+    "id": "45b0254a46cabbc3efeea5d2e170ea5b",
+    "parallelism": 1,
+    "operator": "",
+    "operator_strategy": "",
+    "description": "Source: orders-source<br/>+- parse-orders<br/>",
+    "optimizer_properties": {}
+   },
+   {
+    "id": "d1f45bd48db625b66eabc89f33b0ff2a",
+    "parallelism": 1,
+    "operator": "",
+    "operator_strategy": "",
+    "description": "Source: prices-source<br/>",
+    "optimizer_properties": {}
+   }
+  ]
+ },
+ "ctx": {
+  "inputs": [
+   {
+    "topic": "orders",
+    "partitions": 8,
+    "source": "orders-source"
+   },
+   {
+    "topic": "prices",
+    "partitions": null,
+    "source": "prices-source"
+   }
+  ],
+  "outputs": [
+   {
+    "topic": "positions-by-symbol",
+    "keys": 4096,
+    "every": null
+   },
+   {
+    "topic": "positions-by-account",
+    "keys": 16384,
+    "every": null
+   },
+   {
+    "topic": "market-values-by-symbol",
+    "keys": 4096,
+    "every": "10 s"
+   },
+   {
+    "topic": "market-values-by-account",
+    "keys": 16384,
+    "every": "10 s"
+   }
+  ],
+  "keyed": {
+   "position-by-symbol": 4096,
+   "position-by-account": 16384
+  }
+ }
+}

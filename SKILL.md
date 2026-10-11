@@ -474,17 +474,35 @@ Anything declared and missing **fails the run**. Anything built and not
 declared is printed and allowed — Flink adds vertices of its own, and the row
 is there so a reader can see what else is in the graph.
 
-**Completeness also draws the job, in `results/graph.md`.** It is read off the
-running plan with the same renderer as the suite report: the input topic and
-its partitions, each keyed edge with its key set and size, each output with its
-key count, and how often it is written (`design.every`). It used to be drawn
-only in the suite report, so a run that stopped earlier had no picture. On
-2026-10-10 both chains stopped at the short proof, and nothing showed what had
-been built, although completeness had had the plan in hand. The suite report
-still draws its own copy from the suite's plan, and says so if the shape
-differs from `graph.md`: the job changed after completeness proved it. Link
-`graph.md` from the README (§2). Next to it, `results/records.md` holds one
-real record off every topic, read after the clean drain.
+**Completeness also draws the job, in `results/graph.md`, with every
+operator in it.** It is read off the running plan: one box per Flink task,
+titled with its operator count, and every chained operator inside it,
+Writers and Committers included. Arrows between boxes are labelled keyBy with
+the key set and its count from `keySets`, or broadcast. Topics are rounded
+shapes outside every box: inputs carry `partitions`, outputs their key count
+and how often they are written (`design.every`). An output is tied to the
+Writer whose name holds the topic's name, never to a Committer, which writes
+nothing. An input other than the scaled one is tied to its source by
+`design.sources` (`{topic: operator name}`). A topic nothing names is drawn
+without a line, and the page says which. The earlier diagram folded the
+sinks into the arrows: on 2026-10-10 it drew 5 boxes for 4 tasks and 13
+operators, and the first question about it was "is each node an operator?".
+It used to be drawn only in the suite report, so a run that stopped earlier
+had no picture; that run stopped at the short proof twice. The suite report
+draws its own copy from the suite's plan, and says so if the shape differs
+from `graph.md`. Link `graph.md` from the README (§2). Next to it,
+`results/records.md` holds one real record off every topic.
+
+**The picture is a PNG as well as Mermaid.** Most Markdown viewers — VS Code's
+built-in preview, Quick Look — show a Mermaid block as code; that is what the
+2026-10-10 user saw. So the harness writes `graph.mmd`, renders `graph.png`
+with `@mermaid-js/mermaid-cli@11.4.0` in its ELK layout (PNG, because Mermaid's SVG labels are
+HTML that non-browser viewers drop), reads the picture back for its pixel
+size, and writes `graph.md` as the paragraph, the image, then the Mermaid
+block. The README embeds `graph.png`. With no `npx`, or a render that fails,
+the page keeps the Mermaid block, the log says the picture was not rendered
+and what to install, and the run carries on. Preflight reports whether `npx`
+is there.
 
 **Then fix it and run completeness again. No fill, no suite, until the diff is
 clean.** Usually the build is missing something the business case asked for, so
@@ -1330,6 +1348,11 @@ a signed sum, because both are unstable for reasons unrelated to the pipeline.
 **A panel you cannot explain is a liability** — either it says what the number
 means or it goes.
 
+
+**The job graph is not a dashboard panel.** Grafana shows how the job behaves
+over time; what the job *is* comes from the plan, in `results/graph.png` and
+`suite-graph.png` (§4). Put the picture in the README and the report, where
+the numbers are read, not in a panel.
 ## 8. Explaining a result
 
 A number short of expectation invites a reason, and a plausible reason is cheap

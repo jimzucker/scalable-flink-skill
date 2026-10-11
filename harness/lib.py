@@ -2342,6 +2342,184 @@ def graph_mermaid(plan, ctx=None):
     return "\n".join(lines)
 
 
+def graph_tasks(plan, ctx=None):
+    """Pure. Every operator in the job, one Mermaid subgraph per Flink task.
+
+    graph_mermaid draws the steps a person plans and folds the sink Writers and
+    Committers into the arrows into their topics. On 2026-10-10 that drew 5
+    boxes for a job of 4 tasks and 13 operators, and the first question about
+    the picture was "is each node an operator?" -- the honest answer was no.
+    Here nothing is folded away: each task is a box titled with its operator
+    count, sources first; every operator in its chain is a box inside it, with
+    an arrow to each child (_op_tree's depth gives the parent). Between tasks,
+    an edge from the upstream task's last operator to the downstream task's
+    first, labelled keyBy with the key set and its count, or broadcast. Topics
+    sit outside every task: an output is tied to the Writer whose name holds
+    the topic's name, by name and never by position, with a longer edge
+    (--->) so the line does not run behind the Committer. A Committer writes
+    nothing and gets no edge. A topic nothing names is drawn unconnected and
+    listed in what this returns, so the caller can say so.
+    Returns (mermaid text, {"tasks", "operators", "unconnected"}), or ("", ...)."""
+    nodes = (plan or {}).get("nodes") or []
+    info = {"tasks": 0, "operators": 0, "unconnected": []}
+    if not nodes:
+        return "", info
+    ctx = ctx or {}
+    norm = lambda t: (t or "").lower().replace("_", "-")
+    safe = lambda t: MERMAID_SAFE.sub("", str(t))
+    q = lambda t: '"' + safe(t).replace('"', "'") + '"'
+
+    def shown(raw):
+        op = _op_name(raw)
+        if isinstance(op, str):
+            return op
+        name = re.sub(r"^\[\d+\]:", "", raw).strip()
+        return name if len(name) <= 60 else name[:57] + "..."
+
+    order = [n for n in nodes if not n.get("inputs")] + [n for n in nodes if n.get("inputs")]
+    lines = ["flowchart LR"]
+    first, last, chain, writers = {}, {}, {}, []
+    for ti, n in enumerate(order, 1):
+        tree = _op_tree(n.get("description"))
+        info["operators"] += len(tree)
+        chain[n["id"]] = " ".join(name for _, name in tree)
+        title = f"Task {ti}: {len(tree)} operator" + ("" if len(tree) == 1 else "s")
+        lines.append(f"  subgraph t{ti}[{q(title)}]")
+        stack = []
+        for oi, (depth, raw) in enumerate(tree):
+            nid = f"t{ti}o{oi}"
+            lines.append(f"    {nid}[{q(shown(raw))}]")
+            stack = stack[:depth]
+            if stack:
+                lines.append(f"    {stack[-1]} --> {nid}")
+            stack.append(nid)
+            if re.search(r":\s*Writer$", raw):
+                writers.append((nid, raw, n["id"]))
+        lines.append("  end")
+        if tree:
+            # Flink does not say which branch of a branching chain feeds an
+            # outgoing edge, so such a task sends its edges from the task's box
+            # itself rather than from an operator picked by position
+            leaves = sum(1 for i, (d, _) in enumerate(tree) if i + 1 == len(tree) or tree[i + 1][0] <= d)
+            first[n["id"]], last[n["id"]] = f"t{ti}o0", (f"t{ti}o{len(tree) - 1}" if leaves <= 1 else f"t{ti}")
+    info["tasks"] = len(order)
+    keyed = ctx.get("keyed") or {}
+    task_keys = {}
+    for n in order:
+        head = _op_tree(n.get("description"))[0][1] if n["id"] in first else ""
+        for i in n.get("inputs") or []:
+            a, b = last.get(i.get("id")), first.get(n["id"])
+            if not a or not b:
+                continue
+            ship = (i.get("ship_strategy") or "").strip().upper()
+            if ship == "BROADCAST":
+                lines.append(f"  {a} -.->|broadcast| {b}")
+            elif ship == "HASH":
+                stage = [st for st in keyed if norm(st) in norm(head)] or \
+                        [st for st in keyed if norm(st) in norm(chain[n["id"]])]
+                if len(stage) == 1:
+                    task_keys[n["id"]] = keyed.get(stage[0])
+                    what = f"keyBy {stage[0]}" + (f", {keyed[stage[0]]:,} keys" if keyed.get(stage[0]) else "")
+                else:
+                    what = "keyBy"
+                lines.append(f"  {a} -->|{q(what)}| {b}")
+            elif ship in ("", "FORWARD"):
+                lines.append(f"  {a} --> {b}")
+            else:
+                lines.append(f"  {a} -->|{q(ship.lower())}| {b}")
+    sources = [n for n in order if not n.get("inputs") and n["id"] in first]
+    for k, t in enumerate(ctx.get("inputs") or []):
+        topic = t.get("topic")
+        if not topic:
+            continue
+        parts = t.get("partitions")
+        lines.append(f"  in{k}([{q(topic + (f'<br/>{parts} partitions' if parts else ''))}])")
+        src = norm(t.get("source"))
+        to = [s for s in sources if src and src in norm(_op_tree(s.get("description"))[0][1])] or \
+             [s for s in sources if norm(topic) in norm(shown(_op_tree(s.get("description"))[0][1]))]
+        if len(to) == 1:
+            lines.append(f"  in{k} --> {first[to[0]['id']]}")
+        else:
+            info["unconnected"].append(topic)
+    outs = [t for t in (ctx.get("outputs") or []) if t.get("topic")]
+    for k, t in enumerate(outs):
+        topic = t.get("topic")
+        hit = [(nid, task) for nid, raw, task in writers if norm(topic) in norm(raw)]
+        if not hit and len(writers) == 1 and len(outs) == 1:
+            hit = [(writers[0][0], writers[0][2])]   # one Writer, one output: they are the same
+        # the key count of the keyed edge into the Writer's task, when the
+        # configuration did not tie a key set to the topic by name
+        keys = t.get("keys") or (task_keys.get(hit[0][1]) if len(hit) == 1 else None)
+        lines.append(f"  out{k}([{q(topic + (f'<br/>{keys:,} keys' if keys else ''))}])")
+        hit = [nid for nid, _ in hit]
+        if len(hit) == 1:
+            lines.append(f"  {hit[0]} --->|{q('every ' + str(t['every']))}| out{k}" if t.get("every")
+                         else f"  {hit[0]} ---> out{k}")
+        else:
+            info["unconnected"].append(topic)
+    return "\n".join(lines), info
+
+
+def graph_paragraph(info, cases):
+    """The plain-English key under the picture."""
+    sizes = ", ".join(str(x) for x in cases[:-1]) + (f" or {cases[-1]}" if len(cases) > 1 else str(cases[0]))
+    text = (f"{info['tasks']} tasks, {info['operators']} operators. Each box is one Flink task. The operators "
+            f"inside a box are chained: they run in one thread, with no network hop between them. Arrows "
+            f"between boxes are how records cross from one task to another: keyBy is a hash shuffle that sends "
+            f"each key to one parallel instance, and broadcast sends every record to every instance. Rounded "
+            f"shapes are Kafka topics, outside Flink. Every task runs at the case's parallelism ({sizes}).")
+    if info.get("unconnected"):
+        text += (" Drawn without a line, because no operator's name holds the topic's name: "
+                 + ", ".join(info["unconnected"]) + ". Name the input in design.sources, or the sink after its topic.")
+    return text
+
+
+MERMAID_CLI = "@mermaid-js/mermaid-cli@11.4.0"
+GRAPH_PICTURE_LAYOUT = "---\nconfig:\n  layout: elk\n---\n"
+
+
+def png_size(path):
+    """(width, height) read from a PNG's header, or None if it is not one."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(24)
+    except OSError:
+        return None
+    if len(head) < 24 or head[:8] != b"\x89PNG\r\n\x1a\n" or head[12:16] != b"IHDR":
+        return None
+    import struct
+    return struct.unpack(">II", head[16:24])
+
+
+def render_png(mmd_path, png_path, which=None, run=None):
+    """The Mermaid source as a PNG, with a pinned mermaid-cli. A picture as well
+    as the source because most Markdown viewers -- VS Code's own preview, Quick
+    Look -- show a Mermaid block as code (2026-10-11); PNG because Mermaid's SVG
+    labels are HTML that non-browser viewers drop. Never a reason to stop: no
+    npx, or a render that fails, leaves the Mermaid block and says so.
+    Returns (ok, one line saying what happened)."""
+    which = which or shutil.which
+    run = run or subprocess.run
+    if not which("npx"):
+        return False, ("job graph picture not rendered: npx is not on the PATH. Install Node.js "
+                       "(it brings npx); the Mermaid source is in the page instead.")
+    try:
+        # -w 1600: at the default 800 the ELK layout of run 51's SQL job came
+        # out 1568 x 230 pixels with labels too small to read; 1600 gave 3168 x 462
+        r = run(["npx", "-y", MERMAID_CLI, "-i", mmd_path, "-o", png_path, "-b", "white", "-s", "2", "-w", "1600"],
+                capture_output=True, text=True, timeout=300)
+    except Exception as e:
+        return False, f"job graph picture not rendered: {MERMAID_CLI} did not run ({e})"
+    size = png_size(png_path)
+    if getattr(r, "returncode", 1) != 0 or not size:
+        why = ((getattr(r, "stderr", "") or "").strip().splitlines() or ["no PNG was written"])[-1]
+        return False, f"job graph picture not rendered: {MERMAID_CLI} said: {why[:200]}"
+    w, h = size
+    if w < 200 or h < 100:
+        return False, f"job graph picture not usable: {w} x {h} pixels"
+    return True, f"job graph picture: {os.path.basename(png_path)}, {w} x {h} pixels"
+
+
 def graph_context(c, manifest):
     """What graph_mermaid needs beyond the plan, from the configuration and the
     run's own manifest. Key counts come from the manifest's key sets, which
@@ -2355,7 +2533,9 @@ def graph_context(c, manifest):
         v = manifest.get(field)
         keyed[stage] = len(v) if isinstance(v, (dict, list)) else (v if isinstance(v, int) else None)
     ins = [{"topic": c.raw["topics"]["in"], "partitions": c.partitions, "source": c.source_match}]
-    ins += [{"topic": t, "partitions": None} for t in (design.get("inputs") or []) if t != c.raw["topics"]["in"]]
+    sources = design.get("sources") or {}
+    ins += [{"topic": t, "partitions": None, "source": sources.get(t)}
+            for t in (design.get("inputs") or []) if t != c.raw["topics"]["in"]]
     outs = []
     for t in list(c.raw["topics"].get("out") or []) + list(c.topics_also or []):
         stage = next((s for s in keyed if s.lower().replace("_", "-") in t.lower().replace("_", "-")
@@ -3957,7 +4137,8 @@ def headline_markdown(out):
 # size limit separates them (and .gitignore cannot express one).
 RESULTS_KEEP = ("preflight.json", "completeness.json", "tinyproof.json", "selftest.json",
                 "suite.json", "suite.md", "suite.txt", "ceiling*.json", "all.json", "phases.log",
-                "DONE", "records.md", "headline.md", "graph.md", "manifest-summary.json")
+                "DONE", "records.md", "headline.md", "graph.md", "graph.mmd", "graph.png",
+                "suite-graph.md", "suite-graph.mmd", "suite-graph.png", "manifest-summary.json")
 
 
 def results_gitignore_text():
@@ -4038,25 +4219,39 @@ def shape_note(completeness_signature, suite_signature):
             "completeness and the suite, so the completeness verdict is about a different job.")
 
 
-def write_graph_md(results, plan, ctx, build, when):
-    """results/graph.md: the job graph read off the running plan, drawn with
-    the renderer the suite report uses. Written during completeness, so a run
-    that stops before the suite still has a picture of what it built: on
-    2026-10-10 the suite never ran and nothing drew the job, although
-    completeness had its plan in hand. Returns the path, or None with no plan."""
-    graph = graph_mermaid(plan, ctx)
+def write_graph_md(results, plan, ctx, build, when, cases=None, name="graph", render=None):
+    """results/<name>.mmd, .png and .md: every operator in the job, read off the
+    running plan. Written during completeness, so a run that stops before the
+    suite still has a picture of what it built: on 2026-10-10 the suite never
+    ran and nothing drew the job, although completeness had its plan in hand.
+    Returns (path of the .md or None with no plan, the info graph_tasks gives,
+    the line render_png gave)."""
+    graph, info = graph_tasks(plan, ctx)
     if not graph:
-        return None
+        return None, info, None
     os.makedirs(results, exist_ok=True)
-    path = os.path.join(results, "graph.md")
+    mmd, png = os.path.join(results, f"{name}.mmd"), os.path.join(results, f"{name}.png")
+    with open(mmd, "w") as f:
+        # ELK for the picture: Mermaid's default layout ran the lines of run
+        # 51's 11-task SQL job behind boxes they do not connect to; ELK routes
+        # them between the boxes (looked at, 2026-10-11). Only in the file the
+        # picture is drawn from: the block in the page stays plain Mermaid,
+        # for viewers whose Mermaid has no ELK.
+        f.write(GRAPH_PICTURE_LAYOUT + graph + "\n")
+    ok, line = (render or render_png)(mmd, png)
+    if not ok and os.path.exists(png):
+        os.remove(png)   # a picture of an earlier graph would be wrong
     body = ["# The job graph", "",
-            f"Build `{build}`, read off the running plan {when}, not drawn by hand. Partition and "
-            f"key counts come from the configuration and that run's manifest; an interval on an "
-            f"output is what the build declared in design.every, not something the harness measured.",
-            "", "```mermaid", graph, "```", ""]
+            f"Build `{build}`, read off the running plan {when}, not drawn by hand. "
+            + graph_paragraph(info, cases or [1]) + " Partition and key counts come from the "
+            f"configuration and that run's manifest; an interval on an output is what the build declared "
+            f"in design.every, not something the harness measured.", ""]
+    body += [f"![Job graph]({name}.png)", ""] if ok else [f"_{line}_", ""]
+    body += [f"Source: [`{name}.mmd`]({name}.mmd)", "", "```mermaid", graph, "```", ""]
+    path = os.path.join(results, f"{name}.md")
     with open(path, "w") as f:
         f.write("\n".join(body))
-    return path
+    return path, info, line
 
 
 def parse_other_cpu(ps_text):
@@ -4813,13 +5008,21 @@ def render_markdown(out):
         man = json.load(open(os.path.join(c.results, "manifest.json")))
     except Exception:
         man = {}
-    graph = graph_mermaid(((out.get("runs") or [{}])[0].get("shape") or {}).get("plan"), graph_context(c, man))
+    graph, info = graph_tasks(((out.get("runs") or [{}])[0].get("shape") or {}).get("plan"), graph_context(c, man))
     if graph:
+        # The picture is rendered by `prove.py report` before this runs
+        # (write_graph_md, name "suite-graph"); this only embeds it, so a
+        # renderer that is only reading never starts a browser.
+        pic = os.path.exists(os.path.join(c.results, "suite-graph.png"))
         L += ["", "### The job graph that ran", "",
               "Read off the running plan, not drawn. Every case ran this shape — a row whose "
-              "shape differed would have been thrown out. Partition and key counts come from the "
-              "configuration and the run's own manifest; an interval on an output is what the build "
-              "declared in design.every, not something the harness measured.", "", "```mermaid", graph, "```"]
+              "shape differed would have been thrown out. " + graph_paragraph(info, list(c.cases))
+              + " Partition and key counts come from the configuration and the run's own manifest; an "
+              "interval on an output is what the build declared in design.every, not something the "
+              "harness measured.", ""]
+        L += ["![Job graph](suite-graph.png)", ""] if pic else \
+             ["_No picture: `prove.py report` could not render one (see its log)._", ""]
+        L += ["```mermaid", graph, "```"]
         # The same job as completeness drew in results/graph.md? A different
         # shape means the build changed between completeness and the suite,
         # and the completeness verdict is about a different job.

@@ -3217,7 +3217,8 @@ def cmd_selftest(live=True, topic=None):
     def graph_survives_a_stop():
         with tempfile.TemporaryDirectory() as tmp:
             def completeness():
-                assert L.write_graph_md(tmp, RUN36_PLAN, {}, "abc123", "during completeness")
+                assert L.write_graph_md(tmp, RUN36_PLAN, {}, "abc123", "during completeness",
+                                        render=lambda m, p: (False, "not rendered in a self-test"))[0]
                 return 0
             rc = cmd_all(steps=[("completeness", completeness), ("tinyproof", lambda: 1)], results=tmp)
             page = open(os.path.join(tmp, "graph.md")).read()
@@ -3232,6 +3233,65 @@ def cmd_selftest(live=True, topic=None):
         raise Refusal("case", L.shape_note([["a", []]], [["a", ["HASH"]]]))
     expect("suite report: a job that changed since completeness is said so", graph_shape_changed,
            "not the shape completeness ran")
+
+    # The every-operator job graph, on the 2026-10-10 plan: 4 tasks, 13 operators.
+    fx = json.load(open(os.path.join(L.HERE, "fixtures", "plan-positions-13-operators.json")))
+
+    def graph_every_operator():
+        g, info = L.graph_tasks(fx["plan"], fx["ctx"])
+        boxes = re.findall(r'^\s+(t\d+o\d+)\["(.*)"\]$', g, re.M)
+        want = [L._op_name(raw) if isinstance(L._op_name(raw), str) else raw
+                for n in fx["plan"]["nodes"] for _, raw in L._op_tree(n["description"])]
+        assert (info["tasks"], info["operators"], len(boxes)) == (4, 13, 13), (info, len(boxes))
+        assert sorted(name for _, name in boxes) == sorted(want), (boxes, want)
+        assert g.count("subgraph ") == 4 and "Task 3: 5 operators" in g, g
+    expect("job graph: every operator is a box, one subgraph per task (must not fire)",
+           graph_every_operator, "", should_fire=False)
+
+    def graph_writers_not_committers():
+        g, info = L.graph_tasks(fx["plan"], fx["ctx"])
+        name = dict(re.findall(r'^\s+(t\d+o\d+)\["(.*)"\]$', g, re.M))
+        into = re.findall(r"^\s+(t\d+o\d+) --->(?:\|[^|]*\|)? (out\d+)$", g, re.M)
+        assert len(into) == 4 and not info["unconnected"], (into, info)
+        for src, _ in into:
+            assert name[src].endswith(": Writer"), name[src]
+        assert not [n for n in name.values() if n.endswith("Committer") and re.search(
+            rf"{[k for k, v in name.items() if v == n][0]} -+>.*out\d", g)]
+        assert "keyBy position-by-account, 16,384 keys" in g and "-.->|broadcast|" in g, g
+    expect("job graph: each output is tied to its Writer, never a Committer (must not fire)",
+           graph_writers_not_committers, "", should_fire=False)
+
+    def graph_unnamed_topic():
+        ctx = dict(fx["ctx"]); ctx["outputs"] = list(ctx["outputs"]) + [{"topic": "nobody-writes-this"}]
+        g, info = L.graph_tasks(fx["plan"], ctx)
+        assert "--> out4" not in g and "---> out4" not in g, g
+        raise Refusal("rig", L.graph_paragraph(info, [1, 2, 4]))
+    expect("job graph: a topic no Writer names is drawn unconnected and named", graph_unnamed_topic,
+           "no operator's name holds the topic's name: nobody-writes-this")
+
+    def graph_without_npx():
+        ok, line = L.render_png("x.mmd", "x.png", which=lambda _: None)
+        assert not ok
+        with tempfile.TemporaryDirectory() as tmp:
+            path, info, said = L.write_graph_md(tmp, fx["plan"], fx["ctx"], "abc123", "during completeness",
+                                                cases=[1, 2, 4], render=lambda m, p: L.render_png(m, p, which=lambda _: None))
+            page = open(path).read()
+        assert "```mermaid" in page and "![Job graph]" not in page and said in page, page[:400]
+        raise Refusal("rig", said)
+    expect("job graph: with no npx the run carries on and says the picture was not rendered",
+           graph_without_npx, "not rendered: npx is not on the PATH")
+
+    def graph_tiny_png():
+        with tempfile.TemporaryDirectory() as tmp:
+            png = os.path.join(tmp, "g.png")
+            import struct, zlib
+            open(png, "wb").write(b"\x89PNG\r\n\x1a\n" + struct.pack(">I", 13) + b"IHDR"
+                                  + struct.pack(">II", 10, 10) + b"\x08\x02\x00\x00\x00")
+            ok, line = L.render_png("g.mmd", png, which=lambda _: "/bin/npx",
+                                    run=lambda *a, **k: subprocess.CompletedProcess(a, 0, "", ""))
+        assert not ok
+        raise Refusal("rig", line)
+    expect("job graph: a picture read back too small to use is said so", graph_tiny_png, "10 x 10 pixels")
 
     def disk_input_already_there():
         need_cold = projected(10_000)["neededBytes"]
@@ -4161,6 +4221,9 @@ def cmd_preflight():
     check("the job jar exists and hashes", jar)
     check("the build runs on either Kafka (reported)", either_kafka)
     check("the diagram can show how often each output is written (reported)", every_declared)
+    check("the job graph can be drawn as a picture (reported)",
+          lambda: (f"npx at {shutil.which('npx')}; the graph is rendered with {L.MERMAID_CLI}" if shutil.which("npx")
+                   else "npx is not on the PATH: the job graph is written as Mermaid only. Install Node.js for a picture"))
 
     # The dashboard is built by the agent like the job is, and is tested like
     # it: from its files here, through Grafana after completeness, and over
@@ -4761,9 +4824,13 @@ def cmd_completeness():
         # The picture of what was built, from the running plan, now -- not
         # only in the suite report, which a stopped run never reaches.
         try:
-            g = L.write_graph_md(c.results, (a.get("shape") or {}).get("plan"),
-                                 L.graph_context(c, man), out["build"], "during completeness")
-            log(f"  job graph: {'results/graph.md' if g else 'not drawn, the plan was empty'}")
+            g, info, said = L.write_graph_md(c.results, (a.get("shape") or {}).get("plan"),
+                                             L.graph_context(c, man), out["build"], "during completeness",
+                                             cases=list(c.cases))
+            log(f"  job graph: results/graph.md, {info['tasks']} tasks, {info['operators']} operators; {said}"
+                if g else "  job graph: not drawn, the plan was empty")
+            if info.get("unconnected"):
+                log(f"  job graph: drawn without a line, no operator names them: {', '.join(info['unconnected'])}")
         except Exception as e:
             log(f"  job graph not drawn: {e}")
         # One real record per topic, for the README to link to: on 2026-10-10
@@ -5079,6 +5146,19 @@ def cmd_report():
     # previous run's table as well as failing to write this one. That is how
     # clean-room run 42 ended with a 0-byte suite.txt: two separate losses from
     # one bug.
+    # The suite's own picture, rendered before the page that embeds it.
+    try:
+        try:
+            man = json.load(open(os.path.join(c.results, "manifest.json")))
+        except Exception:
+            man = {}
+        _, _, said = L.write_graph_md(c.results, ((out.get("runs") or [{}])[0].get("shape") or {}).get("plan"),
+                                      L.graph_context(c, man), out.get("buildHash", "unknown"),
+                                      "during the suite", cases=list(c.cases), name="suite-graph")
+        if said:
+            print(said)
+    except Exception as e:
+        print(f"job graph picture not rendered: {e}")
     text, markdown = render_table(out) + "\n", render_markdown(out)
     headline = L.headline_markdown(out)
     # The dashboard over the whole suite. A panel full while the suite ran and

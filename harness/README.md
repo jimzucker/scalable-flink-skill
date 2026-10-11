@@ -423,7 +423,9 @@ What the harness measures and how:
 | `tinyproof.json`, `selftest.json` | tinyproof |
 | `manifest.json`, `manifest-small.json`, `manifest-tiny.json` | fill, completeness, tinyproof |
 | `completeness.json` | completeness |
+| `records.md` | completeness: one real record off every topic, key and value, for the project README to link to |
 | `suite.json`, `suite.txt`, `suite.md` | suite (and `report`, which regenerates the last two) |
+| `headline.md` | report: per-case rates and step ratios with the build hash, generated from `suite.json` for the project README to link to |
 | `ceiling.json` | ceiling |
 | `all.json`, `phases.log`, `DONE` | all (per-step rc and seconds; timestamps; the verdict to wait on) |
 | `harness.log` | everything |

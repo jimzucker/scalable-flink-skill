@@ -3214,6 +3214,25 @@ def cmd_selftest(live=True, topic=None):
     expect("evidence: a project .gitignore that hides results/ is named", evidence_hidden,
            "hides results/")
 
+    def graph_survives_a_stop():
+        with tempfile.TemporaryDirectory() as tmp:
+            def completeness():
+                assert L.write_graph_md(tmp, RUN36_PLAN, {}, "abc123", "during completeness")
+                return 0
+            rc = cmd_all(steps=[("completeness", completeness), ("tinyproof", lambda: 1)], results=tmp)
+            page = open(os.path.join(tmp, "graph.md")).read()
+        assert rc == 1 and "flowchart LR" in page and "abc123" in page, (rc, page[:200])
+    expect("graph.md: a chain that stops at the short proof still leaves the diagram (must not fire)",
+           graph_survives_a_stop, "", should_fire=False)
+
+    def graph_shape_changed():
+        same = L.shape_note([["a", []]], [["a", []]])
+        assert same and "same shape" in same.lower(), same
+        assert L.shape_note(None, [["a", []]]) is None
+        raise Refusal("case", L.shape_note([["a", []]], [["a", ["HASH"]]]))
+    expect("suite report: a job that changed since completeness is said so", graph_shape_changed,
+           "not the shape completeness ran")
+
     def disk_input_already_there():
         need_cold = projected(10_000)["neededBytes"]
         need_warm = projected(10_000, on_disk_gb=50)["neededBytes"]
@@ -4739,6 +4758,14 @@ def cmd_completeness():
 
     try:
         a = drain(f"{c.project}-complete-clean"); a["verify"] = verify("clean drain", "clean"); out["arms"].append(a)
+        # The picture of what was built, from the running plan, now -- not
+        # only in the suite report, which a stopped run never reaches.
+        try:
+            g = L.write_graph_md(c.results, (a.get("shape") or {}).get("plan"),
+                                 L.graph_context(c, man), out["build"], "during completeness")
+            log(f"  job graph: {'results/graph.md' if g else 'not drawn, the plan was empty'}")
+        except Exception as e:
+            log(f"  job graph not drawn: {e}")
         # One real record per topic, for the README to link to: on 2026-10-10
         # the record formats existed only in code comments. Reported, never a
         # reason to stop.

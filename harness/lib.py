@@ -4027,6 +4027,38 @@ def evidence_lines(results):
     return [f"evidence: every kept file in {rel}/ is committed"]
 
 
+def shape_note(completeness_signature, suite_signature):
+    """One line for the suite report: is the job the suite measured the job
+    completeness proved? None when either signature is missing."""
+    if completeness_signature is None or suite_signature is None:
+        return None
+    if completeness_signature == suite_signature:
+        return "The same shape as the graph completeness drew (`graph.md`)."
+    return ("**This is not the shape completeness ran** (`graph.md`): the job changed between "
+            "completeness and the suite, so the completeness verdict is about a different job.")
+
+
+def write_graph_md(results, plan, ctx, build, when):
+    """results/graph.md: the job graph read off the running plan, drawn with
+    the renderer the suite report uses. Written during completeness, so a run
+    that stops before the suite still has a picture of what it built: on
+    2026-10-10 the suite never ran and nothing drew the job, although
+    completeness had its plan in hand. Returns the path, or None with no plan."""
+    graph = graph_mermaid(plan, ctx)
+    if not graph:
+        return None
+    os.makedirs(results, exist_ok=True)
+    path = os.path.join(results, "graph.md")
+    body = ["# The job graph", "",
+            f"Build `{build}`, read off the running plan {when}, not drawn by hand. Partition and "
+            f"key counts come from the configuration and that run's manifest; an interval on an "
+            f"output is what the build declared in design.every, not something the harness measured.",
+            "", "```mermaid", graph, "```", ""]
+    with open(path, "w") as f:
+        f.write("\n".join(body))
+    return path
+
+
 def parse_other_cpu(ps_text):
     """`ps -Ao %cpu,comm` output -> (cores used by everything that is not this
     run, [(name, percent)] busiest first, those at 5% or more)."""
@@ -4788,6 +4820,18 @@ def render_markdown(out):
               "shape differed would have been thrown out. Partition and key counts come from the "
               "configuration and the run's own manifest; an interval on an output is what the build "
               "declared in design.every, not something the harness measured.", "", "```mermaid", graph, "```"]
+        # The same job as completeness drew in results/graph.md? A different
+        # shape means the build changed between completeness and the suite,
+        # and the completeness verdict is about a different job.
+        try:
+            comp = json.load(open(os.path.join(c.results, "completeness.json")))
+            sig_c = ((comp.get("arms") or [{}])[0].get("shape") or {}).get("signature")
+        except Exception:
+            sig_c = None
+        sig_s = ((out.get("runs") or [{}])[0].get("shape") or {}).get("signature")
+        note = shape_note(sig_c, sig_s)
+        if note:
+            L += ["", note]
     return "\n".join(L) + "\n"
 
 

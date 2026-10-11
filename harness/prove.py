@@ -3088,6 +3088,56 @@ def cmd_selftest(live=True, topic=None):
         assert (stopped, ran) == ((1, 4), [4, 2, 1, 4, 1]), (stopped, ran)
     expect("tiny proof: the whole span is judged after the steps (must not fire)",
            tiny_span_judged_last, "", should_fire=False)
+    # A busy machine waits before a case; it never measures through it.
+    def busy(readings, waited_limit=600, when_busy=False):
+        seq = list(readings)
+        clock = {"t": 0.0}
+        said = []
+
+        def sample():
+            return seq.pop(0), [("photoanalysisd", 71.0), ("mds_stores", 48.0)]
+
+        def sleep(s):
+            clock["t"] += s
+        prev, prev_wait = L.MEASURE_WHEN_BUSY, c.busy_wait_s
+        L.MEASURE_WHEN_BUSY, c.busy_wait_s = when_busy, waited_limit
+        try:
+            return L.wait_until_quiet("the 4-core case", sample=sample, sleep=sleep,
+                                      now=lambda: clock["t"], say=said.append), said
+        finally:
+            L.MEASURE_WHEN_BUSY, c.busy_wait_s = prev, prev_wait
+
+    limit = (os.cpu_count() or 1) * T["busyCoresFrac"]
+
+    def busy_quiet_goes_straight_on():
+        got, said = busy([limit * 0.5])
+        assert got["waitedS"] == 0 and not said, (got, said)
+    expect("busy machine: a quiet machine starts the case at once (must not fire)",
+           busy_quiet_goes_straight_on, "", should_fire=False)
+
+    def busy_then_quiet_waits():
+        got, said = busy([limit * 1.2, limit * 1.2, limit * 0.5])
+        assert got["waitedS"] == 60 and "photoanalysisd 71%" in said[0], (got, said)
+    expect("busy machine: waits, names the programs, then measures once quiet (must not fire)",
+           busy_then_quiet_waits, "", should_fire=False)
+
+    def busy_throughout_stops():
+        busy([limit * 1.2] * 30)
+    expect("busy machine: still busy after the wait stops the run", busy_throughout_stops,
+           "after 10 minutes of waiting, other programs are using")
+
+    def busy_owner_said_measure():
+        got, said = busy([limit * 1.2], when_busy=True)
+        assert got.get("measuredWhenBusy") and "anyway" in said[0], (got, said)
+    expect("busy machine: --measure-when-busy measures and says so (must not fire)",
+           busy_owner_said_measure, "", should_fire=False)
+
+    def busy_own_processes_not_counted():
+        cores, top = L.parse_other_cpu("298.0 /System/Library/com.apple.Virtualization.VirtualMachine\n"
+                                       " 95.0 java\n 71.0 photoanalysisd\n 48.0 mds_stores\n 3.0 iTerm2\n")
+        assert abs(cores - 1.22) < 1e-9 and [n for n, _ in top] == ["photoanalysisd", "mds_stores"], (cores, top)
+    expect("busy machine: the Docker VM and this run's own processes are not counted (must not fire)",
+           busy_own_processes_not_counted, "", should_fire=False)
 
     def disk_input_already_there():
         need_cold = projected(10_000)["neededBytes"]
@@ -3729,11 +3779,13 @@ def cmd_preflight():
     def quiet_machine():
         """Nothing else should be competing for the cores under test.
 
-        Reported, not enforced: a busy laptop is the owner's business and the
-        number to compare against is not one this project has measured. But a
-        cgroup cap is a share of what the host has left, so a case can read
-        100% of its cap on a machine that is doing half as much work per cycle,
-        and nothing else in the table would show it.
+        Reported here, never a reason to stop: preflight is one moment, and on
+        2026-10-10 it said "quiet" at 21:10 while Photos and Spotlight got busy
+        later, when the cases ran. Each case now checks for itself before it
+        starts and waits for a busy machine (lib.wait_until_quiet). A cgroup
+        cap is a share of what the host has left, so a case can read 100% of
+        its cap on a machine that is doing half as much work per cycle, and
+        nothing else in the table would show it.
         """
         try:
             one, five, fifteen = os.getloadavg()
@@ -3747,30 +3799,18 @@ def cmd_preflight():
         # run's own Kafka and job manager, and the load average was the probe
         # that had just finished. So: exclude the Docker VM and this harness's
         # own processes, and sum what is left.
-        ours = ("virtualmachine", "docker", "com.docker", "qemu", "java", "python3", "prove.py")
-        rows = L.sh("ps -Ao %cpu,comm -r | tail -n +2", check=False).stdout.strip().splitlines()
-        other, top = 0.0, []
-        for line in rows:
-            parts = line.split(None, 1)
-            if len(parts) < 2:
-                continue
-            try:
-                pct = float(parts[0])
-            except ValueError:
-                continue
-            name = parts[1].strip()
-            if any(o in name.lower() for o in ours):
-                continue
-            other += pct
-            if pct >= 5.0 and len(top) < 3:
-                top.append(f"{name.split('/')[-1]} {pct:.0f}%")
-        cores_other = other / 100.0
-        verdict = ("quiet" if cores_other < n * 0.25
+        cores_other, busiest = L.other_cpu()
+        top = [f"{name} {pct:.0f}%" for name, pct in busiest[:3]]
+        verdict = ("quiet" if cores_other < n * T["busyCoresFrac"]
                    else ("busy" if cores_other < n * 0.5 else "OVERSUBSCRIBED"))
         return (f"{verdict}: {cores_other:.2f} of {n} cores are being used by something that is not "
                 f"this run (load average {one:.2f} / {five:.2f} / {fifteen:.2f}, which also counts "
                 f"this run's own containers)"
-                + (f" — busiest: {'; '.join(top)}" if top else ""))
+                + (f" — busiest: {'; '.join(top)}" if top else "")
+                + ("" if verdict == "quiet" else
+                   f". Each case will wait up to {c.busy_wait_s / 60:.0f} minutes for this to go quiet, "
+                   f"then stop the run; ask whoever owns the machine whether to close these or pass "
+                   f"--measure-when-busy"))
 
     def host_memory():
         """The Docker VM against the machine it runs on. Reported, not enforced.
@@ -4531,6 +4571,7 @@ def cmd_completeness():
         try:
             # the run's own declared outputs are cleared too: the two arms are
             # asserted differently and their rows must not be mixed
+            L.wait_until_quiet(f"the completeness arm {group}")
             L.recreate_output_topics(include_declared=True)
             L.assert_cluster_idle()
             L.delete_group(group)
@@ -5482,6 +5523,8 @@ if __name__ == "__main__":
     if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
         print(__doc__); sys.exit(2)
     name = sys.argv[1]
+    if "--measure-when-busy" in sys.argv[2:]:
+        L.MEASURE_WHEN_BUSY = True
     if "--quick" in sys.argv[2:]:
         L.QUICK = True
         print(f"QUICK LOOK: {L.T['quickPasses']} passes per case; the table it writes is marked unpublishable")

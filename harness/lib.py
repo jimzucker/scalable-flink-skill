@@ -56,6 +56,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # build_table takes it as an argument; the record and the guards keep normal
 # semantics whatever the flag says.
 QUICK = False
+MEASURE_WHEN_BUSY = False   # --measure-when-busy: the owner has decided to
 QUICK_BANNER = ("two passes per case, not the configured number: enough for a spread, not enough to publish. A one-pass version of this table read 2->4 = 1.645 where the same build measured 1.910 with the memory it needed, and 1.539 where three passes read 1.678. Quote the spread with the ratio, or do not quote it.")
 
 # ------------------------------------------------------------------ thresholds
@@ -113,6 +114,13 @@ T = {
     # replaces was set below the band and voided six valid tables in run 9.
     "spreadCeil": 0.20,
     "minPasses": 2,
+    # other programs' CPU before a case, as a share of the host's cores. NOT
+    # measured: no recorded run stored other programs' CPU, so this is the 25%
+    # preflight has reported against since run 45, kept as a starting value.
+    # It makes a case wait, never throws one out after it was measured; every
+    # case now records otherCoresOpen/Close so it can be set from data later.
+    "busyCoresFrac": 0.25,
+    "busyRecheckS": 30.0,
     # the claim, as opposed to the measurement. A table can be beyond reproach
     # and still say the pipeline does not scale: the demo's own job reads 1.99x
     # from 2 to 4 cores on this host, so a step that doubles the resource and
@@ -352,6 +360,8 @@ class Cfg:
         self.cases = [int(x) for x in c["cases"]]
         self.baseline = int(c["baseline"])
         self.passes = int(c["passes"])
+        # how long a case waits for a busy machine to go quiet before the chain stops
+        self.busy_wait_s = float(c.get("busyWaitS", 600))
         self.backlog = int(c["backlog"]["count"])
         self.seed = int(c["backlog"].get("seed", 1))
         self.small = int(c["backlog"].get("smallCount", 2_000_000))
@@ -3838,6 +3848,97 @@ def rows_differ(expected, got):
     return missing, extra
 
 
+# Processes that are this run's own, or the Docker VM its containers run in.
+# Clean-room run 45 was told "OVERSUBSCRIBED: load 11.31 ... busiest now:
+# com.apple.Virtualization.VirtualMachine 298%" on a host measured at 1.09
+# cores: the virtual machine at 298% was the run's own Kafka and job manager.
+OWN_PROCESSES = ("virtualmachine", "docker", "com.docker", "qemu", "java", "python3", "prove.py")
+
+
+def parse_other_cpu(ps_text):
+    """`ps -Ao %cpu,comm` output -> (cores used by everything that is not this
+    run, [(name, percent)] busiest first, those at 5% or more)."""
+    other, top = 0.0, []
+    for line in ps_text.strip().splitlines():
+        parts = line.split(None, 1)
+        if len(parts) < 2:
+            continue
+        try:
+            pct = float(parts[0])
+        except ValueError:
+            continue
+        name = parts[1].strip()
+        if any(o in name.lower() for o in OWN_PROCESSES):
+            continue
+        other += pct
+        if pct >= 5.0:
+            top.append((name.split("/")[-1], pct))
+    top.sort(key=lambda x: -x[1])
+    return other / 100.0, top
+
+
+def other_cpu(samples=3, gap_s=1.0):
+    """Other programs' CPU, averaged over a few samples: one `ps` is one
+    moment, and Spotlight and Photos work in bursts."""
+    got = []
+    for i in range(samples):
+        if i:
+            time.sleep(gap_s)
+        got.append(parse_other_cpu(sh("ps -Ao %cpu,comm -r | tail -n +2", check=False).stdout))
+    cores = sum(g[0] for g in got) / len(got)
+    busiest = {}
+    for _, top in got:
+        for name, pct in top:
+            busiest[name] = busiest.get(name, 0.0) + pct / len(got)
+    return cores, sorted(busiest.items(), key=lambda x: -x[1])
+
+
+def busy_sentence(cores, n, top):
+    names = ", ".join(f"{name} {pct:.0f}%" for name, pct in top[:3])
+    return f"other programs are using {cores:.1f} of {n} cores" + (f" ({names})" if names else "")
+
+
+def wait_until_quiet(before, sample=None, sleep=None, now=None, say=None):
+    """Before a case: if other programs are using more than busyCoresFrac of
+    the cores, wait for them rather than measure.
+
+    A CPU cap is a share of what the host has left (section 5, run 34), so a
+    case on a busy machine reads 100% of its cap and does less work for it.
+    On 2026-10-10 preflight said "quiet" at 21:10 and Photos analysis and
+    Spotlight were busy later, while the cases ran; preflight samples once.
+    Whether that load is what made those 4-core readings slow is not measured.
+    So this waits and says why; it never throws out a case already measured.
+    """
+    c = cfg()
+    sample = sample or other_cpu
+    sleep = sleep or time.sleep
+    now = now or time.time
+    say = say or (lambda line: log("  " + progress(line)))
+    n = os.cpu_count() or 1
+    limit = n * T["busyCoresFrac"]
+    t0 = now()
+    cores, top = sample()
+    if cores < limit:
+        return {"otherCores": round(cores, 2), "waitedS": 0}
+    if MEASURE_WHEN_BUSY:
+        say(f"{busy_sentence(cores, n, top)}; measuring {before} anyway, as --measure-when-busy asks")
+        return {"otherCores": round(cores, 2), "waitedS": 0, "measuredWhenBusy": True}
+    while True:
+        say(f"waiting before {before}: {busy_sentence(cores, n, top)}. "
+            f"Close them, or the case will be measured on a busy machine.")
+        if now() - t0 >= c.busy_wait_s:
+            raise Refusal("rig", f"the machine stayed busy before {before}: after {c.busy_wait_s / 60:.0f} minutes of waiting, "
+                                 f"{busy_sentence(cores, n, top)}. Close them and run again, or pass "
+                                 f"--measure-when-busy to measure on a busy machine.")
+        sleep(T["busyRecheckS"])
+        cores, top = sample()
+        if cores < limit:
+            waited = now() - t0
+            say(f"quiet again after {waited / 60:.1f} minutes ({cores:.1f} of {n} cores used by other programs); "
+                f"starting {before}")
+            return {"otherCores": round(cores, 2), "waitedS": round(waited)}
+
+
 def run_case(cores, pass_id, run_id, shape_ref, is_baseline, manifest,
              min_boundaries=None, min_window_s=None, ckpt_ms=None, warmup_max_s=None, reporter_s=None,
              kafka_cap=None, parallelism=None, manifest_path=None):
@@ -3858,6 +3959,8 @@ def run_case(cores, pass_id, run_id, shape_ref, is_baseline, manifest,
     group = f"{c.project}-{run_id}-c{cores}-{pass_id}"
     jid = None
     rec = {"cores": cores, "pass": pass_id, "group": group}
+    # GUARD: a busy machine waits before the case, not after it was measured
+    rec["busyBefore"] = wait_until_quiet(f"the {cores}-core case")
     try:
         free = host_free_bytes()
         rec["hostFreeGB"] = round(free / 1e9, 1)
@@ -3906,6 +4009,7 @@ def run_case(cores, pass_id, run_id, shape_ref, is_baseline, manifest,
         # does less work for it, which is invisible in every other column.
         try:
             rec["hostLoadOpen"] = round(os.getloadavg()[0], 2)
+            rec["otherCoresOpen"] = round(other_cpu(samples=1)[0], 2)
             rec["hostCores"] = os.cpu_count()
             rec["hostSwapOpenMB"] = host_swap_mb()
         except Exception:
@@ -3932,6 +4036,7 @@ def run_case(cores, pass_id, run_id, shape_ref, is_baseline, manifest,
         close_progress = progress_from_outputs(mpath) if want_progress else None
         try:
             rec["hostLoadClose"] = round(os.getloadavg()[0], 2)
+            rec["otherCoresClose"] = round(other_cpu(samples=1)[0], 2)
             rec["hostSwapCloseMB"] = host_swap_mb()
         except Exception:
             pass

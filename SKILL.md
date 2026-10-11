@@ -349,7 +349,7 @@ bad window voids one case — so anything checkable now is checked now.
 | back-pressure counters exist on the endpoint you will read | dump the endpoint and read what is there | ten minutes on a deprecated path |
 | every case runs the same collector | the collector name off the engine's metrics, on every case | `--cpus 1` picks the serial collector and every case above it runs G1, so the baseline is a different program — worth +19% and a whole superlinear step |
 | the interview and the plan were written down | `ASSUMPTIONS.md` and `PLAN.md` exist before the stack does, and the plan names every disclosure | a run that never wrote down what it decided leaves a reader unable to tell what was agreed from what was assumed — and the six answers are the spec |
-| nothing else is using the cores | load average against the core count, and what is busiest | a cap is a **share**, not a promise of cycles: on a busy host every case reads 100% of its cap and does less work for it, and no other column shows it |
+| nothing else is using the cores | other programs' CPU — the Docker VM and the run's own processes left out — against the core count, and the three busiest. **Reported here; each case checks again before it starts** (§6). When it says busy, show the user the programs and ask: *wait for them, or measure anyway?* With no human to ask, wait | a cap is a **share**, not a promise of cycles: on a busy host every case reads 100% of its cap and does less work for it, and no other column shows it |
 | the VM trim command is known | `docker run --rm --privileged --pid=host alpine nsenter -t 1 -m -u -n -i -- fstrim -v /var/lib/docker` | space freed inside a Docker Desktop VM never returns to the host |
 
 **Then the tiny proof, before any fill.** It is called tiny because it is short, **not because it is small**: it measures the drain rate that sizes everything else, so it needs enough data to warm up and hold a steady window at the fastest case. That is `rate x (warm-up + window + headroom)`, which for a fast pipeline is hundreds of millions of records — clean-room run 42 ran 400,000,000 and run 43 was told to run 391,613,400. This line used to say "a few thousand records", which is out by five orders of magnitude and led two runs to budget for a smoke test and get a second full one. Budget the disk and the minutes for it, and know that **every tuning change re-creates it**. End to end:
@@ -510,6 +510,31 @@ the host has left, so the case still pins at its cap and simply does less
 work per cycle — the one failure mode every resource column in the table is
 blind to. The load average is recorded at the open and close of every window
 for exactly this reason.
+
+**Check before every case, not once.** Preflight is one moment. On 2026-10-10
+it said "quiet" (other programs on 0.50 of 8 cores) and Photos analysis and
+Spotlight got busy later in the night, while the cases ran. So the harness now
+reads other programs' CPU before every case and at each window's open and
+close (`otherCoresOpen`, `otherCoresClose`), and waits while it is over a
+quarter of the cores. The load average stays in the record but cannot be the
+check: it counts the run's own containers, and the quiet-morning 4-core window
+below opened at 11.0. The same build, M1 Pro with 8 cores:
+
+| when | case | orders/s | load average at window open | what else was running |
+|---|---|---:|---:|---|
+| night, chain 1 short proof | 4 cores | 445,755 then 493,716 | — | not recorded; chain 2 overwrote this chain's results file |
+| night, chain 2 short proof | 4 cores | 485,877 then 448,213 | 10.9 / 9.8 | Photos analysis about 1 core, Spotlight about 1 core, 2.9 GB swapped out |
+| morning, machine quiet | 4 cores | 609,550 and 615,001 | 11.0 / 5.8 | Photos and Spotlight idle |
+| night, chain 2 | 2 cores | 325,756 then 302,391 | 5.0 / 5.2 | as above |
+| morning | 2 cores | 297,733 and 304,937 | 6.5 / 5.5 | quiet |
+
+**What made the night's 4-core readings slow is not measured.** Two things
+changed between night and morning: the machine, and the backlog topic (a
+130,000,000-record short-proof topic at night, the 250,000,000-record suite
+topic in the morning). Do not tell a user background load caused it. What is
+known is the mechanism above. The quarter-of-the-cores line is not measured
+either: no recorded run stored other programs' CPU before this. It only makes
+a case wait; it never throws out a case already measured.
 
 **Memory counts as much as cores.** Clean-room run 47's passes came back
 54–147% apart with every worker at its cap and nothing wrong in the
@@ -788,6 +813,7 @@ for it.
 | a failed case still owns the cluster | job torn down on **every** exit path |
 | no job is actually running | engine reports RUNNING with the expected parallelism |
 | the cluster is still busy from the last case | assert idle by asking the engine, not by killing what you think is there |
+| the machine is busy before a case | before every case (short proof, suite, ceiling, each completeness arm), other programs' CPU averaged over three seconds. Over a quarter of the cores, the case **waits**: `results/PROGRESS.txt` says *"waiting before the 4-core case: other programs are using 2.3 of 8 cores (photoanalysisd 71%, mds_stores 48%). Close them, or the case will be measured on a busy machine."*, and checks again every 30 s. Still busy after `busyWaitS` (10 minutes), the chain stops with the same sentence. `--measure-when-busy` measures anyway and says so. The quarter is a starting value, not measured |
 | the backlog lacks headroom at window close | a full checkpoint interval of records remains **at the measured rate** — not merely `remaining > 0` |
 | the window is not anchored on commit boundaries | ≥3 boundaries inside the window |
 | two vantage points disagree | transport and manifest agree within a stated tolerance |

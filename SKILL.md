@@ -360,6 +360,18 @@ bad window voids one case — so anything checkable now is checked now.
   bounded now, including the middle one — clean-room run 31 measured only its
   smallest and largest cases here, so a 1→2 step that was arithmetically
   impossible went unseen until the report, 45 minutes later;
+- **largest case first, and stop on the step that fails.** The harness runs
+  4 cores, then 2, judges 2→4, then 1 and judges 1→2, then the whole span. A
+  step out of bounds is measured once more, larger case first, and if it is
+  still out of bounds the proof stops there — the smaller cases cannot change
+  it. A stop on the top step now costs four cases, not six: on 2026-10-10 a
+  short proof measured 1, 2 and 4 cores twice each (about 3½ minutes a case)
+  to stop on a 2→4 of 1.48×, and the two 1-core cases answered nothing about
+  it. The suite keeps its alternating order (§5). Whether running the largest
+  case first changes its reading is not measured directly: across 27 recorded
+  suites the 4-core case read a median 1.1% higher in the descending passes,
+  where it runs first, than in the ascending ones — inside the ±4% two-pass
+  noise, but first in a pass is not first after the fill;
 - **bound the ratio to 0.75×–1.25× of the ideal** — 1.5×–2.5× when the two
   cases are one unit and two, 3×–5× when they are one and four. Beating the
   ideal is not an error in itself, and nothing fails a run for it outside the tiny

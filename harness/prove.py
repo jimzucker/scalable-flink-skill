@@ -3047,6 +3047,48 @@ def cmd_selftest(live=True, topic=None):
         projected(1)
     expect("disk: a suite that cannot fit stops before the fill", disk_does_not_fit, "of disk and only")
 
+    # The tiny proof's order. Rates are per-core readings in the order taken;
+    # a step is in bounds when its ratio is within 0.75-1.25 of the ideal.
+    def tiny_order(cases, readings):
+        got, ran = {}, []
+        queue = {k: list(v) for k, v in readings.items()}
+
+        def measure(cores, again):
+            ran.append(cores)
+            got[cores] = queue[cores].pop(0)
+
+        def ok(a, b):
+            return 0.75 * (b / a) <= got[b] / got[a] <= 1.25 * (b / a)
+        stopped, order = largest_first(cases, measure, ok)
+        assert order == ran, (order, ran)
+        return stopped, ran
+
+    def tiny_largest_first():
+        stopped, ran = tiny_order([1, 2, 4], {4: [400], 2: [200], 1: [100]})
+        assert (stopped, ran) == (None, [4, 2, 1]), (stopped, ran)
+    expect("tiny proof: the largest case is measured first (must not fire)",
+           tiny_largest_first, "", should_fire=False)
+
+    def tiny_stops_before_the_smallest():
+        # 2026-10-10 chain 2: 2->4 at 1.48x twice. The 1-core case cannot change it.
+        stopped, ran = tiny_order([1, 2, 4], {4: [448, 450], 2: [302, 304], 1: [150]})
+        assert (stopped, ran) == ((2, 4), [4, 2, 4, 2]), (stopped, ran)
+    expect("tiny proof: a step out of bounds twice stops before smaller cases (must not fire)",
+           tiny_stops_before_the_smallest, "", should_fire=False)
+
+    def tiny_second_reading_decides():
+        stopped, ran = tiny_order([1, 2, 4], {4: [448, 610], 2: [302, 300], 1: [150]})
+        assert (stopped, ran) == (None, [4, 2, 4, 2, 1]), (stopped, ran)
+    expect("tiny proof: an out-of-bounds step read in bounds the second time goes on (must not fire)",
+           tiny_second_reading_decides, "", should_fire=False)
+
+    def tiny_span_judged_last():
+        # each step at 1.6x, inside 1.5-2.5x; the span is 2.56x, outside 3-5x
+        stopped, ran = tiny_order([1, 2, 4], {4: [256, 256], 2: [160], 1: [100, 100]})
+        assert (stopped, ran) == ((1, 4), [4, 2, 1, 4, 1]), (stopped, ran)
+    expect("tiny proof: the whole span is judged after the steps (must not fire)",
+           tiny_span_judged_last, "", should_fire=False)
+
     def disk_input_already_there():
         need_cold = projected(10_000)["neededBytes"]
         need_warm = projected(10_000, on_disk_gb=50)["neededBytes"]
@@ -4002,6 +4044,49 @@ def cmd_preflight():
 
 # ------------------------------------------------------------------ tiny proof
 
+def largest_first(cases, measure, ok):
+    """The tiny proof's order: the largest case first, then each next smaller
+    one, judging a step as soon as both of its cases have been measured.
+
+    `measure(cores, again)` runs one case; `ok(a, b)` judges the step a->b on
+    the latest readings -- True, False, or None when a case has no rate. A step
+    out of bounds is measured once more, its larger case first, and if it is
+    still out of bounds the proof stops there: a smaller case cannot change a
+    step it is not part of. Smallest-first, a 2->4 that was out of bounds twice
+    cost the 1-core case twice before it stopped -- 7 of the 21 minutes one
+    short proof took on 2026-10-10, answering nothing about the step that
+    failed. Returns (the step it stopped on or None, the cases in the order run).
+
+    Why once more and not straight to a stop: one pass per case is noisier than
+    the bounds it is judged against. Clean-room run 51's unchanged build read
+    2->4 at 1.49x, 1.91x and 2.14x in three tiny proofs, and stopped the chain
+    twice on noise; the failure the bounds exist for (a 3.73x from a baseline
+    running its tasks on one core) is built into the rig and reads the same
+    twice. So the second reading decides, and both are kept.
+    """
+    order = sorted(set(cases), reverse=True)
+    done = []
+
+    def settle(a, b):
+        if ok(a, b) is not False:
+            return True
+        for x in (b, a):
+            measure(x, True)
+            done.append(x)
+        return ok(a, b) is not False
+
+    for i, cores in enumerate(order):
+        measure(cores, False)
+        done.append(cores)
+        if i and not settle(cores, order[i - 1]):
+            return (cores, order[i - 1]), done
+    # the whole span, judged last: two adjacent steps each just in bounds can
+    # make a span that is not
+    if len(order) > 2 and not settle(order[-1], order[0]):
+        return (order[-1], order[0]), done
+    return None, done
+
+
 def cmd_tinyproof():
     """Two cases on a small backlog, a short checkpoint interval so a window fits,
     ratio bounded, then every guard broken on purpose."""
@@ -4028,18 +4113,38 @@ def cmd_tinyproof():
     rc = 0
     try:
         recs = {}
+        first = {}
         shape_ref = None
-        for cores in tiny_cases:
+
+        def measure(cores, again):
+            nonlocal shape_ref, rc
+            if again:
+                if cores in recs:
+                    first.setdefault(cores, recs[cores]["recordsPerSec"])
+                try:
+                    rec2, _ = L.run_case_retrying(
+                        lambda: L.run_case(cores, "tiny", "tiny-again", shape_ref, cores == lo, man,
+                                           warmup_max_s=120.0, reporter_s=2))
+                    if cores in first:
+                        rec2["firstReading"] = first[cores]
+                    recs[cores] = rec2
+                    out["cases"].append(rec2)
+                    log(f"  {cores}c again: {rec2['recordsPerSec']:,.0f} rec/s"
+                        + (f" (first {first[cores]:,.0f})" if cores in first else ""))
+                except CaseRefused as e:
+                    out["cases"].append(e.rec)
+                    log(f"  {cores}c again: thrown out -- {e}")
+                return
             log(f"---- tiny case {cores} cores ----")
             try:
-                def once(cores=cores):
+                def once():
                     return L.run_case(cores, "tiny", "tiny", shape_ref, cores == lo, man,
                                       warmup_max_s=120.0, reporter_s=2)
 
-                def again(e, attempt):
+                def retry(e, attempt):
                     log(f"  {cores}c failed on its own data, retrying once (section 6): {e.refusal.msg}")
 
-                rec, shape_ref = L.run_case_retrying(once, on_retry=again)
+                rec, shape_ref = L.run_case_retrying(once, on_retry=retry)
                 recs[cores] = rec
                 out["cases"].append(rec)
                 log(f"  {cores}c: {rec['recordsPerSec']:,.0f} rec/s, tm {rec['tmCapFrac']:.1%} of cap, "
@@ -4064,6 +4169,32 @@ def cmd_tinyproof():
                     log(f"  STOPPED ({e.refusal.scope}): {e.refusal.msg}")
                     out["result"] = "FAIL"
                     rc = 1
+
+        def in_bounds(a, b):
+            if a not in recs or b not in recs:
+                return None
+            r = recs[b]["recordsPerSec"] / recs[a]["recordsPerSec"]
+            return T["tinyRatioLo"] * (b / a) / 2 <= r <= T["tinyRatioHi"] * (b / a) / 2
+
+        def judged(a, b):
+            ok = in_bounds(a, b)
+            if ok is False:
+                log(f"  {a}->{b} out of bounds; measuring {b}c and then {a}c once more")
+            return ok
+
+        # Largest case first, each step judged as soon as both of its cases
+        # exist, and a step still out of bounds after one more reading ends the
+        # measuring there -- the suite keeps its alternating order (section 5).
+        stopped, ran = largest_first(tiny_cases, measure, judged)
+        out["order"] = ran
+        if first:
+            out["remeasured"] = {str(k): {"first": v, "second": recs[k]["recordsPerSec"]}
+                                 for k, v in first.items() if k in recs}
+        if stopped:
+            a, b = stopped
+            log(f"  {a}->{b} out of bounds twice; not measuring the smaller cases -- they cannot change it")
+            rc = 1
+            out["result"] = "FAIL"
         # Every case that produced a rate, whether it was accepted or was a
         # ceiling. A ceiling case is measured and kept a few lines above -- its
         # rate is real, and it is still the case the suite has to be sized for
@@ -4096,6 +4227,7 @@ def cmd_tinyproof():
                 out["result"] = "FAIL"
                 log(f"  STOPPED ({e.scope}): {e.msg}")
                 rc = 1
+        show_steps = rc == 0 or bool(stopped)
         if rc == 0:
             d = out["disk"]
             on_disk = (f" ({d['inputBytesOnDisk']/1e9:.1f} GB of it already on the broker, "
@@ -4164,6 +4296,7 @@ def cmd_tinyproof():
                 log(f"  kafka memory: {(worst.get('brokerLimitBytes') or 0) / 1048576:.0f}m, hit its limit "
                     f"{hits:,} times" + (" with every worker at its cap, so nothing to change"
                                          if hits else ""))
+        if show_steps:
             # Every step the suite will report, bounded here. The pairs are the
             # adjacent ones the report leads with, plus the whole span, so a
             # config with three cases has its middle step checked too -- the
@@ -4171,39 +4304,13 @@ def cmd_tinyproof():
             pairs = list(zip(tiny_cases, tiny_cases[1:]))
             if (lo, hi) not in pairs:
                 pairs.append((lo, hi))
-            # Measure an out-of-bounds step once more before stopping on it. One
-            # pass per case is noisier than the bounds it is judged against:
-            # clean-room run 51's unchanged build read 2->4 at 1.49x, 1.91x and
-            # 2.14x in three tiny proofs, and stopped the chain twice on noise.
-            # The two recorded out-of-bounds tiny proofs were both that noise;
-            # the failure the bounds exist for (a 3.73x from a baseline running
-            # its tasks on one core) is built into the rig and reads the same
-            # twice. So the second reading decides, and both are kept.
-            first = {k: v["recordsPerSec"] for k, v in recs.items()}
-            def in_bounds(a, b):
-                r = recs[b]["recordsPerSec"] / recs[a]["recordsPerSec"]
-                return T["tinyRatioLo"] * (b / a) / 2 <= r <= T["tinyRatioHi"] * (b / a) / 2
-            odd = sorted({x for a, b in pairs if a in recs and b in recs and not in_bounds(a, b) for x in (a, b)})
-            if odd:
-                log(f"  out of bounds on the first reading; measuring {', '.join(f'{x}c' for x in odd)} once more")
-                for cores in odd:
-                    try:
-                        rec2, _ = L.run_case_retrying(
-                            lambda cores=cores: L.run_case(cores, "tiny", "tiny-again", shape_ref, cores == lo, man,
-                                                           warmup_max_s=120.0, reporter_s=2))
-                        rec2["firstReading"] = first[cores]
-                        recs[cores] = rec2
-                        out["cases"].append(rec2)
-                        log(f"  {cores}c again: {rec2['recordsPerSec']:,.0f} rec/s (first {first[cores]:,.0f})")
-                    except CaseRefused as e:
-                        out["cases"].append(e.rec)
-                        log(f"  {cores}c again: thrown out -- {e}")
-                out["remeasured"] = {str(k): {"first": first[k], "second": recs[k]["recordsPerSec"]} for k in odd}
             out["steps"] = []
             print()
             for a, b in pairs:
                 if a not in recs or b not in recs:
-                    log(f"  {a}->{b}: not bounded — {a if a not in recs else b} cores was a ceiling")
+                    x = a if a not in recs else b
+                    log(f"  {a}->{b}: not bounded — {x} cores "
+                        + ("was a ceiling" if x in ran else "was not measured: a larger step stopped the proof first"))
                     continue
                 ratio = recs[b]["recordsPerSec"] / recs[a]["recordsPerSec"]
                 ideal = b / a

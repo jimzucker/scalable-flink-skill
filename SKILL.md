@@ -428,10 +428,10 @@ compared to that. Assert, with no tolerances:
 | distinct keys = the number predicted in the interview | a key you did not intend, or one that never arrived |
 | every aggregation sums to the manifest exactly | a lost or duplicated record |
 | two paths over the same input agree exactly | same, located |
-| **each key's published values never go backwards** | order within a key is the one ordering guarantee a keyed stream makes, and the interview asked for it. A key that goes backwards on a clean run means the sink is not keyed by the aggregation key, or a rebalance sits between the aggregation and the sink |
+| **each key's published values never go backwards**, judged on something that only rises per key — a count of inputs applied, carried in every output record. The value itself may go down: a sell lowers a position. Clean-room run 53 had to work that out (F4) | order within a key is the one ordering guarantee a keyed stream makes, and the interview asked for it. A key that goes backwards on a clean run means the sink is not keyed by the aggregation key, or a rebalance sits between the aggregation and the sink |
 | **each key appears in exactly one partition** | per-key order cannot survive a key split across partitions, whatever the pipeline does. This is what makes the assertion above mean anything end to end |
 | after killing the pipeline mid-run, all of the above still hold | the guarantee you configured is not the one you have |
-| **the input repeats a small share of its records on purpose**, the way a producer that retries would, and every total still matches the manifest, which counts each record once | a duplicate was counted twice. The kill tests the replay a restart makes; this tests the one a retrying producer makes. Clean-room run 48 repeated 0.5% and passed. Keep it small: the dropped repeats make the output count trail the input count by that share, and the two are compared within 5% |
+| **the input repeats a small share of its records on purpose**, the way a producer that retries would, and every total still matches the manifest, which counts each record once | a duplicate was counted twice. The kill tests the replay a restart makes; this tests the one a retrying producer makes. Clean-room run 48 repeated 0.5% and passed. **Drop repeats with bounded memory**, never a set of every id seen, which grows with the backlog: have the generator give ids that rise within each input partition and write a repeat to the same partition as its original, then keep, per key, the highest id applied from each input partition — one number per partition (clean-room run 53, F5). Keep it small: the dropped repeats make the output count trail the input count by that share, and the two are compared within 5% |
 
 **The killed arm is where the ordering rule earns its keep, and it needs
 stating carefully.** A restart replays, so a key may step backwards **once**
@@ -1290,7 +1290,12 @@ CPU.
 
 **Metric names that returned data on `flink:1.20.1`** with the Prometheus
 reporter and the shipped exporter, read through Grafana on 2026-09-28 and again on 2026-10-02. Match
-operators by the names your job gives them (`operator_name=~".*parse.*"`):
+operators by the names your job gives them (`operator_name=~".*parse.*"`),
+**as the reporter spells them: it turns every character other than letters,
+digits, `:` and `_` into `_`** in operator, task and job names. Read back by
+clean-room run 53: `position-mv-by-symbol` arrives as `position_mv_by_symbol`,
+so `operator_name=~"position-mv-by-.*"` returns nothing and the chain stops on
+an empty panel. When it does, the stop message gives the spelling to use:
 
 | panel | Prometheus series |
 |---|---|
@@ -1391,8 +1396,9 @@ one line.
   command, so what is kept is not the agent's choice: the verdicts
   (`preflight`, `completeness`, `tinyproof`, `selftest`, `suite`, every
   `ceiling*`, `all.json`, `phases.log`, `DONE`), `records.md`, `headline.md`,
-  `graph.md`, and `manifest-summary.json`, the manifests' totals without
-  their per-key tables. Logs and full manifests are left out. The list goes by
+  `graph.md`, `hostprobe.json` (the probe's repeats and ranges), and
+  `manifest-summary.json`, the manifests' totals without their per-key
+  tables. Logs and full manifests are left out. The list goes by
   name, not size: `suite.json` has reached 1.26 MB, more than any manifest. On
   2026-10-10 the agent ignored all of `results/`, and the short proofs and the
   final 1-, 2- and 4-core readings were on one disk only — they survived

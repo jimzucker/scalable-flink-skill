@@ -45,7 +45,7 @@
     "manifestCountField": "tradeCount"
   },
   "verifier": {
-    "cmd": "{java} -cp {jar} scaletest.VerifyCompleteness --bootstrap={bootstrapExt} --topicSym={out0} --topicAcct={out1} --manifest={manifest}"
+    "cmd": "{java} -cp {jar} scaletest.VerifyCompleteness --bootstrap={bootstrapExt} --topicSym={out0} --topicAcct={out1} --manifest={manifest} --arm={arm}"
   },
   "_cases": "The cases the suite measures, and the steps it reports: 1->2 and 2->4. The one-core case is measured, not assumed -- six recorded suites returned 1.978-2.161x on 1->2, so a healthy baseline sits on the ideal 2.00x. A 1->2 well above that means the one-core case under-read, and the tiny proof bounds every one of these steps before the suite is spent.",
   "cases": [
@@ -102,7 +102,7 @@
     "rest": 18081
   },
   "jdk": "/opt/homebrew/opt/openjdk@17",
-  "axis": "one worker growing: one task manager container capped at N cores, parallelism N, N slots",
+  "axis": "one machine, more cores: one task manager container capped at N cores, parallelism N, N slots",
   "apiLevel": "Flink DataStream API, hand-written operators (no SQL, no Table API)",
   "guarantee": {
     "state": "exactly-once checkpointing",

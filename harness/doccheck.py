@@ -116,7 +116,10 @@ def check_plan_discloses(fail):
     # 6 had the same hole and stopped run 32 with a fix in hand. Both are checked
     # so the third one does not happen quietly.
     for where, needle in (("section 1a", "When there is no human to say yes"),
-                          ("section 6", "no human to say yes, tune until you run out of levers"),
+                          ("section 6", "tune until you run out of levers"),
+                          # One rule for a step that is not met, by which kind
+                          # it is: three pulled against each other in run 53 (F10).
+                          ("section 6", "What to do about a step that is not met depends on which kind it is"),
                           ("section 6", "If the step got worse, revert it"),
                           ("section 6", "Before looking at the pipeline, measure the machine"),
                           ("section 6", "prove.py ceiling"),
@@ -531,7 +534,7 @@ def check_dashboard_rows(fail):
                   "checkpoint duration", "job restarts", "failed checkpoints"):
         if f"| {panel}" not in sec:
             fail(f"SKILL.md \u00a77 no longer lists the {panel} panel")
-    if "With nobody to ask, report the step as not met" not in skill:
+    if "With nobody to ask, run the probe and the ceiling (below), report the step as not met" not in skill:
         fail("SKILL.md \u00a76 no longer tells an unattended agent what to do with a step whose range spans the target")
     if "**not met** when the low end is under 1.80× by more than 1%" not in skill:
         fail("SKILL.md \u00a76 no longer gives the claim its outcomes: met or not met, with the gap in percent")

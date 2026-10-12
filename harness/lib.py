@@ -591,12 +591,22 @@ def cfg():
 
 # ---------------------------------------------------------------------- basics
 
+# Set while the self-test runs: the file its messages go to instead of
+# harness.log. The self-test breaks guards on purpose, and clean-room run 53's
+# wait loop read one of those "STOPPED:" lines in harness.log as the chain
+# stopping (F9). Subprocesses inherit it.
+SELFTEST_LOG_ENV = "PROVE_SELFTEST_LOG"
+
+
 def log(*a):
     c = cfg()
     line = " ".join(str(x) for x in a)
+    path = os.environ.get(SELFTEST_LOG_ENV) or c.log_path
+    if path != c.log_path:
+        line = "self-test: " + line
     print(f"[{time.strftime('%H:%M:%S')}] {line}", flush=True)
-    os.makedirs(c.results, exist_ok=True)
-    with open(c.log_path, "a") as f:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a") as f:
         f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {line}\n")
 
 
@@ -4049,11 +4059,21 @@ def readme_names(c):
     return out
 
 
+def readme_names_word(name, text):
+    """Pure. True when `name` appears in `text` as a whole name, ignoring case:
+    not inside a longer name made of letters, digits, '_', '-' or '.'. A full
+    stop after it still counts, so a sentence can end on a topic. Clean-room
+    run 53 (F1): a substring search let the operator `orders-source` stand in
+    for the topic `orders`, and the check's own self-test missed a README that
+    never named the input topic."""
+    pat = r"(?<![\w.-])" + re.escape(name) + r"(?![\w-]|\.[\w-])"
+    return re.search(pat, text or "", re.IGNORECASE) is not None
+
+
 def readme_missing(text, c):
-    """The names readme_names lists that the README text does not contain.
-    Text search, ignoring case: loose, and says exactly what it looked for."""
-    low = (text or "").lower()
-    return [(kind, n) for kind, n in readme_names(c) if n.lower() not in low]
+    """The names readme_names lists that the README text does not contain as
+    whole names, ignoring case. Says exactly what it looked for."""
+    return [(kind, n) for kind, n in readme_names(c) if not readme_names_word(n, text)]
 
 
 def readme_problem(path, c):
@@ -4124,8 +4144,11 @@ def headline_markdown(out):
         if not r.get("reportable"):
             lines.append(f"| {r['step']} | no number | | the step was thrown out: {r.get('reason', 'see suite.md')} |")
             continue
+        # The scorecard's own words, not the code's: clean-room run 53 (F11)
+        # found "spans" here beside a scorecard that said "not met".
+        said = verdict_words(r) if r.get("meetsClaim") is not None else "not judged"
         lines.append(f"| {r['step']} | {r['ratio']:.3f}x | {r.get('ratioLow', r['ratio']):.3f}x to "
-                     f"{r.get('ratioHigh', r['ratio']):.3f}x | {r.get('claimVerdict', 'not judged')} |")
+                     f"{r.get('ratioHigh', r['ratio']):.3f}x | {said} |")
     lines += ["", "The rates are records of the input topic drained per second. Full table: `suite.md`.", ""]
     return "\n".join(lines)
 

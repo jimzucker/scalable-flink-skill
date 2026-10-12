@@ -252,6 +252,23 @@ ACCOUNT_KEY_LAYOUT_128 = {
 
 
 def cmd_selftest(live=True, topic=None):
+    """Runs the self-test with its messages in results/selftest.log, not
+    harness.log: it breaks guards on purpose, and a "STOPPED:" it prints is
+    not the run stopping (clean-room run 53, F9)."""
+    c = cfg()
+    own = os.path.join(c.results, "selftest.log")
+    before = os.environ.get(L.SELFTEST_LOG_ENV)
+    if before is None:
+        log(f"self-test: breaking every guard on purpose; its messages are in {own}, not here")
+        os.environ[L.SELFTEST_LOG_ENV] = own
+    try:
+        return _cmd_selftest(live, topic)
+    finally:
+        if before is None:
+            os.environ.pop(L.SELFTEST_LOG_ENV, None)
+
+
+def _cmd_selftest(live=True, topic=None):
     """A guard that has never fired is a guess. Each guard is broken on purpose
     through the same code path the suite uses."""
     c = cfg()
@@ -3158,6 +3175,42 @@ def cmd_selftest(live=True, topic=None):
     expect("README: no README at the project root stops the run",
            lambda: readme_check(None), "README.md not written")
 
+    # Whole names, on names chosen so one contains another: clean-room run 53
+    # (F1) named an operator `orders-source`, the old substring search counted
+    # it as naming the topic `orders`, and the self-test above missed.
+    import types
+    nested = types.SimpleNamespace(topic_in="orders", topics_out=["positions-by-symbol"],
+                                   topics_also=["positions"], design={"operators": ["orders-source"]})
+
+    def readme_nested(text):
+        missing = L.readme_missing(text, nested)
+        if missing:
+            raise Refusal("rig", "does not name: " + "; ".join(f"{k} {n!r}" for k, n in missing))
+    expect("README: an operator called orders-source does not name the topic orders",
+           lambda: readme_nested("`orders-source` writes `positions-by-symbol`."),
+           "topic 'orders'")
+    expect("README: a topic inside a longer topic name is not named by it",
+           lambda: readme_nested("orders, orders-source and positions-by-symbol"),
+           "topic 'positions'")
+    expect("README: a whole name in backticks, a table or at a sentence end counts (must not fire)",
+           lambda: readme_nested("Reads `orders`.\n| positions | out |\nThe ORDERS-SOURCE writes positions-by-symbol."),
+           "", should_fire=False)
+    expect("README: orders.v2 does not name orders",
+           lambda: readme_nested("orders.v2, orders-source, positions, positions-by-symbol"),
+           "topic 'orders'")
+
+    # Its own messages go to selftest.log, marked, never to harness.log (F9).
+    def selftest_log_kept_apart():
+        size = os.path.getsize(c.log_path) if os.path.exists(c.log_path) else 0
+        log("STOPPED: a guard broken on purpose")
+        after = os.path.getsize(c.log_path) if os.path.exists(c.log_path) else 0
+        own = os.environ.get(L.SELFTEST_LOG_ENV)
+        assert own and after == size, (own, size, after)
+        last = open(own).read().splitlines()[-1]
+        assert "self-test: STOPPED: a guard broken on purpose" in last, last
+    expect("self-test: its messages stay out of harness.log (must not fire)",
+           selftest_log_kept_apart, "", should_fire=False)
+
     def records_page():
         md = L.records_markdown({"orders": ("O1", '{"id":"O1"}'), "positions": None},
                                 "abc123", {"orders": "The input.", "positions": "An output."})
@@ -3172,9 +3225,18 @@ def cmd_selftest(live=True, topic=None):
             "cases": {"2": {"cores": 2, "meanRecordsPerSec": 300000.0, "passes": 3},
                       "4": {"cores": 4, "meanRecordsPerSec": 610000.0, "passes": 3}},
             "stepRatios": [{"step": "2->4", "reportable": True, "ratio": 2.033, "ratioLow": 1.999,
-                            "ratioHigh": 2.066, "claimVerdict": "met"}]}})
-        for want in ("Build `abc123`", "| 4 | 610,000 | 3 |", "| 2->4 | 2.033x | 1.999x to 2.066x | met |"):
+                            "ratioHigh": 2.066, "ratioLowCI": 2.01, "ratioHighCI": 2.05,
+                            "idealRatio": 2.0, "meetsClaim": True, "claimVerdict": "met"},
+                           # Clean-room run 53's 2->4 (F11): the scorecard said "not met".
+                           {"step": "1->2", "reportable": True, "ratio": 1.799, "ratioLow": 1.573,
+                            "ratioHigh": 2.183, "ratioLowCI": 1.725, "ratioHighCI": 1.909,
+                            "idealRatio": 2.0, "meetsClaim": False, "claimVerdict": "spans"}]}})
+        for want in ("Build `abc123`", "| 4 | 610,000 | 3 |",
+                     "| 2->4 | 2.033x | 1.999x to 2.066x | met — the low end of its range, 2.010x",
+                     "| 1->2 | 1.799x | 1.573x to 2.183x | not met — the low end of its range, 1.725x, "
+                     "is 4.2% under the 1.80x target; more passes could change that |"):
             assert want in md, (want, md)
+        assert "spans" not in md and "missed" not in md, md
     expect("headline.md: generated from suite.json, build hash first (must not fire)",
            headline_page, "", should_fire=False)
 

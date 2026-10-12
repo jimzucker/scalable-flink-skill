@@ -42,7 +42,7 @@
     "manifestCountField": "paymentCount"
   },
   "verifier": {
-    "cmd": "{java} -cp {jar} t.Verify --bootstrap={bootstrapExt} --manifest={manifest}"
+    "cmd": "{java} -cp {jar} t.Verify --bootstrap={bootstrapExt} --manifest={manifest} --arm={arm}"
   },
   "cases": [
     1,
@@ -70,7 +70,7 @@
     "kafka": "apache/kafka:3.9.0"
   },
   "jdk": "/opt/homebrew/opt/openjdk@17",
-  "axis": "one worker growing",
+  "axis": "one machine, more cores",
   "apiLevel": "DataStream",
   "guarantee": {
     "state": "exactly-once checkpointing",

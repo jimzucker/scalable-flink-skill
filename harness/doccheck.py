@@ -876,6 +876,30 @@ def check_windowed_in_one_place(fail):
             f"the windowed settings in one place")
 
 
+def check_examples_pass_arm(fail):
+    """Every shipped example's verifier is told which arm it is checking. The
+    clean and the killed arm want different assertions; clean-room run 53 (F3)
+    found the one example of a verifier command leaving {arm} out."""
+    for name in ("pipeline.example.json", "pipeline.example.windowed.json"):
+        cmd = (json.load(open(os.path.join(HERE, name))).get("verifier") or {}).get("cmd", "")
+        if "{arm}" not in cmd:
+            fail(f"{name}'s verifier.cmd does not pass {{arm}}, which harness/README.md says it needs")
+    return "both examples' verifiers are told which arm they check"
+
+
+def check_reporter_spelling(fail):
+    """Section 7 says how Flink's reporter spells operator names, and the
+    harness names the right spelling when a panel's query uses the wrong one
+    (clean-room run 53, F6)."""
+    import lib
+    if "turns every character other than letters,\ndigits, `:` and `_` into `_`" not in read(HERE, "..", "SKILL.md"):
+        fail("SKILL.md \u00a77 no longer says how Flink's reporter spells operator names")
+    hint = lib.flink_name_hint('rate(x{operator_name=~"position-mv-by-.*"}[1m])')
+    if 'operator_name=~"position_mv_by_.*"' not in hint:
+        fail(f"the empty-panel message no longer gives the reporter's spelling: {hint!r}")
+    return "section 7 and the empty-panel message give the reporter's spelling of operator names"
+
+
 def check_plain_english(fail):
     """No message a person reads uses a word we have had to explain.
 
@@ -1004,7 +1028,9 @@ def main():
                   check_shape_ignores_the_plan,
                   check_run41_lessons,
                   check_plain_english,
-                  check_windowed_in_one_place):
+                  check_windowed_in_one_place,
+                  check_examples_pass_arm,
+                  check_reporter_spelling):
         lines.append(check(problems.append))
     for p in problems:
         print(f"doccheck: {p}")

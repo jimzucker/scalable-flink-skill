@@ -3107,7 +3107,7 @@ def _cmd_selftest(live=True, topic=None):
     expect("tiny proof: the whole span is judged after the steps (must not fire)",
            tiny_span_judged_last, "", should_fire=False)
     # A busy machine waits before a case; it never measures through it.
-    def busy(readings, waited_limit=600, when_busy=False):
+    def busy(readings, waited_limit=600, when_busy=False, stop=True):
         seq = list(readings)
         clock = {"t": 0.0}
         said = []
@@ -3121,11 +3121,20 @@ def _cmd_selftest(live=True, topic=None):
         L.MEASURE_WHEN_BUSY, c.busy_wait_s = when_busy, waited_limit
         try:
             return L.wait_until_quiet("the 4-core case", sample=sample, sleep=sleep,
-                                      now=lambda: clock["t"], say=said.append), said
+                                      now=lambda: clock["t"], say=said.append, stop=stop), said
         finally:
             L.MEASURE_WHEN_BUSY, c.busy_wait_s = prev, prev_wait
 
     limit = (os.cpu_count() or 1) * T["busyCoresFrac"]
+
+    # Completeness measures no speed: it waits, then goes on and records the
+    # load, where a measured case would stop the run (clean-room run 53, F7).
+    def busy_completeness_goes_on():
+        got, said = busy([limit * 2] * 1000, stop=False)
+        assert got.get("wentOnBusy") and got["waitedS"] >= 600 and got["otherCores"] > limit, got
+        assert "going on with" in said[-1] and "measures no speed" in said[-1], said[-1]
+    expect("busy machine: completeness waits, then goes on and records the load (must not fire)",
+           busy_completeness_goes_on, "", should_fire=False)
 
     def busy_quiet_goes_straight_on():
         got, said = busy([limit * 0.5])
@@ -3199,6 +3208,30 @@ def _cmd_selftest(live=True, topic=None):
            lambda: readme_nested("orders.v2, orders-source, positions, positions-by-symbol"),
            "topic 'orders'")
 
+    # Flink's reporter spells operator names with '_' (clean-room run 53, F6):
+    # an empty panel that asked for dashes is told the spelling to use.
+    def reporter_spelling():
+        q = [{"refId": "A", "expr": 'sum(flink_taskmanager_job_task_operator_numRecordsOutPerSecond'
+                                    '{operator_name=~"position-mv-by-.*"})', "legendFormat": "market values"}]
+        _, wrong = L.points_by_query({"results": {"A": {"frames": []}}}, q)
+        assert 'operator_name=~"position_mv_by_.*", not "position-mv-by-.*"' in wrong, wrong
+        assert L.flink_name_hint('x{operator_name=~"position_mv_by_.*"}') == ""
+        assert L.flink_name_hint('x{task_name="Source: orders"}') == \
+            ' — Flink\'s metrics replace every character other than letters, digits, \':\' and \'_\' ' \
+            'in operator, task and job names with \'_\', so ask for task_name="Source:_orders", not "Source: orders"'
+    expect("dashboard: a query with dashes in an operator name is told the reporter's spelling (must not fire)",
+           reporter_spelling, "", should_fire=False)
+
+    # The compose file reads back what pipeline.json said (clean-room run 53, F8).
+    def compose_values_quoted():
+        got = L.yaml_block({"environment": {"GF_AUTH_ANONYMOUS_ENABLED": "true", "ALREADY": '"true"'},
+                            "ports": ["13000:3000"], "cpus": 0.5, "privileged": True, "restart": "no"})
+        want = ['environment:', '  GF_AUTH_ANONYMOUS_ENABLED: "true"', '  ALREADY: "true"',
+                'ports:', '  - "13000:3000"', 'cpus: 0.5', 'privileged: true', 'restart: "no"']
+        assert got == want, got
+    expect("compose: string values are quoted, true/false and numbers are not (must not fire)",
+           compose_values_quoted, "", should_fire=False)
+
     # Its own messages go to selftest.log, marked, never to harness.log (F9).
     def selftest_log_kept_apart():
         size = os.path.getsize(c.log_path) if os.path.exists(c.log_path) else 0
@@ -3248,7 +3281,7 @@ def _cmd_selftest(live=True, topic=None):
         if project_ignores_results:
             open(os.path.join(root, ".gitignore"), "w").write("results/\n")
         L.write_results_gitignore(results)
-        for f in ("completeness.json", "tinyproof.json", "ceiling-4core.json", "DONE",
+        for f in ("completeness.json", "tinyproof.json", "ceiling-4core.json", "DONE", "hostprobe.json",
                   "harness.log", "fill-orders.log", "det-a.json", "manifest.json"):
             open(os.path.join(results, f), "w").write("{}")
         json.dump({"count": 5, "perKey": {"A": 1}}, open(os.path.join(results, "manifest.json"), "w"))
@@ -3259,6 +3292,7 @@ def _cmd_selftest(live=True, topic=None):
         root, results = evidence_repo()
         line = " ".join(L.evidence_lines(results))
         for kept in ("completeness.json", "tinyproof.json", "ceiling-4core.json", "DONE",
+                     "hostprobe.json",   # the probe's numbers (clean-room run 53, F13)
                      "manifest-summary.json", ".gitignore"):
             assert kept in line, (kept, line)
         for left_out in ("harness.log", "fill-orders.log", "det-a.json", "manifest.json,"):
@@ -4806,7 +4840,7 @@ def cmd_completeness():
         try:
             # the run's own declared outputs are cleared too: the two arms are
             # asserted differently and their rows must not be mixed
-            L.wait_until_quiet(f"the completeness arm {group}")
+            busy = L.wait_until_quiet(f"the completeness arm {group}", stop=False)
             L.recreate_output_topics(include_declared=True)
             L.assert_cluster_idle()
             L.delete_group(group)
@@ -4841,7 +4875,7 @@ def cmd_completeness():
                     time.sleep(c.settle_s)
                     log(f"processed the full test data set in {time.time()-t0:.1f}s" + (" (killed and restarted mid-run)" if killed else ""))
                     return {"group": group, "killed": killed, "drainS": round(time.time() - t0, 1),
-                            "killedAtCommitted": killed_at,
+                            "killedAtCommitted": killed_at, "busyBefore": busy,
                             # read while it is still RUNNING: the finally below
                             # cancels the job, and the plan goes with it
                             "shape": L.graph_shape(jid)}
@@ -5744,7 +5778,6 @@ def cmd_probe():
     if not h or h.get("error"):
         print(f"could not probe: {(h or {}).get('error', 'no probe source')}")
         return 1
-    save_json("hostprobe.json", h)
     print()
     for mode, label in (("alu", "simple arithmetic"), ("mem", "memory-heavy work")):
         pc = (h.get("perCore") or {}).get(mode) or {}
@@ -5769,6 +5802,13 @@ def cmd_probe():
         if a["envelope"] or a["middleHalf"] is not None:
             print(f"  {label:<20} full range {a['envelope']:.0%}"
                   + (f", middle half {a['middleHalf']:.0%}" if a["middleHalf"] is not None else ""))
+    # Kept in git with the run (results/.gitignore): clean-room run 53 (F13)
+    # had its probe numbers only in its own notes.
+    h["repeats"] = reps
+    h["spread"] = {"widest": sp, **{m: L.probe_spread(h, mode=m) for m in ("alu", "mem")}}
+    h["at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    save_json("hostprobe.json", h)
+    print(f"  saved: results/hostprobe.json, kept in git with the run")
     print(f"  the widest of those is {sp['envelope']:.0%} over {reps} repeats"
           + (f", middle half {sp['middleHalf']:.0%}." if sp["middleHalf"] is not None
              else " — too few to take a middle half from."))

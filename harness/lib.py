@@ -1162,6 +1162,26 @@ def extra_services_text():
     return "\n" + "\n".join(out) + "\n"
 
 
+def yaml_scalar(v):
+    """Pure. One value as YAML that reads back as what pipeline.json said: a
+    string stays a string, quoted; true/false/null and numbers stay as they
+    are. Clean-room run 53 (F8): written bare, the string "true" reached
+    compose as a true/false value, which it rejects for `environment`, and
+    "13000:3000" is a number in base 60 to some YAML readers. A string that
+    already carries its own quotes, as earlier runs had to write, is left
+    alone."""
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if v is None:
+        return "null"
+    if isinstance(v, (int, float)):
+        return str(v)
+    v = str(v)
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+        return v
+    return json.dumps(v)
+
+
 def yaml_block(value, indent=0):
     """The little of YAML a compose service body needs, so the harness stays
     standard library only."""
@@ -1173,16 +1193,16 @@ def yaml_block(value, indent=0):
                 lines.append(f"{pad}{k}:")
                 lines.extend(yaml_block(v, indent + 2))
             else:
-                lines.append(f"{pad}{k}: {v}")
+                lines.append(f"{pad}{k}: {yaml_scalar(v)}")
     elif isinstance(value, list):
         for v in value:
             if isinstance(v, (dict, list)):
                 lines.append(f"{pad}-")
                 lines.extend(yaml_block(v, indent + 2))
             else:
-                lines.append(f"{pad}- {v}")
+                lines.append(f"{pad}- {yaml_scalar(v)}")
     else:
-        lines.append(f"{pad}{value}")
+        lines.append(f"{pad}{yaml_scalar(value)}")
     return lines
 
 
@@ -4161,7 +4181,8 @@ def headline_markdown(out):
 RESULTS_KEEP = ("preflight.json", "completeness.json", "tinyproof.json", "selftest.json",
                 "suite.json", "suite.md", "suite.txt", "ceiling*.json", "all.json", "phases.log",
                 "DONE", "records.md", "headline.md", "graph.md", "graph.mmd", "graph.png",
-                "suite-graph.md", "suite-graph.mmd", "suite-graph.png", "manifest-summary.json")
+                "suite-graph.md", "suite-graph.mmd", "suite-graph.png", "manifest-summary.json",
+                "hostprobe.json")
 
 
 def results_gitignore_text():
@@ -4320,7 +4341,7 @@ def busy_sentence(cores, n, top):
     return f"other programs are using {cores:.1f} of {n} cores" + (f" ({names})" if names else "")
 
 
-def wait_until_quiet(before, sample=None, sleep=None, now=None, say=None):
+def wait_until_quiet(before, sample=None, sleep=None, now=None, say=None, stop=True):
     """Before a case: if other programs are using more than busyCoresFrac of
     the cores, wait for them rather than measure.
 
@@ -4330,6 +4351,11 @@ def wait_until_quiet(before, sample=None, sleep=None, now=None, say=None):
     Spotlight were busy later, while the cases ran; preflight samples once.
     Whether that load is what made those 4-core readings slow is not measured.
     So this waits and says why; it never throws out a case already measured.
+
+    stop=False is for a step that measures no speed (completeness): it waits
+    the same way, then goes on and records the load instead of stopping the
+    run. Clean-room run 53 (F7): a long burst of Photos analysis could have
+    stopped the chain on a correctness check the load cannot affect.
     """
     c = cfg()
     sample = sample or other_cpu
@@ -4348,6 +4374,10 @@ def wait_until_quiet(before, sample=None, sleep=None, now=None, say=None):
     while True:
         say(f"waiting before {before}: {busy_sentence(cores, n, top)}. "
             f"Close them, or the case will be measured on a busy machine.")
+        if now() - t0 >= c.busy_wait_s and not stop:
+            say(f"still busy after {c.busy_wait_s / 60:.0f} minutes ({busy_sentence(cores, n, top)}); "
+                f"going on with {before}, which measures no speed")
+            return {"otherCores": round(cores, 2), "waitedS": round(now() - t0), "wentOnBusy": True}
         if now() - t0 >= c.busy_wait_s:
             raise Refusal("rig", f"the machine stayed busy before {before}: after {c.busy_wait_s / 60:.0f} minutes of waiting, "
                                  f"{busy_sentence(cores, n, top)}. Close them and run again, or pass "
@@ -5273,6 +5303,30 @@ def panel_points(port, panel, t0, t1):
     return points_by_query(r, queries)
 
 
+# Labels whose values Flink's Prometheus reporter rewrites: every character
+# outside letters, digits, ':' and '_' becomes '_'. Read back from Prometheus
+# by clean-room run 53 (F6): `position-mv-by-symbol` arrives as
+# `position_mv_by_symbol`, `order-source` as `Source:_order_source`.
+FLINK_REWRITTEN_LABELS = ("operator_name", "task_name", "job_name")
+
+
+def flink_name_hint(expr):
+    """Pure. "" unless the query asks for a Flink operator, task or job name
+    the reporter can never send; then one sentence giving the spelling it
+    does send. Regex characters are left as they are."""
+    fixes = []
+    for label, op, val in re.findall(r'\b(' + "|".join(FLINK_REWRITTEN_LABELS)
+                                     + r')\s*(=~|!~|=|!=)\s*"([^"]*)"', expr or ""):
+        keep = "" if op in ("=", "!=") else r".*+?|()[]{}^$\\"
+        fixed = "".join(ch if (ch.isalnum() or ch in "_:" or ch in keep) else "_" for ch in val)
+        if fixed != val:
+            fixes.append(f'{label}{op}"{fixed}", not "{val}"')
+    if not fixes:
+        return ""
+    return (" — Flink's metrics replace every character other than letters, digits, ':' and '_' "
+            "in operator, task and job names with '_', so ask for " + "; ".join(fixes))
+
+
 def points_by_query(response, queries):
     """Pure. (points in the emptiest query, what is wrong) from one Grafana
     /api/ds/query response. Each query is judged on its own: a sum across a
@@ -5292,7 +5346,7 @@ def points_by_query(response, queries):
         if res.get("error"):
             wrong.append(f"query {ref} ({label}): {res['error']}")
         elif n == 0:
-            wrong.append(f"query {ref} ({label}) returns nothing")
+            wrong.append(f"query {ref} ({label}) returns nothing" + flink_name_hint(q.get("expr", "")))
         least = n if least is None else min(least, n)
     return (least or 0), ("; ".join(wrong) or None)
 

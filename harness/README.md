@@ -431,7 +431,9 @@ What the harness measures and how:
 | `headline.md` | report: per-case rates and step ratios with the build hash, generated from `suite.json` for the project README to link to |
 | `ceiling.json` | ceiling |
 | `all.json`, `phases.log`, `DONE` | all (per-step rc and seconds; timestamps; the verdict to wait on) |
-| `harness.log` | everything |
+| `hostprobe.json` | probe: every repeat at every case size, the full range and middle half per arm, and when it ran |
+| `harness.log` | everything except the self-test's |
+| `selftest.log` | selftest: its own messages, each marked "self-test:". It breaks guards on purpose, so a "STOPPED:" here is not the run stopping |
 | `manifest-summary.json` | every command that ends a step: the manifests' totals, without their per-key tables |
 | `.gitignore` | every command: what is kept in git as evidence, by name. `down` and the end of each step report what is not committed yet |
 

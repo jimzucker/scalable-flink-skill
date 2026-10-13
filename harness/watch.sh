@@ -15,7 +15,9 @@
 #   PROJECT_DIR=/path/to/run sh harness/watch.sh
 #
 # It prints progress until results/DONE appears, then prints the outcome and
-# exits 0 if the run passed, 1 otherwise.
+# exits 0 if the run passed, 1 otherwise. Every line also goes to watch.log in
+# the run's directory, outside results/: an agent's tool may keep this script's
+# output somewhere the agent is not allowed to read (clean-room run 54, F5).
 #
 # One small exposure is left and is not worth more machinery: the sweep also
 # kills anything holding a file open under results/, and this script has
@@ -35,20 +37,22 @@ if [ ! -d "$PROJECT_DIR" ]; then
 fi
 
 R="$PROJECT_DIR/results"
+LOG="$PROJECT_DIR/watch.log"
+say() { printf '%s\n' "$1"; printf '%s\n' "$1" >> "$LOG"; }
 last=""
 while [ ! -f "$R/DONE" ]; do
     if [ -f "$R/PROGRESS.txt" ]; then
         now=$(cat "$R/PROGRESS.txt" 2>/dev/null)
         if [ "$now" != "$last" ]; then
-            printf '%s  %s\n' "$(date '+%H:%M:%S')" "$now"
+            say "$(date '+%H:%M:%S')  $now"
             last="$now"
         fi
     fi
     sleep 20
 done
 
-echo
-echo "finished: $(cat "$R/DONE")"
+say ""
+say "finished: $(cat "$R/DONE")"
 case "$(cat "$R/DONE")" in
     PASS*) exit 0 ;;
     *)     exit 1 ;;

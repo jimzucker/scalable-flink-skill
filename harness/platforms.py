@@ -121,7 +121,7 @@ LAPTOP_ONLY = {
     "disk budget on the HOST, not the container": "the broker's disk is the service's",
     "CPU cap mechanism chosen once": "the size is the service's unit, read back every case",
     "memory is per subtask, not per container": "the service sizes memory with its unit",
-    "nothing else is using the cores (reported)": "the cores measured are not this machine's",
+    "other programs' use of the cores (reported)": "the cores measured are not this machine's",
     "what this host's own cores do": "the cores measured are not this machine's",
     "the Docker VM against the machine's memory (reported)": "there is no Docker VM in the stack",
     "pipeline, broker and job manager against the VM (reported)": "there is no Docker VM in the stack",
@@ -209,8 +209,8 @@ def unclaimed_cases_reason(cases, claim_steps, unit="CFU"):
     the first full Confluent suite (2026-10-06) ran its 5 CFU cases three times
     for a claim about 10->20. `claim_steps` is like ["10->20"]."""
     if not claim_steps:
-        return ("name the steps the claim is about as claimSteps, for example [\"10->20\"], so no case runs "
-                "that no claimed step needs. Every case costs money here")
+        return ("name the steps the target is about as targetSteps, for example [\"10->20\"], so no case runs "
+                "that no target step needs. Every case costs money here")
     need, bad = set(), []
     order = sorted(int(c) for c in cases)
     pairs = {(a, b) for a, b in zip(order, order[1:])}
@@ -218,18 +218,18 @@ def unclaimed_cases_reason(cases, claim_steps, unit="CFU"):
         try:
             a, b = (int(x) for x in str(st).split("->"))
         except ValueError:
-            return f"claimSteps entry {st!r} is not a step like \"10->20\""
+            return f"targetSteps entry {st!r} is not a step like \"10->20\""
         if (a, b) not in pairs:
             bad.append(st)
         need.update((a, b))
     if bad:
-        return (f"claimSteps names {', '.join(bad)}, which is not a step between neighbouring cases "
+        return (f"targetSteps names {', '.join(bad)}, which is not a step between neighbouring cases "
                 f"{order}; add the cases or fix the step")
     extra = [c for c in order if c not in need]
     if extra:
         return (f"the {', '.join(f'{c} {unit}' for c in extra)} case{'s are' if len(extra) > 1 else ' is'} in no "
-                f"claimed step ({', '.join(claim_steps)}), and each one costs a full case per pass here. "
-                f"Take {'them' if len(extra) > 1 else 'it'} out of cases, or add the step to claimSteps")
+                f"target step ({', '.join(claim_steps)}), and each one costs a full case per pass here. "
+                f"Take {'them' if len(extra) > 1 else 'it'} out of cases, or add the step to targetSteps")
     return None
 
 

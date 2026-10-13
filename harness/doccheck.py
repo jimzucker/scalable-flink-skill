@@ -537,7 +537,7 @@ def check_dashboard_rows(fail):
     if "With nobody to ask, run the probe and the ceiling (below), report the step as not met" not in skill:
         fail("SKILL.md \u00a76 no longer tells an unattended agent what to do with a step whose range spans the target")
     if "**not met** when the low end is under 1.80× by more than 1%" not in skill:
-        fail("SKILL.md \u00a76 no longer gives the claim its outcomes: met or not met, with the gap in percent")
+        fail("SKILL.md \u00a76 no longer gives the target its outcomes: met or not met, with the gap in percent")
     if "The dashboard opens on the suite" not in skill:
         fail("SKILL.md \u00a77 no longer says the harness sets the dashboard's range to the suite")
     if "The harness tests the dashboard as it tests the job" not in skill:
@@ -887,6 +887,26 @@ def check_examples_pass_arm(fail):
     return "both examples' verifiers are told which arm they check"
 
 
+def check_fill_in_names(fail):
+    """Every name the harness fills into a command is in harness/README.md's
+    table of them. Clean-room run 54 (F2) found {also0}, {partitions} and the
+    second input's {in1} only by reading Cfg.fmt."""
+    lib = read(HERE, "lib.py")
+    body = lib[lib.index("    def fmt(self, s, **kw):"):]
+    body = body[:body.index("        return s.format(**d)")]
+    names = set(re.findall(r"(\w+)=self\.", body)) | {"in", "outs", "alsos", "ins", "out0", "also0", "in0"}
+    for src in (lib, read(HERE, "prove.py")):
+        for call in re.findall(r"\.fmt\(c\.\w+, ([^)]*)\)", src):
+            names |= set(re.findall(r"(\w+)=", call))
+    readme = read(HERE, "README.md")
+    table = readme[readme.index("### Fill-in names for the commands"):]
+    table = table[:table.index("\n### ", 5)]
+    missing = sorted(n for n in names if "{" + n + "}" not in table)
+    if missing:
+        fail("harness/README.md's fill-in table leaves out " + ", ".join("{" + n + "}" for n in missing))
+    return f"harness/README.md's fill-in table names all {len(names)} names the harness fills in"
+
+
 def check_reporter_spelling(fail):
     """Section 7 says how Flink's reporter spells operator names, and the
     harness names the right spelling when a panel's query uses the wrong one
@@ -898,6 +918,11 @@ def check_reporter_spelling(fail):
     if 'operator_name=~"position_mv_by_.*"' not in hint:
         fail(f"the empty-panel message no longer gives the reporter's spelling: {hint!r}")
     return "section 7 and the empty-panel message give the reporter's spelling of operator names"
+
+
+# "claim", "claims", "claimed" as a word; not "reclaimable", and not the JSON
+# keys a machine reads back (meetsClaim, claimVerdict), which the caller allows.
+CLAIM = re.compile(r"(?<![A-Za-z])claim(s|ed|ing)?(?![A-Za-z])", re.I)
 
 
 def check_plain_english(fail):
@@ -924,7 +949,11 @@ def check_plain_english(fail):
     # Keys the harness writes into its JSON for a machine to read back, and the
     # recorded expectations that go with them. Not prose, not read by a person,
     # and renaming them would break every recorded run.
-    allowed = {"refusal", "refusalScope", "refusals", "refuse", "accept"}
+    allowed = {"refusal", "refusalScope", "refusals", "refuse", "accept",
+               "meetsClaim", "claimVerdict", "claimJudgedOn", "claimEfficiencyLow", "claimShortfall",
+               "claimSteps", "claim-not-met",
+               "claim",   # a recorded case verdict in record/, read back by the replay
+               "^voided:"}   # the old step reason, stripped from suites saved before 2026-10-13
     triples = ('"' * 3, "'" * 3)
     bad = []
     for name in ("lib.py", "prove.py", "platform_confluent.py", "platforms.py"):
@@ -954,6 +983,17 @@ def check_plain_english(fail):
                 bad.append(f"{name}:{tok.start[0]} say PASS, or name the limit -- {text[:70]!r}")
             if "FAILED" in text and text.strip() != "FAILED":
                 bad.append(f"{name}:{tok.start[0]} say STOPPED, and why -- {text[:70]!r}")
+            # 2026-10-13, after clean-room run 54's "a step the claim needs was not
+            # measured": "stop say 'claim' that not english, goal or target".
+            if CLAIM.search(text):
+                bad.append(f"{name}:{tok.start[0]} say the target, or the goal -- {text[:70]!r}")
+            # Run 54's scorecard: "voided: 4c its readings are ...".
+            if "voided" in low:
+                bad.append(f"{name}:{tok.start[0]} say the case does not count, and why -- {text[:70]!r}")
+    for doc in ("SKILL.md", "harness/README.md"):
+        for n, line in enumerate(read(ROOT, *doc.split("/")).splitlines(), 1):
+            if CLAIM.search(line.replace("`claimSteps`", "")):
+                bad.append(f"{doc}:{n} say the target, or the goal -- {line.strip()[:70]!r}")
     for b in bad:
         fail(b)
     skill = read(ROOT, "SKILL.md")
@@ -1030,7 +1070,8 @@ def main():
                   check_plain_english,
                   check_windowed_in_one_place,
                   check_examples_pass_arm,
-                  check_reporter_spelling):
+                  check_reporter_spelling,
+                  check_fill_in_names):
         lines.append(check(problems.append))
     for p in problems:
         print(f"doccheck: {p}")

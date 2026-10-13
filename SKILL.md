@@ -114,6 +114,12 @@ A reader can then see what was assumed rather than agreed.
    market value we want to throttle it to a configurable interval defaulting to
    10 seconds.*
 
+   **Taking the default means every order has exactly 4 allocations**, one to
+   each account / sub-account pair of question 3, so every order emits 5
+   records. "If the order has 4 allocations" reads as one example, but the
+   harness needs the fan-out to be the same for every input (clean-room run
+   54 stopped to work this out).
+
    The throttled emit is deliberately not counted in the 5: fan-out counts
    outputs **per input**, and a throttled emit is per interval. Counting a
    timer-driven output as fan-out is what makes the two-vantage guard disagree.
@@ -167,8 +173,8 @@ A reader can then see what was assumed rather than agreed.
 
 5. **Which Flink API should we use?** DataStream, where the developer has more
    control over the execution graph, or SQL, where the optimizer makes more of
-   the decisions. Neither is more valid, but the claim differs, and it is said
-   next to the numbers.
+   the decisions. Neither is more valid, but what the numbers say differs, and
+   the API is said next to them.
 
    *Default: DataStream.*
 
@@ -229,7 +235,7 @@ A reader can then see what was assumed rather than agreed.
    down, proving nothing is left; the first full chain ran on the real service
    on 2026-10-06. Before anything is created, "local first" requires the same
    SQL to have passed completeness and the tiny proof on the laptop,
-   `claimSteps` naming the steps the claim is about, and a Kafka capacity cap
+   `targetSteps` naming the steps the target is about, and a Kafka capacity cap
    (`maxEcku`) big enough for the largest pool. Amazon MSK with Managed Service
    for Apache Flink and Google Cloud are named but not built: they stop before
    anything is created. If the user asks for one of those, say so and build for
@@ -293,6 +299,11 @@ One branch per step, squash-merged. Each step ends with the system **running and
 measured**, not compiling. Pause for review between steps; run without prompting
 inside one. Keep a journal in `JOURNAL.md` at the project root: what drove the
 step, what was decided, how it was verified.
+
+**With nobody to review** — a clean-room run, an unattended agent — do not
+pause and do not make branches nobody will merge. Keep one branch, and commit
+at the end of each step with the build hash in the message, so a reader can
+still see the steps one at a time.
 
 **Write `README.md` at the project root while you build, not after.** A run on
 2026-10-10 left `ASSUMPTIONS.md`, `PLAN.md` and a journal, and no README:
@@ -368,7 +379,7 @@ bad window voids one case — so anything checkable now is checked now.
 | every case runs the same collector | the collector name off the engine's metrics, on every case | `--cpus 1` picks the serial collector and every case above it runs G1, so the baseline is a different program — worth +19% and a whole superlinear step |
 | the interview and the plan were written down | `ASSUMPTIONS.md` and `PLAN.md` exist before the stack does, and the plan names every disclosure | a run that never wrote down what it decided leaves a reader unable to tell what was agreed from what was assumed — and the six answers are the spec |
 | the README names every topic and operator | `README.md` at the project root exists and contains, as text, every topic in `topics.in`, `topics.out`, `topicsAlsoWritten` and `design.inputs`, and every `design.operators` entry. A missing name stops the run, and the message names it | a pipeline nobody else can build, run or read — the 2026-10-10 run left none |
-| nothing else is using the cores | other programs' CPU — the Docker VM and the run's own processes left out — against the core count, and the three busiest. **Reported here; each case checks again before it starts** (§6). When it says busy, show the user the programs and ask: *wait for them, or measure anyway?* With no human to ask, wait | a cap is a **share**, not a promise of cycles: on a busy host every case reads 100% of its cap and does less work for it, and no other column shows it |
+| other programs' use of the cores | other programs' CPU — the Docker VM and the run's own processes left out — against the core count, and the three busiest. **Reported here; each case checks again before it starts** (§6). When it says busy, show the user the programs and ask: *wait for them, or measure anyway?* With no human to ask, wait | a cap is a **share**, not a promise of cycles: on a busy host every case reads 100% of its cap and does less work for it, and no other column shows it |
 | the VM trim command is known | `docker run --rm --privileged --pid=host alpine nsenter -t 1 -m -u -n -i -- fstrim -v /var/lib/docker` | space freed inside a Docker Desktop VM never returns to the host |
 
 **Then the tiny proof, before any fill.** It is called tiny because it is short, **not because it is small**: it measures the drain rate that sizes everything else, so it needs enough data to warm up and hold a steady window at the fastest case. That is `rate x (warm-up + window + headroom)`, which for a fast pipeline is hundreds of millions of records — clean-room run 42 ran 400,000,000 and run 43 was told to run 391,613,400. This line used to say "a few thousand records", which is out by five orders of magnitude and led two runs to budget for a smoke test and get a second full one. Budget the disk and the minutes for it, and know that **every tuning change re-creates it**. End to end:
@@ -406,7 +417,7 @@ bad window voids one case — so anything checkable now is checked now.
   reported, and left out of the steps, exactly as in the suite. The steps it
   would have been part of are not bounded, and the rest still are;
 - **kill the pipeline mid-run and re-assert the totals** — a guarantee is a
-  claim about failure and is untested until something has failed; finding out
+  promise about failure and is untested until something has failed; finding out
   after the suite discards the suite;
 - run one full case with a 10–15 s window so every line of the harness
   executes, **and fail one check on purpose** so you know the checks can fail.
@@ -513,7 +524,7 @@ then is anything measured. Measuring first costs two to three hours to produce
 a table for the wrong pipeline.
 
 The suite report carries the graph a second way: **a Mermaid diagram rendered
-from the plan the engine served**, not drawn. A drawing is a claim; that one
+from the plan the engine served**, not drawn. A drawing is a statement; that one
 is the job. It also shows what a reader wants from a streaming diagram: the
 input topic and its partition count, the key set and its size on each keyed
 edge, and each output topic with its key count and how often it is written.
@@ -634,7 +645,7 @@ and not a hope. A 1→2 well above 2.00× is that case reading low, and it is
 worth knowing: it says the step someone buys first is not what it appears to
 be. The tiny proof bounds every step the suite will report (§3), so a bad
 one-unit case costs ten minutes rather than a suite. Drop it only when the
-claim genuinely starts higher up.
+target genuinely starts higher up.
 
 **Measure a drain, not a live generator.** Fill a backlog larger than the page
 cache, stop the producer, measure the drain. Hold partitions, checkpoint
@@ -793,7 +804,7 @@ so the suite's first and last measurements are the same case and a rig that
 drifted across it is visible as baseline spread (one rig read its four-core
 case 12% higher ten minutes after the suite than in it). Budget one extra case,
 and up to six more if a step's range reaches both sides of the target — about 25 minutes on the
-reference pipeline (§6, the claim itself).
+reference pipeline (§6, the target itself).
 
 **Do not poll the stack while it is measuring.** Anything that asks the engine,
 the broker or Prometheus for a number is work on the same machine and inside
@@ -827,6 +838,10 @@ printf 'PROJECT_DIR=/path/to/run\nsh /path/to/skill/harness/watch.sh\n' > /path/
 cd /path/to && sh run/scratch/w.sh
 ```
 
+Every line `watch.sh` prints also goes to `watch.log` in the run's directory.
+Read that file rather than your tool's own copy of the output, which may be
+kept somewhere you are not allowed to read (run 54's was under `/private/tmp`).
+
 **Start the fill the moment the tiny proof passes** and build the dashboard's
 panels while it runs. Nothing but the cases depends on them. The dashboard's
 *service* is not so free: `extraServices` is read when the stack comes up, so
@@ -858,7 +873,7 @@ for it.
 | an output the business case asks for was never written | after the completeness drain, every topic named in `topicsAlsoWritten` has records. These are the pipeline's own outputs — the throttled ones, outside `topics.out` — and nothing else looks at them. Two clean-room runs in a row built **one** market value where the default asks for two, and passed every other guard |
 | the keys divide evenly across subtasks | the engine's own key-group assignment says where every key in `keySets` would land at every case. A subtask with **no keys** always stops the run; an uneven one stops it when a `pipeline.max-parallelism` exists that would even it out, and is reported in the row when none does. Not checked for a SQL build (`"api": "sql"`), which places keys differently |
 | memory is not the constraint | **every case gives its subtasks the same memory**, as a base plus a per-core share. Passing nothing does not leave memory to the engine: the image ships a flat figure — `flink:1.20.1` sets 1728m — so every case runs on the same total, which is the configuration this rule exists to catch. Clean-room run 36 measured 2→4 at 1.510 on the image default against 1.743 with memory per subtask, and the GC ceiling did **not** catch it: GC was at its lowest, 1.40%, on the case losing the most. A case whose GC exceeds 5.5% of its capacity is a ceiling **if it also does less work per core than the nearest larger case under that limit**, by more than a step ratio's own noise — or if there is no such case to compare it with. More GC with nothing lost is not a ceiling: clean-room run 50's SQL 1-core case ran 8–10% GC and did as much work per core as its 2-core case, and cutting its GC to 7.4% made it no faster, not a result |
-| the claim itself | each step returns **1.80× or better** on a doubling, judged on the low end of the step's range across its pairs of passes, with a **1% margin**: a step passes when that low end is above 1.782× (1.80× less 1%), with no upper bound (the author's decision, 2026-10-10). Two outcomes, said with the gap to the target in percent: **met**, and **not met** when the low end is under 1.80× by more than 1%. A step met within the margin says so. A step above 2.00× is met, with a note that its smaller case probably read low and is worth a look — every superlinear result in this project's record was a measurement artefact. A step whose range reaches both sides of the target is not met, and more passes could change that: the suite runs up to six more cases of its two sizes, alternating so each makes a new pair, and judges again; if it is still not met the chain stops saying so, and nothing in the pipeline is changed on it. **With nobody to ask, run the probe and the ceiling (below), report the step as not met with the percent, and stop; change nothing in the pipeline** — that is a result; running the suite again is a new suite with its own passes, worth it only when the claim needs the step settled. Replayed when the allowance and the no-upper-bound rule came in: of 22 recorded steps, 10 changed from not met to met — 2 near misses inside the 1% (1.789×, 1.792×) and 8 above 2.00× (low ends 2.03–2.18×). A step that is not met by more than its spread stops the chain with the per-core, idle, GC and cap figures for both cases — a valid table that does not scale is a result about the pipeline, not a table to publish |
+| the target itself | each step returns **1.80× or better** on a doubling, judged on the low end of the step's range across its pairs of passes, with a **1% margin**: a step passes when that low end is above 1.782× (1.80× less 1%), with no upper bound (the author's decision, 2026-10-10). Two outcomes, said with the gap to the target in percent: **met**, and **not met** when the low end is under 1.80× by more than 1%. A step met within the margin says so. A step above 2.00× is met, with a note that its smaller case probably read low and is worth a look — every superlinear result in this project's record was a measurement artefact. A step whose range reaches both sides of the target is not met, and more passes could change that: the suite runs up to six more cases of its two sizes, alternating so each makes a new pair, and judges again; if it is still not met the chain stops saying so, and nothing in the pipeline is changed on it. **With nobody to ask, run the probe and the ceiling (below), report the step as not met with the percent, and stop; change nothing in the pipeline** — that is a result; running the suite again is a new suite with its own passes, worth it only when the goal needs the step settled. Replayed when the allowance and the no-upper-bound rule came in: of 22 recorded steps, 10 changed from not met to met — 2 near misses inside the 1% (1.789×, 1.792×) and 8 above 2.00× (low ends 2.03–2.18×). A step that is not met by more than its spread stops the chain with the per-core, idle, GC and cap figures for both cases — a valid table that does not scale is a result about the pipeline, not a table to publish |
 | a failed case still owns the cluster | job torn down on **every** exit path |
 | no job is actually running | engine reports RUNNING with the expected parallelism |
 | the cluster is still busy from the last case | assert idle by asking the engine, not by killing what you think is there |
@@ -876,7 +891,7 @@ for it.
 | the dashboard shows nothing | a panel names a data source the stack does not provision, or has no query (preflight); a panel shows no data through Grafana over the completeness run (stops the chain there) or over the suite (named in the report) |
 | a monitor outlived the thing it watched | at teardown, no child the run started survives, and no host process watching `results/`, naming the project, or running `prove.py`-shaped loops from inside it either. **Swept at the start of a chain as well as at the end**: a chain that fails restarts from the top, and the attempt before it can still be running. Clean-room run 43 restarted three times and left a generator writing 400,000,000 records at the broker the next attempt was measuring — load average 9.24 on eight cores with nothing supposed to be running, a warm-up reading 957,976 then 216,896 then 12,697,565 records an interval, and 14.1% of a case spent on garbage collection. All of it was read as the machine being too small |
 
-**When the claim is not met, show the whole picture and ask before iterating.**
+**When the target is not met, show the whole picture and ask before iterating.**
 The report prints every case and every step together, then the steps to fix in
 order — a step reading *above* 2× first, because nothing does more than double
 the work on double the cores, so its lower case read too low and every step it
@@ -940,7 +955,7 @@ cheap, and it decides whether there is anything in the pipeline to look for.
 **When there is no human to say yes and the step's whole range is under the
 target, tune until you run out of levers.** Not for a step whose range reaches
 the target: that one stops after the probe and the ceiling (the table above).
-**What is being tuned is the steps, not any case's speed.** The claim is
+**What is being tuned is the steps, not any case's speed.** The target is
 1→2 and 2→4, each 1.80× or better. Making the baseline faster makes the step
 off it *smaller*, so a faster one-core case is not progress and can be the
 opposite — the only thing worth fixing on a baseline is a way it differs from
@@ -983,7 +998,7 @@ A starved worker reads as a pipeline that does not scale.
 
 So when the advice does not fit the machine, the harness says so and names the
 three ways out, in order: **raise the virtual machine**; or **drop the largest
-case** and claim the step below it; or **keep the broker where it is, let the
+case** and set the target on the step below it; or **keep the broker where it is, let the
 largest case come back as a ceiling, and report it as where scaling stops.**
 The third is a result, not a failure — it is the honest answer on a machine
 that cannot hold both.
@@ -1081,7 +1096,7 @@ SCORECARD
     Kafka memory      memory Kafka could use, and how often it filled up
 
   2 cores is the baseline. Do not tune it: making the baseline faster makes the step
-      off it smaller, and the steps are what is being claimed. The only thing worth
+      off it smaller, and the steps are what the target is about. The only thing worth
       fixing here is a way it differs from the other cases — a different garbage
       collector, a different job graph, a cap that did not apply.
   4 cores: doubling gave 1.74x, short of the 1.80x target.
@@ -1112,7 +1127,7 @@ afternoon and each drift was reasonable on its own:
   `suite.md` alike — three renderings of the same figures, and the rule held
   in one of them until clean-room run 36 read all three.
 - **A ratio above its target is never called "short of" it.** 1.93× is not
-  short of 1.90×; what is short is the lower bound the claim is judged on, and
+  short of 1.90×; what is short is the lower bound the target is judged on, and
   the line has to say which number it means.
 
 The four measurements sit beside the answer rather than behind it, so a
@@ -1134,7 +1149,7 @@ the row took it to 175 characters and stopped being a table. For
 Kafka's memory it names the size to try, not just "more". *Pipeline CPU*
 is the answer
 the table depends on; anything else means the number measures something
-other than what it claims to. **A step ratio without this column beside it is
+other than what it says it does. **A step ratio without this column beside it is
 a number with no idea what produced it.**
 
 ## 6a. Tuning what you built
@@ -1149,7 +1164,7 @@ the cases interleaved.** Anything else is a guess wearing a number.
 | **read the input once** | **+22.5% at 1 core, +24.4% at 4** | the source topic is read once per aggregation. Parse once and fan out through a side output — not a second source read, and not two chained operators, which copy the record per consumer with object reuse off |
 | **memory per subtask, not one flat figure** | **about 14%** | a flat `tmMemory` divides across each case's subtasks. Measured: flat 2048m read 2→4 = 1.645 with GC at 9.3%; the same build with memory scaled per core read 1.910 with GC at 2.3%, and the 2-core figure did not move |
 | **give the broker its page cache** | **about 13%** | a broker that cannot hold the backlog reads it off disk. `kafkaMemory` minus `kafkaHeap` is what it caches with |
-| **compress the sink writes** | **−16% raw, and the claim becomes measurable** | the top case is *waiting to write*. Run 32's 4-core case sat at 93.7% of cap uncompressed and 99.0% with lz4: slower, and the first table of the two that was worth publishing |
+| **compress the sink writes** | **−16% raw, and the target becomes measurable** | the top case is *waiting to write*. Run 32's 4-core case sat at 93.7% of cap uncompressed and 99.0% with lz4: slower, and the first table of the two that was worth publishing |
 | **fewer subtasks for the same cores** | **about 8%**, ~3 points of it the source idling | four subtasks where two would do |
 | **make the pipeline cost something per record** | **the difference between measuring cores and measuring the broker** | every case sits below its cap with the source idle. A pipeline that is cheap per record is bound by the transport long before its cores: run 41 read 1.6 million records a second on one core and no case was CPU-bound until the input side was fixed — fetch sizing, record size, the broker's page cache. Look at source idle, not at the rate |
 | **spread the keys evenly** | **up to 0.80 → 1.00 of linear** at four cores on the demo's own keys | the preflight row says the keyed stage's keys land unevenly. Add the `pipeline.max-parallelism` it names to `flinkProperties`. This is arithmetic, not a measurement: a subtask holding a quarter more keys than its neighbours does a quarter more work |
@@ -1268,7 +1283,7 @@ the reader hovers over it.
 | 1. Pipeline output | input and output rate per stage — lines a constant factor apart | a fan-out that is not constant is not the one the interview predicted | always |
 | | distinct keys per aggregation — equal to the interview's answer | a key count that differs means keys you did not intend, or ones that never arrived | always |
 | | the two paths' totals — lines on top of each other | two independent aggregations that disagree have lost or duplicated a record | always |
-| | end-to-end latency — flat, under the target | this is what a consumer waits for | when the claim is about latency |
+| | end-to-end latency — flat, under the target | this is what a consumer waits for | when the target is about latency |
 | 2. Lag and job health | records waiting in Kafka — falls steadily in each case | flat at zero means the case ran out of input and measured nothing | always |
 | | event-time lag, seconds — flat | how stale the outputs are; in a drain it only reads the backlog's age | a pipeline left running |
 | | job restarts — 0 | readings taken across a failure are not a measurement | always |
@@ -1372,8 +1387,8 @@ the numbers are read, not in a panel.
 ## 8. Explaining a result
 
 A number short of expectation invites a reason, and a plausible reason is cheap
-to produce and expensive to be wrong about. A mechanism is a claim about cause,
-so it needs the same evidence as a throughput claim: **one rig, one build, one
+to produce and expensive to be wrong about. A mechanism is a statement about cause,
+so it needs the same evidence as a throughput result: **one rig, one build, one
 variable changed, both arms measured.** Anything less is a hypothesis and is
 labelled as one or left out.
 

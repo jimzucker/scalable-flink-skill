@@ -210,7 +210,7 @@ def cmd_replay():
             got = next((x for x in t["stepRatios"] if x["step"] == step), None)
             reportable = bool(got and got["reportable"])
             if valid and not reportable:
-                bad.append(f"{os.path.basename(f)}: {step} is valid in the record but would be voided "
+                bad.append(f"{os.path.basename(f)}: {step} is valid in the record but would be thrown out "
                            f"({got['reason'] if got else 'no such step'})")
             if not valid and reportable:
                 bad.append(f"{os.path.basename(f)}: {step} is NOT valid in the record but would be reported "
@@ -872,6 +872,11 @@ def _cmd_selftest(live=True, topic=None):
                                         "the 1.80x target"), L.verdict_words(met)
         assert "less than 0.1% over" in L.verdict_words(dict(met, ratioLowCI=1.8005)), L.verdict_words(dict(met, ratioLowCI=1.8005))
         assert report_verdict("claim-not-met", {}).startswith("STOPPED at report: the table is good")
+        assert report_verdict("target-not-met", {}).startswith("STOPPED at report: the table is good")
+        # The harness.log line names what stopped the report, not one sentence for all
+        # (clean-room run 54: "a valid table" about a table that threw out a case).
+        assert "thrown out" in report_log_line("step-missing") and "valid" not in report_log_line("step-missing")
+        assert "did not meet the target" in report_log_line("target-not-met")
         assert report_verdict(None, None) == "STOPPED at report: the table could not be reported"
     expect("report: the not-settled range and DONE line read as written (run 52's figures) (must not fire)",
            not_settled_words, "", should_fire=False)
@@ -1161,15 +1166,15 @@ def _cmd_selftest(live=True, topic=None):
              pas(4, "p2-desc", 106728), pas(2, "p2-desc", 55378), pas(1, "p2-desc", 27249, "CEILING", gc),
              pas(1, "p3-asc", 28874, "CEILING", gc), pas(2, "p3-asc", 58802), pas(4, "p3-asc", 106517),
              pas(1, "sentinel", 29292, "CEILING", gc)]
-    expect("claim: run 50's thrown-out baseline leaves 1->2 missing (must not fire)",
+    expect("target: run 50's thrown-out baseline leaves 1->2 missing (must not fire)",
            gaps(run50, [1, 2, 4], ["1->2"]), "", should_fire=False)
-    expect("claim: every case counted, nothing missing (must not fire)",
+    expect("target: every case counted, nothing missing (must not fire)",
            gaps([dict(r, status="OK") for r in run50], [1, 2, 4], []), "", should_fire=False)
     def why50():
         table = L.build_table(run50, [1, 2, 4])
         g = L.missing_steps([1, 2, 4], table, run50)[0]["why"]
         assert "every 1-core pass was thrown out (4 of 4)" in g and "garbage collection used 9.2%" in g, g
-    expect("claim: the missing step says why, in the harness's own words (must not fire)",
+    expect("target: the missing step says why, in the harness's own words (must not fire)",
            why50, "", should_fire=False)
     def diagram():
         # issue #76, drawn the way a person plans a job: one box per step, input
@@ -1314,7 +1319,9 @@ def _cmd_selftest(live=True, topic=None):
         if c2["reportable"] or step["reportable"] or t["cases"][4]["reportable"] is not True:
             raise Exception(f"spread guard did not void the case and only the case: {t}")
         raise Refusal("case", c2["unreportableReason"])
-    expect("a case's readings are too far apart", spread, "readings are 26% apart")
+    # One decimal, and which side of the limit: run 54 printed "20% apart and the
+    # limit is 20%" about a case at 20.3%.
+    expect("a case's readings are too far apart", spread, "readings are 26.1% apart, over the 20% limit")
 
     def one_pass():
         t = build_table([{"cores": 2, "pass": "p1", "recordsPerSec": 100.0},
@@ -2336,14 +2343,18 @@ def _cmd_selftest(live=True, topic=None):
             if why:
                 raise Refusal("rig", why)
         return run
-    expect("cases: the first full Confluent suite's 5 CFU cases served no claimed step",
-           claimed([5, 10, 20], ["10->20"]), "the 5 CFU case is in no claimed step")
-    expect("cases: a paid run names the steps its claim is about", claimed([10, 20], None), "name the steps")
-    expect("cases: a claimed step must be between neighbouring cases", claimed([5, 10, 20], ["5->20"]),
+    expect("cases: the first full Confluent suite's 5 CFU cases served no target step",
+           claimed([5, 10, 20], ["10->20"]), "the 5 CFU case is in no target step")
+    expect("cases: a paid run names the steps its target is about", claimed([10, 20], None), "name the steps")
+    expect("cases: targetSteps is read, and claimSteps from older configurations (must not fire)",
+           lambda: None if (target_steps({"targetSteps": ["10->20"]}) == ["10->20"]
+                            and target_steps({"claimSteps": ["5->10"]}) == ["5->10"]) else
+           (_ for _ in ()).throw(Exception("targetSteps / claimSteps not read")), "", should_fire=False)
+    expect("cases: a target step must be between neighbouring cases", claimed([5, 10, 20], ["5->20"]),
            "not a step between neighbouring cases")
-    expect("cases: every case serves a claimed step (must not fire)", claimed([10, 20], ["10->20"]), "",
+    expect("cases: every case serves a target step (must not fire)", claimed([10, 20], ["10->20"]), "",
            should_fire=False)
-    expect("cases: both steps claimed keeps all three cases (must not fire)",
+    expect("cases: both steps in the target keeps all three cases (must not fire)",
            claimed([5, 10, 20], ["5->10", "10->20"]), "", should_fire=False)
 
     def ecku(cases, cap):
@@ -3265,8 +3276,11 @@ def _cmd_selftest(live=True, topic=None):
                             "ratioHigh": 2.183, "ratioLowCI": 1.725, "ratioHighCI": 1.909,
                             "idealRatio": 2.0, "meetsClaim": False, "claimVerdict": "spans"}]}})
         for want in ("Build `abc123`", "| 4 | 610,000 | 3 |",
-                     "| 2->4 | 2.033x | 1.999x to 2.066x | met — the low end of its range, 2.010x",
-                     "| 1->2 | 1.799x | 1.573x to 2.183x | not met — the low end of its range, 1.725x, "
+                     # the range the verdict is judged on, not the lowest and highest
+                     # pass (clean-room run 54 printed one beside the other)
+                     "| step | ratio | range it is judged on | target 1.80x |",
+                     "| 2->4 | 2.033x | 2.010x to 2.050x | met — the low end of its range, 2.010x",
+                     "| 1->2 | 1.799x | 1.725x to 1.909x | not met — the low end of its range, 1.725x, "
                      "is 4.2% under the 1.80x target; more passes could change that |"):
             assert want in md, (want, md)
         assert "spans" not in md and "missed" not in md, md
@@ -4304,7 +4318,9 @@ def cmd_preflight():
     # mostly the probe: clean-room run 45 was told OVERSUBSCRIBED: load 11.31 on
     # a host its brief had measured at 1.09 cores, and watched the average fall
     # from 10.52 to 7.15 in 45 seconds with nothing running.
-    check("nothing else is using the cores (reported)", quiet_machine)
+    # Named for what it reports, not for the answer it hopes for: clean-room run
+    # 54 read "nothing else is using the cores ... PASS ... busy: 2.20 of 8".
+    check("other programs' use of the cores (reported)", quiet_machine)
     check("what this host's own cores do", host_ceiling)
     check("backlog covers warm-up, window and headroom", backlog_sizing_hint)
     check("the interview and the plan were written down", interview_and_plan)
@@ -5334,16 +5350,17 @@ def cmd_report():
         out["reportVerdict"] = "step-missing"
         out["missingSteps"] = gaps
         save_json("suite.json", out)
-        print("\nA STEP THE CLAIM NEEDS HAS NO NUMBER\n")
+        print("\nA STEP THE TARGET NEEDS HAS NO NUMBER\n")
         for g in gaps:
             print(f"  {g['step'].replace('->', '→')} cores: not measured — {g['why']}.")
         # Not "met" when its low end is above the ideal: that says the smaller case
         # reads low (run 51 printed both about the same step).
         met = [s.replace("->", "→") for s in L.met_steps(steps)]
         if met:
-            print(f"  {', '.join(met)} met the target, but the claim covers every step in cases, so it is not met.")
-        print("  Fix what threw that case out, or take the case out of `cases` and claim only the steps")
-        print("  you can measure. Either way it is a new claim, and it is said next to the numbers.\n")
+            print(f"  {', '.join(met)} met the target, but the target is every step in cases, so it is not met.")
+        print("  Fix what threw that case out, or take the case out of `cases` and set the target on")
+        print("  only the steps you can measure. Either way it is a new target, and it is said next")
+        print("  to the numbers.\n")
         return 1
     # A step whose interval spans the target is not a shortfall: the passes
     # cannot tell met from missed. Said as such, and never sent to tuning.
@@ -5369,7 +5386,7 @@ def cmd_report():
             print(f"  {line}")
         print()
         print("  What to do: change nothing in the pipeline on this step. Report it as not met,")
-        print("  with the percent above; that is a result. If the claim needs it settled, run")
+        print("  with the percent above; that is a result. If the goal needs it settled, run")
         print("  `prove.py suite` again — a new suite, with its own passes and settling cases —")
         print("  or raise `passes` in pipeline.json first. With nobody to ask, stop here and report.\n")
         return 1
@@ -5392,7 +5409,7 @@ def cmd_report():
                 if a.get(k) is not None and b.get(k) is not None:
                     print(f"{pad}{label:<15} {a[k]:>11.1%} -> {b[k]:>11.1%}")
 
-        print("\nCLAIM NOT MET\n")
+        print("\nTARGET NOT MET\n")
 
         # The whole picture first: every case, with each step beside the case
         # it lands on. A reader should not have to hunt for the good step.
@@ -5494,7 +5511,7 @@ def cmd_report():
         print("  that did not, so the next is measured against your best pipeline and not")
         print("  your worst. Stop when the target is met, when no untried row matches the")
         print("  symptom, or after four changes.")
-        out["reportVerdict"] = "claim-not-met"
+        out["reportVerdict"] = "target-not-met"
         save_json("suite.json", out)
         return 1
     out["reportVerdict"] = "met"
@@ -5503,6 +5520,25 @@ def cmd_report():
 
 
 # ------------------------------------------------------------------------ all
+
+def target_steps(raw):
+    """Pure. The steps the target is about, from pipeline.json. `claimSteps` is
+    the name configurations used before 2026-10-13 and is still read."""
+    return raw.get("targetSteps", raw.get("claimSteps"))
+
+
+def report_log_line(why):
+    """Pure. The harness.log line for a report that stopped the chain. It said
+    "the chain measured a valid table whose step ratios do not meet the claim"
+    for every stop; clean-room run 54's table had thrown out its 4-core case."""
+    return {
+        "no-result": "the report stopped: too many cases were thrown out to compare one core count with another",
+        "step-missing": "the report stopped: a case was thrown out, so a step the target needs has no number",
+        "not-settled": "the report stopped: a step is not met by a margin more passes could change",
+        "target-not-met": "the report stopped: the table is good, and a step did not meet the target",
+        "claim-not-met": "the report stopped: the table is good, and a step did not meet the target",
+    }.get(why, "the report stopped: the table could not be reported")
+
 
 def report_verdict(why, suite):
     """Pure. The DONE line for a chain that stopped at the report, from the
@@ -5522,10 +5558,10 @@ def report_verdict(why, suite):
                             f"its range, {u['low']:.3f}x, is {gap(u)} the {u['need']:.2f}x target"
                             for u in (suite.get("unsettledSteps") or []))
                 + ". More passes could change that; change nothing in the pipeline")
-    if why == "claim-not-met":
+    if why in ("target-not-met", "claim-not-met"):   # the second: suites saved before 2026-10-13
         return "STOPPED at report: the table is good, the pipeline did not meet the target"
     if why == "step-missing":
-        return ("STOPPED at report: a step the claim needs was not measured"
+        return ("STOPPED at report: a step the target needs was not measured"
                 + "".join(f" — {g['step'].replace('->', '→')}: {g['why']}"
                           for g in (suite.get("missingSteps") or [])))
     return "STOPPED at report: the table could not be reported"
@@ -5554,7 +5590,7 @@ def cmd_local_first():
     if why:
         raise Refusal("rig", why)
     # GUARD: on a paid service, only the cases a claimed step needs.
-    why = L.P.unclaimed_cases_reason(c.cases, c.raw.get("claimSteps"), getattr(c.plat, "unit", "units"))
+    why = L.P.unclaimed_cases_reason(c.cases, target_steps(c.raw), getattr(c.plat, "unit", "units"))
     if why:
         raise Refusal("rig", why)
     log(f"  the same app passed completeness and the tiny proof on the laptop ({lp})")
@@ -5695,7 +5731,10 @@ def cmd_all(steps=None, results=None, dashboard_check=None, teardown=None):
                 L.QUICK = quick0
                 rc = rc or 1
             if name == "report" and rc and not crash:
-                log("the chain measured a valid table whose step ratios do not meet the claim")
+                try:
+                    log(report_log_line((load_json("suite.json") or {}).get("reportVerdict")))
+                except Exception:
+                    log(report_log_line(None))
             out["steps"].append({"step": name, "rc": rc, "seconds": round(time.time() - t0, 1)})
             mark(f"phase={name} end rc={rc} {time.time() - t0:.0f}s")
             save_all()

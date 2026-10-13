@@ -2941,7 +2941,7 @@ def missing_steps(case_list, table, runs):
             elif not cs.get("reportable"):
                 why.append(f"the {c}-core case does not count: {cs.get('unreportableReason')}")
         if not why and st:
-            why.append((st.get("reason") or "").replace("voided: ", ""))
+            why.append(re.sub(r"^voided: ", "", st.get("reason") or ""))   # suites saved before 2026-10-13
         out.append({"step": name, "why": "; ".join(w for w in why if w) or "no number"})
     return out
 
@@ -3000,8 +3000,8 @@ def broker_advice_fits(want_mb):
             f"is {need:,.0f} MiB against a {vm:,.0f} MiB virtual machine -- over by {over:,.0f}. "
             f"Raising the broker anyway does not fail; the worker gives way instead, which reads "
             f"as a pipeline that does not scale. Three ways out, in order: raise the virtual "
-            f"machine to about {need/1024:.0f} GB; or drop the {top}-core case and claim the step "
-            f"into {smaller[-1] if smaller else top} cores; or keep the broker where it is, let "
+            f"machine to about {need/1024:.0f} GB; or drop the {top}-core case and set the target on "
+            f"the step into {smaller[-1] if smaller else top} cores; or keep the broker where it is, let "
             f"the {top}-core case come back as a ceiling, and report it as where scaling stops.")
 
 
@@ -3088,6 +3088,15 @@ def target_gap(step):
     inside = (pct < 0 and -pct < T["targetAllowance"] * 100)
     return (f"{what} is {size} {'over' if pct >= 0 else 'under'} the {need:.2f}x target"
             + (f", within the {T['targetAllowance']:.0%} margin" if inside else ""))
+
+
+def judged_range(step):
+    """Pure. The range a step's verdict is judged on, as printed beside it: the
+    95% range from the same-time pairs, or the one ratio when there is none."""
+    lo, hi = step.get("ratioLowCI"), step.get("ratioHighCI")
+    if lo and hi:
+        return f"{lo:.3f}x to {hi:.3f}x"
+    return f"{step['ratio']:.3f}x, one reading"
 
 
 def verdict_words(step):
@@ -3208,6 +3217,13 @@ def n_cores(n):
     return f"{n} core" if n == 1 else f"{n} cores"
 
 
+def case_name(n):
+    """"the 4-core case"; "the 10 CFU case" on Confluent Cloud. Clean-room
+    run 54 read "voided: 4c its readings are ..." in the scorecard."""
+    u = unit_word()
+    return f"the {n}-core case" if u == "cores" else f"the {n} {u} case"
+
+
 def bottleneck_short(rec):
     """The bottleneck in two or three words, for a column."""
     # Four of these name a column in the table, so a reader can look the answer
@@ -3301,7 +3317,7 @@ def action_detail(rec, cores, step=None, is_baseline=False):
     if label == "Pipeline CPU":
         if is_baseline:
             return (f"{n_cores(cores)} is the baseline. Do not tune it: making the baseline faster makes "
-                    f"the step off it smaller, and the steps are what is being claimed. The only thing "
+                    f"the step off it smaller, and the steps are what the target is about. The only thing "
                     f"worth fixing here is a way it differs from the other cases — a different garbage "
                     f"collector, a different job graph, a cap that did not apply.")
         if not step or not step.get("reportable"):
@@ -3326,7 +3342,7 @@ def action_detail(rec, cores, step=None, is_baseline=False):
                             f"target — but the readings are far enough apart that it could be as low as "
                             f"{lo:.2f}x, and the lower bound is what is judged.")
                 return (f"{n_cores(cores)}: doubling gave {ratio:.2f}x, which clears the {need:.2f}x "
-                        f"target, but the step was not judged met — the claim is read from the "
+                        f"target, but the step was not judged met — the target is judged on the "
                         f"lower bound across passes, not this figure.")
             return f"{n_cores(cores)}: doubling gave {ratio:.2f}x, short of the {need:.2f}x target."
         return None
@@ -4159,7 +4175,10 @@ def headline_markdown(out):
     lines += ["| cores | mean input records per second | passes |", "|---:|---:|---:|"]
     for k, row in sorted((t.get("cases") or {}).items(), key=lambda kv: int(kv[0])):
         lines.append(f"| {row.get('cores', k)} | {row.get('meanRecordsPerSec', 0):,.0f} | {row.get('passes', '')} |")
-    lines += ["", "| step | ratio | lowest to highest pair | target 1.80x |", "|---|---:|---|---|"]
+    # The range the verdict is judged on, not the lowest and highest pass:
+    # clean-room run 54 printed "1.786x to 2.179x" beside "the low end of its
+    # range, 1.919x" and the line read as contradicting itself.
+    lines += ["", "| step | ratio | range it is judged on | target 1.80x |", "|---|---:|---|---|"]
     for r in t.get("stepRatios") or []:
         if not r.get("reportable"):
             lines.append(f"| {r['step']} | no number | | the step was thrown out: {r.get('reason', 'see suite.md')} |")
@@ -4167,8 +4186,7 @@ def headline_markdown(out):
         # The scorecard's own words, not the code's: clean-room run 53 (F11)
         # found "spans" here beside a scorecard that said "not met".
         said = verdict_words(r) if r.get("meetsClaim") is not None else "not judged"
-        lines.append(f"| {r['step']} | {r['ratio']:.3f}x | {r.get('ratioLow', r['ratio']):.3f}x to "
-                     f"{r.get('ratioHigh', r['ratio']):.3f}x | {said} |")
+        lines.append(f"| {r['step']} | {r['ratio']:.3f}x | {judged_range(r)} | {said} |")
     lines += ["", "The rates are records of the input topic drained per second. Full table: `suite.md`.", ""]
     return "\n".join(lines)
 
@@ -4662,8 +4680,8 @@ def build_table(runs, cases_order=None, quick=False):
                                             f"{T['minPasses']} are needed to see how much it wobbles")
         elif spread > T["spreadCeil"]:
             entry.update(reportable=False,
-                         unreportableReason=f"its readings are {spread:.0%} apart and the limit "
-                                            f"is {T['spreadCeil']:.0%}")
+                         unreportableReason=f"its readings are {spread:.1%} apart, over the "
+                                            f"{T['spreadCeil']:.0%} limit")
         for k in ("tmCores", "tmCapFrac", "tmThrottledPeriodsPct", "kafkaCores", "sourceIdle",
                   "sourceBackpressured", "headroomS", "gcFracOfCapacity"):
             vals = [r[k] for r in rs if r.get(k) is not None]
@@ -4727,15 +4745,15 @@ def build_table(runs, cases_order=None, quick=False):
         else:
             entry.update(reportable=False,
                          voidedBy=[x for x in (a, b) if not cases[x]["reportable"]],
-                         reason="voided: " + "; ".join(f"{x}c {cases[x]['unreportableReason']}"
-                                                      for x in (a, b) if not cases[x]["reportable"]))
+                         reason="; ".join(f"{case_name(x)} does not count: {cases[x]['unreportableReason']}"
+                                                for x in (a, b) if not cases[x]["reportable"]))
         ga, gb = case_collectors(ok.get(a, [])), case_collectors(ok.get(b, []))
         if entry.get("reportable") and ga and gb and ga != gb:
             # SKILL.md: a case with a different collector is a different program,
             # so the step into it is not a scaling measurement. This was a note
             # printed beside a passing table; the published demo's 1->2 passed on it.
             entry.update(reportable=False, voidedBy=[a, b],
-                         reason=(f"voided: {a}c ran {', '.join(sorted(ga))} and {b}c ran "
+                         reason=(f"{case_name(a)} ran {', '.join(sorted(ga))} and {case_name(b)} ran "
                                  f"{', '.join(sorted(gb))} -- a different garbage collector is a "
                                  f"different program, so this is not a scaling step"))
         ratios.append(entry)
@@ -4902,8 +4920,8 @@ def render_table(out):
     for r in t["stepRatios"]:
         if r["reportable"]:
             L.append(f"STEP {r['step']} {unit_word()}: {r['ratio']:.3f}x  (ideal {r['idealRatio']:.0f}x, "
-                     f"target {r['idealRatio'] * T['scalingFloor']:.2f}x, range across passes "
-                     f"{r['ratioLow']:.3f}x-{r['ratioHigh']:.3f}x)")
+                     f"target {r['idealRatio'] * T['scalingFloor']:.2f}x, range it is judged on "
+                     f"{judged_range(r)})")
         else:
             L.append(f"STEP {r['step']} {unit_word()}: NOT REPORTED — {r['reason']}")
     L.append("order effect (descending / ascending): " +
@@ -4977,7 +4995,7 @@ def render_markdown(out):
         elif r["reportable"]:
             L.append(f"**{r['step'].replace('->', '→')} {unit_word()}: {r['ratio']:.2f}× "
                      f"(target {r['idealRatio'] * T['scalingFloor']:.2f}×), "
-                     f"range {r['ratioLow']:.2f}–{r['ratioHigh']:.2f}× across passes.**")
+                     f"range it is judged on {judged_range(r)}.**")
         else:
             L.append(f"**{r['step'].replace('->', '→')} {unit_word()}: not reported — {r['reason']}.**")
     kcap = getattr(c, "kafka_cap", 0) or 0

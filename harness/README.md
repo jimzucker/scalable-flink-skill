@@ -37,8 +37,8 @@ wrote for this chain — it starts empty with each `all`, like `DONE`, so a wait
 for a phase line never matches an earlier chain's (run 11 wrote its own by hand
 and spent 20 minutes between commands).
 Wait with `watch.sh`, giving it the run directory in an environment variable:
-`PROJECT_DIR=/path/to/run sh $(dirname $H)/watch.sh`. It prints progress and exits when
-`results/DONE` appears. **Do not wait with** `cd /path/to/run && until [ -f results/DONE ]; do
+`PROJECT_DIR=/path/to/run sh $(dirname $H)/watch.sh`. It prints progress, writes the same
+lines to `watch.log` in the run directory, and exits when `results/DONE` appears. **Do not wait with** `cd /path/to/run && until [ -f results/DONE ]; do
 sleep 30; done`: the chain stops any process that names the run directory on its command line
 or sits in it, and that includes the shell you are waiting in (runs 36, 44, 47, 48 and 49 each
 lost one this way).
@@ -124,7 +124,7 @@ with memory per subtask, and the GC ceiling did not catch it — GC was at its
 lowest on the case losing the most. Set `caps.tmMemoryBase` and
 `caps.tmMemoryPerCore` so every subtask in every case gets the same memory.
 Earlier flat caps starved things instead, and runs 14, 18, 21, 23 and 25 each
-lost time to that; what a scaling claim needs is that *CPU* is the constraint.
+lost time to that; what a scaling result needs is that *CPU* is the constraint.
 A case whose garbage collection takes more than 5.5% of its capacity is a
 ceiling, not a result. That figure is measured, not chosen: across fourteen
 recorded runs every case that behaved sat at 0.35-4.8%, and every case above
@@ -182,12 +182,27 @@ current guess covers, and the message names the number to use.
 
 **Broker memory is named, not guessed.** When the broker hits its cgroup
 limit inside a window the message now carries the figure to use — the step that
-worked on this host was x1.6 (3,840 MiB gave 995 hits, 6,144 gave none) — and
-preflight fails a configuration where the pipeline at its largest case plus the
-broker plus the job manager do not leave the VM a spare gigabyte. Runs 20 and
-21 lost five tiny proofs between them discovering both by trial.
+worked on this host was x1.6 (3,840 MiB gave 995 hits, 6,144 gave none). Runs
+20 and 21 lost five tiny proofs between them discovering it by trial.
 
-**The claim is gated separately from the measurement.** A table can be beyond
+**Preflight adds up the memory limits and reports them against the VM; it does
+not stop on the total.** The sum is:
+
+| container | its memory limit |
+|---|---|
+| worker, at the largest case | `tmMemoryLimitPerCore` × cores + `tmMemoryBase` when set, otherwise 1.25 × (`tmMemoryBase` + `tmMemoryPerCore` × cores); nothing when worker memory is left unset |
+| broker | `kafkaMemory` |
+| job manager | 2,048 MiB |
+| each of `extraServices` | its own `mem_limit` |
+
+The example comes to 1.25 × (1,088 + 640 × 4) = 4,560 for the worker, plus
+6,144 + 2,048 = 12,752 MiB, on a 12,955 MiB VM. A total over the VM is
+reported as over-committed and is normal: the broker's page cache gives way. A
+rule that stopped a run short of a spare gigabyte was added on 2026-09-07 and
+removed the same day, because runs 20 and 21 had passed with a broker it would
+have stopped (clean-room run 54 still read the old sentence here).
+
+**The target is judged separately from the measurement.** A table can be beyond
 reproach and still say the pipeline does not scale. `report` marks each step
 `meetsClaim` against `scalingFloor` (1.80x on a doubling) and exits non-zero when a
 step misses, so `all` ends STOPPED rather than PASS. It was 1.90x until 2026-09-24,
@@ -207,8 +222,8 @@ tested with the cases interleaved and changed nothing: 16 partitions failed
 every parallelism-4 case for an unstable warm-up, and the buffers moved the
 per-core rate 0.6%.
 
-**The claim is judged on the interval, not the point, and the burden is on the
-claim.** Each step carries `ratioLowCI`/`ratioHighCI` from the spread of its
+**The target is judged on the interval, not the point, and the burden is on the
+result.** Each step carries `ratioLowCI`/`ratioHighCI` from the spread of its
 adjacent pairs, and `meetsClaim` is true only when the *lower* bound clears
 `scalingFloor`: a ratio that might be linear has not been shown to be. The
 interval width comes from measurement, not assumption — 14 cases on one
@@ -243,7 +258,7 @@ them, because the suite record carries no cap fractions and cannot.
 in the same image and under the same caps as the pipeline, in two arms: a
 register-only loop and a random read-modify-write over 4 MB per thread. The
 figures go into `preflight.json` as `hostScaling` and are printed beside any
-claim that is not met, because a pipeline cannot beat its machine. This machine,
+step that does not meet the target, because a pipeline cannot beat its machine. This machine,
 measured twice on different days: register-only 1→2 = 98%, 2→4 = 97%;
 memory-bound 1→2 = 90%, 2→4 = **69-78%**. Every 2→4 figure in this record sits
 between those bounds, and the days spent on broker caps, checkpoint intervals,
@@ -257,7 +272,7 @@ scaling proof. Declaring `perCase` in `pipeline.json` — `{"4": {"tmMemory":
 "7168m"}}` — tunes a case separately and the table is stamped *capacity curve:
 each case configured separately, declared before the run*. Both are legitimate
 and they answer different questions: an operator buys against the best
-configuration at each size, while a scaling claim needs everything but the
+configuration at each size, while a scaling result needs everything but the
 component held still. `perCase` must be in the file before the run, because
 tuning after seeing the number turns a curve into a story. (This repository's
 own demo sidesteps the question: its task manager has no memory limit at all,
@@ -325,10 +340,32 @@ self-test) and `completeness` have passed **for the same build hash**. The build
 | `settleS` | optional. How long completeness keeps the job running after the last input is committed, so a throttled output emits its final value before the job is cancelled. Default: one checkpoint interval plus 2 s, enough for a throttle no slower than the checkpoint. Set it for a slower one |
 | `jdk` | the host JDK home; preflight checks its major version matches the engine image |
 | `axis`, `apiLevel`, `guarantee.state`, `guarantee.sink`, `checkpointMs` | the header fields of §9, verbatim into the report |
-| `claimSteps` | required on a managed service, optional on the laptop: the steps the claim is about, like `["10->20"]`. "Local first" stops, before anything is created, if a case is one end of no claimed step: on a paid service every case costs money as well as time, and the first full Confluent suite ran its 5 CFU case three times for a claim about 10->20 |
+| `targetSteps` | required on a managed service, optional on the laptop: the steps the target is about, like `["10->20"]`. "Local first" stops, before anything is created, if a case is one end of no target step: on a paid service every case costs money as well as time, and the first full Confluent suite ran its 5 CFU case three times for a target about 10->20. `claimSteps`, its name before 2026-10-13, is still read |
 | `results` | optional, default `results`: the folder next to `pipeline.json` that the run writes to. A cloud config kept beside its laptop config needs its own (e.g. `results-cloud`): "local first" reads the laptop's completeness and tiny proof from the laptop's folder, and stops if the cloud run would write into it |
 | `platform` | optional. `"local"` (the default: Docker on this machine, what every recorded run used), or an object `{"kind": …, "credentials": "<path to a file outside every repository>"}` for a managed service. `aws` and `gcp` are named but not built: the run stops at load with what each still needs. `confluent-cloud` (Flink SQL) runs the whole chain, first end to end on the real service on 2026-10-06: `{"kind": "confluent-cloud", "environment": "<project name, or an env-… id>", "prefix": "<defaults to that name>", "cloud": "gcp", "region": "us-east1", "budgetUsd": 350, "budgetSince": "<YYYY-MM-DD, default the first of this month>", "setupCfu": 20, "kafkaImage": "apache/kafka:3.9.2", "jobSql": "INSERT INTO … SELECT … FROM …", "localPipeline": "<the laptop run's pipeline.json>"}`. **A cloud chain starts with "local first"**, before `up` creates anything: the laptop run that `localPipeline` names must have passed completeness and the tiny proof, and its `job.sql` (the INSERT the laptop's job runs, declared in its pipeline.json, not read back from the jar) must be the same statement as `jobSql`, ignoring spacing and case. The tables around that INSERT are the only thing that differs by platform: `platforms.table_ddl` writes the same name and columns as a Kafka-connector table on the laptop and as a Confluent Cloud table with its partition count there. `up` adds what Confluent has charged since `budgetSince` (its own cost list, before any promo credit) to the run's estimate and stops if the total is over `budgetUsd`, before creating anything. The cost list lags by up to a day, so two current figures count as well: the estimates of earlier runs on days the list does not show yet, from a spend log kept next to the credentials file (`flink-skill-spend.json`), and, when `promoUsd` gives what a promo credit started at, the credit Confluent says has been used. On 2026-10-06 the cost list said $170.89 while the credit had paid $382.02. When the credit left is less than the run's estimate, `up` says how much will go to the card; then finds the environment by name or id and creates it if a name does not exist yet (and `down` deletes it only then), then creates a Basic Kafka cluster, a setup compute pool of `setupCfu` for table definitions and the fill, and three API keys (Kafka, Flink, and Confluent's metrics), writing them to `credentials` (default `~/.confluent/flink-skill.env`, owner-only, never printed); `down` deletes them, removes that file, and stops if anything with the prefix is still listed. A pool's size cannot be lowered, so **every case gets a new pool of its own size**, read back, and the last case's pool is deleted. The Kafka tools run from `kafkaImage` against the cloud cluster to read a topic's log end; per-minute CFU in use, records read, busy, held-back and idle time come from Confluent's metrics API, about three minutes late. `up` counts the stack ready only when a row written to a new table is read back from Kafka; a stack that can create a table but not use it is torn down. A case's job (`start_job`) runs with watermark alignment off (`sql.tables.scan.watermark-alignment.max-allowed-drift` = `1 d`; Confluent turns alignment on by default and it paused most input partitions) and with `baseline_cfu` set to the pool's size through the Flink REST API (left alone, Confluent's autoscaler stopped at 10 CFU of 20), both read back; `wait_at_size` holds the window until the statement uses its whole pool; `check_partitions` reads the input topic's partition count from Kafka and stops unless it divides by every case, since one CFU ran one subtask. `submit` runs all three for every case and is the only way the harness starts a job there; the job is `platform.jobSql`, one Flink SQL INSERT that runs unchanged at every size (`{group}` is filled in). A case (`run_case_cloud`) reads its rate from the transport: the output topics' log end every 30 s for at least four minutes, cut to whole minutes and divided by `outputsPerInput`, because there are no committed offsets to read there. Confluent's own per-minute readings for the same minutes give the rest: records read (the second count, which must agree within `vantageTol`), CFU in use against the pool (≥95% or the case is a ceiling), busy, held-back and idle time, and the records still waiting at the last minute (at least a minute of work, or the case is thrown out). The Kafka cluster's eCKU count is read for the same minutes and reported; it does not decide the case, because a Basic cluster sat at its limit under half the load too (findings §8, runs 18 and 19). The limit matters all the same: the copy's 10→20 CFU step read 1.38× capped at 10 eCKU and 1.77× and 2.01× capped at 50, and "local first" stops a run whose largest case is above 10 CFU while `maxEcku` is 10 or less; each eCKU after the first costs about $0.14 an hour. **The rest of the chain on Confluent Cloud.** `platform.tables` gives each table's columns (and key); the harness writes them with `table_ddl` at `partitions`. **Fill**: `platform.fill` = `{"jobs": N, "perJob": [SQL with {i} and {topic}]}` -- N generator jobs side by side in the setup pool until the topic's log end holds the count, then deleted (one job wrote 12,700-18,400 records a second, 24 side by side 264,000-300,000). The backlog is then **counted as a reader gets it**: `platform.manifestSql`, a SELECT over `{topic}` whose rows carry `n`, read back over the Flink REST results API as a **snapshot query** (`sql.snapshot.mode` = `now`), which gives only its final rows -- the topic's log end held 7-8% more records than any reader got. A plain bounded GROUP BY gives two change-log rows per input record, read at about 500,000 records a minute: about 140 minutes for 70 million, and the first full chain stopped on it after 30; the snapshot query counted ~34 million in 72 s (findings §8). **Completeness**: a small backlog drained to the last record at the baseline size, then `platform.verifySql` over the outputs must return exactly the manifest's rows (same columns, any order); killing a worker mid-drain is reported as not checked, because the service restarts its own workers. **Tiny proof**: the two smallest cases through `run_case_cloud` on a small backlog, the step held to `tinyRatioLo`-`tinyRatioHi`, then the guard self-test. Laptop-only preflight rows (the jar, slots, key layout, generator seed, topic retention, the engine's JDK, the back-pressure endpoint) report "not checked" with the reason; a self-test finds every row whose check reaches the laptop's stack and stops if one would run on a managed service. **`all` on a managed service always ends with `down`**, after a stop, a pass, a crash inside the harness or a stop signal (SIGTERM), and DONE says which; the first full chain stopped at preflight and left its stack up, and a later one crashed in its report and left it up for nine hours. Only `kill -9` gets past it: run `prove.py down` after one. Measurements behind each: flink-training findings §8. On any platform but `local`, the preflight rows that describe the laptop (architecture, host disk, the Docker VM, host cores) report "not checked" with the reason. The contract a platform fills is `harness/platforms.py` |
 | `api` | optional. `"datastream"` (the default) or `"sql"`. For SQL, preflight reports the key-spread row as not checked: it hashes keys the way DataStream does, and a SQL job hashes the whole key row. `apiLevel` is free text for the report and is never read for this |
+
+### Fill-in names for the commands
+
+Every command template in `pipeline.json` — `job.args`, `generator.cmd`,
+`generator.manifestCmd`, `verifier.cmd` and a `secondVantage` command — is
+filled from this list before it runs. Clean-room run 54 found half of them
+only in the code (`Cfg.fmt` in `lib.py`).
+
+| name | what it becomes | which commands get it |
+|---|---|---|
+| `{java}`, `{jar}` | the host JDK's `java`, and `job.jar` | all |
+| `{bootstrap}` | the broker's address inside Docker, for the job | all |
+| `{bootstrapExt}` | the broker's address from this machine (`localhost:` and its port), for the generator, the verifier and anything else run on the host | all |
+| `{partitions}`, `{ckptMs}`, `{seed}` | the configured partition count, checkpoint interval and seed | all; `job.args` gets the case's own `{ckptMs}` |
+| `{in}` | the input being scaled; the tiny proof and completeness point it at their own topics | all |
+| `{in0}` `{in1}`…, `{ins}` | every input in `design.inputs`, in order, and all of them comma-separated. The one that is `{in}` follows it | all |
+| `{out0}` `{out1}`…, `{outs}` | `topics.out`, one by one and comma-separated | all |
+| `{also0}` `{also1}`…, `{alsos}` | `topicsAlsoWritten`, one by one and comma-separated | all |
+| `{par}`, `{group}` | the case's parallelism, and the consumer group the job must use | `job.args` |
+| `{topic}`, `{count}`, `{manifest}` | the topic to fill, how many records, and where to write the manifest | `generator.cmd`, `generator.manifestCmd` |
+| `{topic}`, `{manifest}`, `{arm}` | the input topic checked, its manifest, and `clean` or `killed` | `verifier.cmd` |
+| `{manifest}` | the manifest of the backlog being drained | a `secondVantage` command |
 
 ### The broker's CPU, for the dashboard
 

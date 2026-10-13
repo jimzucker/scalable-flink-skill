@@ -195,9 +195,9 @@ not stop on the total.** The sum is:
 | job manager | 2,048 MiB |
 | each of `extraServices` | its own `mem_limit` |
 
-The example comes to 1.25 × (1,088 + 640 × 4) = 4,560 for the worker, plus
-6,144 + 2,048 = 12,752 MiB, on a 12,955 MiB VM. A total over the VM is
-reported as over-committed and is normal: the broker's page cache gives way. A
+Work the sum from your own `pipeline.json`, not from the example's: its
+figures fit one pipeline on one machine. A total over the VM is reported as
+over-committed and is normal: the broker's page cache gives way. A
 rule that stopped a run short of a spare gigabyte was added on 2026-09-07 and
 removed the same day, because runs 20 and 21 had passed with a broker it would
 have stopped (clean-room run 54 still read the old sentence here).

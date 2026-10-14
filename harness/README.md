@@ -38,7 +38,9 @@ for a phase line never matches an earlier chain's (run 11 wrote its own by hand
 and spent 20 minutes between commands).
 Wait with `watch.sh`, giving it the run directory in an environment variable:
 `PROJECT_DIR=/path/to/run sh $(dirname $H)/watch.sh`. It prints progress, writes the same
-lines to `watch.log` in the run directory, and exits when `results/DONE` appears. **Do not wait with** `cd /path/to/run && until [ -f results/DONE ]; do
+lines to `watch.log` in the run directory, and exits when `results/DONE` appears: 0 if the
+run passed, 1 if it stopped. With `WATCH_MINUTES=9` it gives up after 9 minutes and exits 3,
+for an agent that must wait in the foreground and run it again (SKILL.md §5). **Do not wait with** `cd /path/to/run && until [ -f results/DONE ]; do
 sleep 30; done`: the chain stops any process that names the run directory on its command line
 or sits in it, and that includes the shell you are waiting in (runs 36, 44, 47, 48 and 49 each
 lost one this way).

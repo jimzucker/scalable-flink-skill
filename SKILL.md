@@ -842,6 +842,22 @@ Every line `watch.sh` prints also goes to `watch.log` in the run's directory.
 Read that file rather than your tool's own copy of the output, which may be
 kept somewhere you are not allowed to read (run 54's was under `/private/tmp`).
 
+**If ending your turn ends your run, wait inside the turn.** A subagent, or
+any agent whose last message is its report, hands back the moment it stops to
+wait. Clean-room run 54's agent started `watch.sh` in the background, said
+"waiting" and ended its turn. It was made to report 71 minutes before the
+chain finished, with no scorecard, and the probe and ceiling never ran. Run
+the watcher in the foreground with a time limit shorter than your tool's, and
+run it again each time it comes back still waiting:
+
+```
+cd /path/to && WATCH_MINUTES=9 sh run/scratch/w.sh
+```
+
+It exits 0 when the run passed, 1 when it stopped, and 3 when it is still
+running after that many minutes. Exit 3 means run it again, not report. Your
+report is due after `results/DONE`, and it opens with the scorecard.
+
 **Start the fill the moment the tiny proof passes** and build the dashboard's
 panels while it runs. Nothing but the cases depends on them. The dashboard's
 *service* is not so free: `extraServices` is read when the stack comes up, so

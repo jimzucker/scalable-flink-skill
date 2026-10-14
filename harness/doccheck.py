@@ -693,6 +693,20 @@ def check_calls_are_grouped(fail):
     return "independent calls travel together, and a run is waited on rather than polled"
 
 
+def check_agent_waits_in_turn(fail):
+    """Clean-room run 54's agent waited in the background, ended its turn and
+    was made to report 71 minutes before the chain finished. The skill has to
+    say to wait inside the turn, and watch.sh has to offer the time limit that
+    makes that possible."""
+    skill = read(ROOT, "SKILL.md")
+    watch = read(HERE, "watch.sh")
+    if "wait inside the turn" not in skill or "WATCH_MINUTES" not in skill:
+        fail("SKILL.md does not tell an agent to wait inside its turn with WATCH_MINUTES")
+    if "WATCH_MINUTES" not in watch or "exit 3" not in watch:
+        fail("harness/watch.sh has no WATCH_MINUTES time limit that exits 3 while the run continues")
+    return "an agent waits for results/DONE inside its turn, with watch.sh's time limit"
+
+
 def check_no_duplicate_keys(fail):
     """A JSON object with the same key twice keeps the last one, so the other
     is dead text nobody sees. pipeline.example.json carried two
@@ -1071,7 +1085,8 @@ def main():
                   check_windowed_in_one_place,
                   check_examples_pass_arm,
                   check_reporter_spelling,
-                  check_fill_in_names):
+                  check_fill_in_names,
+                  check_agent_waits_in_turn):
         lines.append(check(problems.append))
     for p in problems:
         print(f"doccheck: {p}")

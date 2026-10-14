@@ -15,7 +15,11 @@
 #   PROJECT_DIR=/path/to/run sh harness/watch.sh
 #
 # It prints progress until results/DONE appears, then prints the outcome and
-# exits 0 if the run passed, 1 otherwise. Every line also goes to watch.log in
+# exits 0 if the run passed, 1 otherwise. With WATCH_MINUTES set it gives up
+# waiting after that many minutes and exits 3, saying the chain is still
+# running: an agent whose tool cannot wait two hours in one command runs it
+# again and again, in the foreground, until it exits 0 or 1. Ending a turn to
+# wait is what ended clean-room run 54's agent before the suite finished. Every line also goes to watch.log in
 # the run's directory, outside results/: an agent's tool may keep this script's
 # output somewhere the agent is not allowed to read (clean-room run 54, F5).
 #
@@ -39,8 +43,18 @@ fi
 R="$PROJECT_DIR/results"
 LOG="$PROJECT_DIR/watch.log"
 say() { printf '%s\n' "$1"; printf '%s\n' "$1" >> "$LOG"; }
+case "${WATCH_MINUTES:-}" in
+    ''|*[!0-9]*) [ -n "${WATCH_MINUTES:-}" ] && { echo "WATCH_MINUTES must be a whole number of minutes"; exit 2; }
+                 left=-1 ;;
+    *)           left=$((WATCH_MINUTES * 3)) ;;
+esac
 last=""
 while [ ! -f "$R/DONE" ]; do
+    if [ "$left" -eq 0 ]; then
+        say "$(date '+%H:%M:%S')  still running after $WATCH_MINUTES minutes, no results/DONE yet: run this again to keep waiting"
+        exit 3
+    fi
+    [ "$left" -gt 0 ] && left=$((left - 1))
     if [ -f "$R/PROGRESS.txt" ]; then
         now=$(cat "$R/PROGRESS.txt" 2>/dev/null)
         if [ "$now" != "$last" ]; then

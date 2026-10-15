@@ -3121,6 +3121,20 @@ def tiny_under_target(step):
             f"and the suite will. Expect it to need extra passes on this step, or to stop on it.")
 
 
+def keep_awake_argv(pid, platform=None, which=None):
+    """Pure. The command that keeps this Mac awake until process `pid` exits,
+    or None where there is no `caffeinate` to run. -i stops idle sleep, -s
+    stops sleep altogether while on mains power, -w ends the hold when the
+    chain does. Clean-room run 55's Mac slept from 20:01 to 20:06, on battery,
+    in the middle of completeness (finding F5). Nothing keeps it awake with
+    the lid closed: macOS sleeps on a closed lid without an external display."""
+    platform = sys.platform if platform is None else platform
+    which = which or shutil.which
+    if platform != "darwin" or not which("caffeinate"):
+        return None
+    return ["caffeinate", "-i", "-s", "-w", str(pid)]
+
+
 def judged_range(step):
     """Pure. The range a step's verdict is judged on, as printed beside it: the
     95% range from the same-time pairs, or the one ratio when there is none."""

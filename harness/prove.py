@@ -887,6 +887,15 @@ def _cmd_selftest(live=True, topic=None):
     expect("report: the not-settled range and DONE line read as written (run 52's figures) (must not fire)",
            not_settled_words, "", should_fire=False)
 
+    def keep_awake():
+        # Clean-room run 55's Mac slept five minutes during completeness (F5).
+        have = lambda name: "/usr/bin/" + name
+        assert L.keep_awake_argv(4242, "darwin", have) == ["caffeinate", "-i", "-s", "-w", "4242"]
+        assert L.keep_awake_argv(4242, "linux", have) is None
+        assert L.keep_awake_argv(4242, "darwin", lambda name: None) is None
+    expect("all: the chain keeps a Mac awake until it ends, and only on a Mac (must not fire)",
+           keep_awake, "", should_fire=False)
+
     def memory_row():
         # The row's arithmetic from the example config: the worker's container
         # limit at its largest case, broker, job manager 2g and extra services;
@@ -5654,6 +5663,22 @@ def cmd_all(steps=None, results=None, dashboard_check=None, teardown=None):
                 + ", ".join(f"{pid} {cl[:70]}" for pid, cl in swept))
             log("  a previous chain was still running. Its numbers and this one's would have "
                 "shared the machine, so they are gone before anything is measured.")
+
+    # Keep the Mac awake for the whole chain, and no longer: `caffeinate -w`
+    # ends when this process does, however it ends. Started after the sweep
+    # above, so the sweep never sees it. Live chain only.
+    if results == c.results:
+        argv = L.keep_awake_argv(os.getpid())
+        if argv:
+            try:
+                subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 start_new_session=True, cwd="/")
+                log(f"  keeping the Mac awake until this chain ends ({' '.join(argv)}); "
+                    "closing the lid still puts it to sleep")
+            except OSError as e:
+                log(f"  could not keep the Mac awake: {e}; it may sleep during the run")
+        else:
+            log("  not on a Mac with caffeinate: nothing keeps this machine awake during the run")
 
     out = {"build": build_hash() if os.path.exists(c.jar) else None, "steps": []}
     quick0 = L.QUICK   # GUARD: a phase that leaves the flag different from how it

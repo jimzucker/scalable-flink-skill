@@ -41,6 +41,9 @@ verdict and the wall time, `results/phases.log` the timestamps the harness
 wrote for this chain — it starts empty with each `all`, like `DONE`, so a wait
 for a phase line never matches an earlier chain's (run 11 wrote its own by hand
 and spent 20 minutes between commands).
+On a Mac, `all` runs `caffeinate -i -s -w` on itself, so the Mac does not sleep until the
+chain ends: not when idle, and not at all while plugged in. Clean-room run 55's Mac slept
+five minutes in the middle of completeness. Closing the lid still puts it to sleep.
 Wait with `watch.sh`, giving it the run directory in an environment variable:
 `PROJECT_DIR=/path/to/run sh $(dirname $H)/watch.sh`. It prints progress, writes the same
 lines to `watch.log` in the run directory, and exits when `results/DONE` appears: 0 if the

@@ -3074,20 +3074,51 @@ def step_verdict(step):
     return "missed"
 
 
-def target_gap(step):
-    """Pure. Where the step's judged low end sits against the target, in plain
-    words and percent: "the low end of its range, 1.792x, is 0.4% under the
-    1.80x target". The author, 2026-10-10: "'undecided' is not clear english,
-    should be not met and give %". The ratio stays in x; only the gap is a %."""
-    need = step.get("idealRatio", 2) * T["scalingFloor"]
-    lo = step.get("ratioLowCI")
-    what = f"the low end of its range, {lo:.3f}x," if lo else f"{step['ratio']:.3f}x"
-    v = (lo or step["ratio"])
+def low_end_words(ratio, lo, need, measured=True):
+    """Pure. A step's reading against its target, in plain words and percent.
+    The low end of the range, not the measured ratio, decides, so both are
+    named: "measured 1.830x, but it could be as low as 1.763x, 2.1% under the
+    1.80x target; a step may fall at most 1% under". The author, 2026-10-15,
+    about "the low end of its range, 1.763x, is 2.1% under": "this does not
+    make sense" -- a reader saw 1.83x beside "not met" with nothing joining them.
+    Earlier, 2026-10-10: "should be not met and give %". The gap stays a
+    percent of the target; a step is met up to 1% under it. measured=False
+    leaves the ratio out, for a line that has already said it (the scorecard)."""
+    allow = T["targetAllowance"] * 100
+    v = lo or ratio
     pct = (v - need) / need * 100
     size = "less than 0.1%" if abs(pct) < 0.05 else f"{abs(pct):.1f}%"
-    inside = (pct < 0 and -pct < T["targetAllowance"] * 100)
-    return (f"{what} is {size} {'over' if pct >= 0 else 'under'} the {need:.2f}x target"
-            + (f", within the {T['targetAllowance']:.0%} margin" if inside else ""))
+    side = "over" if pct >= 0 else "under"
+    may = f"; a step may fall at most {allow:.0f}% under"
+    if not lo:
+        said = f"from one reading, {size} {side} the {need:.2f}x target"
+        return f"measured {ratio:.3f}x {said}" + (may if pct < 0 else "") if measured else said
+    if pct >= 0 or -pct < allow:
+        said = (f"at its lowest, {lo:.3f}x, it is {size} {side} the {need:.2f}x target"
+                + (f", inside the {allow:.0f}% margin" if pct < 0 else ""))
+        return f"measured {ratio:.3f}x; {said}" if measured else said
+    said = f"it could be as low as {lo:.3f}x, {size} under the {need:.2f}x target"
+    return f"measured {ratio:.3f}x, but {said}{may}" if measured else said
+
+
+def target_gap(step, measured=True):
+    """Pure. The step's reading against the target, from low_end_words."""
+    return low_end_words(step["ratio"], step.get("ratioLowCI"),
+                         step.get("idealRatio", 2) * T["scalingFloor"], measured)
+
+
+def tiny_under_target(step):
+    """Pure. A tiny-proof step inside its bounds but under the scaling target
+    gets a warning, never a stop: one short pass per case is too few to judge
+    the target on, and the suite decides it. Clean-room run 55 read 1->2 at
+    1.778x here, said nothing, and the suite then spent 25 minutes of extra
+    passes failing to settle the same step (finding F9)."""
+    need = step.get("idealRatio", 2) * T["scalingFloor"]
+    if step["ratio"] >= need:
+        return None
+    return (f"  warning: {step['step'].replace('->', ' -> ')} read {step['ratio']:.3f}x, under the "
+            f"{need:.2f}x target. Carrying on: one short pass per case cannot judge the target, "
+            f"and the suite will. Expect it to need extra passes on this step, or to stop on it.")
 
 
 def judged_range(step):
@@ -3099,14 +3130,14 @@ def judged_range(step):
     return f"{step['ratio']:.3f}x, one reading"
 
 
-def verdict_words(step):
+def verdict_words(step, measured=True):
     """Pure. "met — …" or "not met — …", with the gap to the target in percent.
     A step whose range reaches both sides of the target is not met, and more
     passes could change that; it is never sent to tuning."""
     if step_verdict(step) == "met":
-        return f"met — {target_gap(step)}"
+        return f"met — {target_gap(step, measured)}"
     tail = "; more passes could change that" if step_verdict(step) == "spans" else ""
-    return f"not met — {target_gap(step)}{tail}"
+    return f"not met — {target_gap(step, measured)}{tail}"
 
 
 def settle_range(step):
@@ -3477,6 +3508,7 @@ def scorecard(out):
     if notes:
         L.append("")
     L.append("")
+    said_margin = False
     for r in t.get("stepRatios") or []:
         need = r["idealRatio"] * T["scalingFloor"]
         if not r.get("reportable"):
@@ -3487,15 +3519,21 @@ def scorecard(out):
         # above it saying the smaller case reads low. Say what it is instead.
         lo = r.get("ratioLowCI")
         if reads_low(r):
-            verdict = (verdict_words(r) + f"; above {r['idealRatio']:.2f}x, which usually means the "
+            verdict = (verdict_words(r, measured=False) + f"; above {r['idealRatio']:.2f}x, which usually means the "
                        f"smaller case read low — worth a look")
         else:
             # met or not met, with how far the judged low end sits from the
             # target in percent; the low end is named, so a ratio shown above
             # the target next to "not met" does not read as a broken tool.
-            verdict = verdict_words(r)
+            verdict = verdict_words(r, measured=False)
         L.append(f"  {r['step']} {unit_word()}: doubling gave {r['ratio']:.2f}x, target {need:.2f}x"
                  f"  ->  {verdict}")
+        if verdict.startswith("not met") and not said_margin:
+            # the line names the lowest reading, not the ratio beside it; say
+            # once what that lowest has to reach (the author, 2026-10-15)
+            L.append(f"     a step is met when its lowest reading is no more than "
+                     f"{T['targetAllowance']:.0%} under the target")
+            said_margin = True
         if verdict.startswith("missed"):
             arm = host_arm_note(r["step"])
             if arm:

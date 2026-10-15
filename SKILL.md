@@ -851,11 +851,12 @@ the watcher in the foreground with a time limit shorter than your tool's, and
 run it again each time it comes back still waiting:
 
 ```
-cd /path/to && WATCH_MINUTES=9 sh run/scratch/w.sh
+cd /path/to && WATCH_MINUTES=8 sh run/scratch/w.sh
 ```
 
-It exits 0 when the run passed, 1 when it stopped, and 3 when it is still
-running after that many minutes. Exit 3 means run it again, not report. Your
+Leave two minutes under your tool's own limit: at 9 of 10, clean-room run 55
+had one wait run over. It exits 0 when the run passed, 1 when it stopped, and
+3 when it is still running after that many minutes. Exit 3 means run it again, not report. Your
 report is due after `results/DONE`, and it opens with the scorecard.
 
 **Start the fill the moment the tiny proof passes** and build the dashboard's
@@ -1117,7 +1118,8 @@ SCORECARD
       collector, a different job graph, a cap that did not apply.
   4 cores: doubling gave 1.74x, short of the 1.80x target.
 
-  2->4 cores: doubling gave 1.74x, target 1.80x  ->  not met — the low end of its range, 1.703x, is 5.4% under the 1.80x target
+  2->4 cores: doubling gave 1.74x, target 1.80x  ->  not met — it could be as low as 1.703x, 5.4% under the 1.80x target
+     a step is met when its lowest reading is no more than 1% under the target
 ```
 
 **The shape is a rule, not a preference**, because it drifted back twice in one

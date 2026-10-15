@@ -433,7 +433,8 @@ def _cmd_selftest(live=True, topic=None):
             out = {"runs": runs, "table": L.build_table(runs)}
             wide = [ln for ln in L.scorecard(out).splitlines() if len(ln) > limit]
             assert not wide, (f"the scorecard runs to {max(len(x) for x in wide)} characters; "
-                              f"the limit is {limit}. Put the words under the table, not in the row.")
+                              f"the limit is {limit}. Put the words under the table, not in the row: "
+                              f"{max(wide, key=len).strip()}")
         return go
 
     expect("the scorecard stays under 136 characters (must not fire)",
@@ -861,14 +862,19 @@ def _cmd_selftest(live=True, topic=None):
                                         "(single pairs ran 1.70x to 1.98x)"), L.settle_range(step)
         done = report_verdict("not-settled", {"unsettledSteps": [
             {"step": "2->4", "ratio": 1.858, "low": 1.771, "high": 1.9, "need": 1.8, "pairs": 8}]})
-        assert done == ("STOPPED at report: not met — 2→4 reads 1.86x, and the low end of its range, "
-                        "1.771x, is 1.6% under the 1.80x target. More passes could change that; change "
-                        "nothing in the pipeline"), done
+        assert done == ("STOPPED at report: not met — 2→4 measured 1.858x, but it could be as low as "
+                        "1.771x, 1.6% under the 1.80x target; a step may fall at most 1% under. More "
+                        "passes could change that; change nothing in the pipeline"), done
         # The scorecard's verdict says met or not met and the gap in percent.
-        assert L.verdict_words(step) == ("not met — the low end of its range, 1.771x, is 1.6% under the "
-                                         "1.80x target; more passes could change that"), L.verdict_words(step)
+        assert L.verdict_words(step) == ("not met — measured 1.858x, but it could be as low as 1.771x, "
+                                         "1.6% under the 1.80x target; a step may fall at most 1% under; "
+                                         "more passes could change that"), L.verdict_words(step)
+        # the scorecard has said the ratio already, and says the margin on a line of its own
+        assert L.verdict_words(step, measured=False) == (
+            "not met — it could be as low as 1.771x, 1.6% under the 1.80x target; more passes "
+            "could change that"), L.verdict_words(step, measured=False)
         met = dict(step, meetsClaim=True, ratioLowCI=1.801)
-        assert L.verdict_words(met) == ("met — the low end of its range, 1.801x, is 0.1% over "
+        assert L.verdict_words(met) == ("met — measured 1.858x; at its lowest, 1.801x, it is 0.1% over "
                                         "the 1.80x target"), L.verdict_words(met)
         assert "less than 0.1% over" in L.verdict_words(dict(met, ratioLowCI=1.8005)), L.verdict_words(dict(met, ratioLowCI=1.8005))
         assert report_verdict("claim-not-met", {}).startswith("STOPPED at report: the table is good")
@@ -3115,6 +3121,14 @@ def _cmd_selftest(live=True, topic=None):
         # each step at 1.6x, inside 1.5-2.5x; the span is 2.56x, outside 3-5x
         stopped, ran = tiny_order([1, 2, 4], {4: [256, 256], 2: [160], 1: [100, 100]})
         assert (stopped, ran) == ((1, 4), [4, 2, 1, 4, 1]), (stopped, ran)
+    def tiny_warns_under_target():
+        # Clean-room run 55: the tiny proof passed 1->2 at 1.778x without a word,
+        # and the suite then spent 25 minutes failing to settle it.
+        w = L.tiny_under_target({"step": "1->2", "ratio": 1.778, "idealRatio": 2})
+        assert w and "1.778x" in w and "1.80x target" in w and "Carrying on" in w, w
+        assert L.tiny_under_target({"step": "1->2", "ratio": 1.85, "idealRatio": 2}) is None
+    expect("tiny proof: a step inside its bounds but under the target is warned about, not stopped (must not fire)",
+           tiny_warns_under_target, "", should_fire=False)
     expect("tiny proof: the whole span is judged after the steps (must not fire)",
            tiny_span_judged_last, "", should_fire=False)
     # A busy machine waits before a case; it never measures through it.
@@ -3279,9 +3293,10 @@ def _cmd_selftest(live=True, topic=None):
                      # the range the verdict is judged on, not the lowest and highest
                      # pass (clean-room run 54 printed one beside the other)
                      "| step | ratio | range it is judged on | target 1.80x |",
-                     "| 2->4 | 2.033x | 2.010x to 2.050x | met — the low end of its range, 2.010x",
-                     "| 1->2 | 1.799x | 1.725x to 1.909x | not met — the low end of its range, 1.725x, "
-                     "is 4.2% under the 1.80x target; more passes could change that |"):
+                     "| 2->4 | 2.033x | 2.010x to 2.050x | met — measured 2.033x; at its lowest, 2.010x",
+                     "| 1->2 | 1.799x | 1.725x to 1.909x | not met — measured 1.799x, but it could be as "
+                     "low as 1.725x, 4.2% under the 1.80x target; a step may fall at most 1% under; "
+                     "more passes could change that |"):
             assert want in md, (want, md)
         assert "spans" not in md and "missed" not in md, md
     expect("headline.md: generated from suite.json, build hash first (must not fire)",
@@ -3612,7 +3627,7 @@ def _cmd_selftest(live=True, topic=None):
         # Since 2026-10-10 a low end up to 1% under the target is met, and says
         # so (the author: "gate shoujd be if more than -1% not meet").
         w = L.verdict_words(s)
-        if not (w.startswith("met — ") and "within the 1% margin" in w):
+        if not (w.startswith("met — ") and "inside the 1% margin" in w):
             raise Exception(f"5->10, low end {s['ratioLowCI']}x (0.6% under 1.80x), reads {w!r}")
         past = dict(s, ratioLowCI=1.775, meetsClaim=1.775 / 2 >= 0.9 * 0.99)
         w2 = L.verdict_words(past)
@@ -4204,7 +4219,7 @@ def cmd_preflight():
         for stage, field in c.key_sets.items():
             if field not in m:
                 raise Exception(f"the manifest has no field {field!r} for the {stage} stage; "
-                                f"it has {sorted(k for k, v in m.items() if isinstance(v, dict))}")
+                                f"it has {sorted(k for k, v in m.items() if isinstance(v, (dict, list)))}")
             sets[stage] = sorted(m[field])
         max_par, whence = L.max_parallelism_for(c.cases)
         layout = L.key_layout(sorted({k for ks in sets.values() for k in ks}), max_par, c.cases)
@@ -4653,6 +4668,10 @@ def cmd_tinyproof():
                 print(f"  {a} of {b} cores did {share:.0%} of the work. It should be about "
                       f"{1 / ideal:.0%}.")
                 if step["ok"]:
+                    warn = L.tiny_under_target(step)
+                    if warn:
+                        step["underTarget"] = True
+                        print(warn)
                     continue
                 # Say which case is wrong, not that the ratio looks odd. A big
                 # ratio is almost always the small case running slow.
@@ -5549,13 +5568,8 @@ def report_verdict(why, suite):
         return ("STOPPED at report: no scaling result — too many cases were "
                 "thrown out to compare one core count with another")
     if why == "not-settled":
-        def gap(u):
-            pct = (u["low"] - u["need"]) / u["need"] * 100
-            size = "less than 0.1%" if abs(pct) < 0.05 else f"{abs(pct):.1f}%"
-            return f"{size} {'over' if pct >= 0 else 'under'}"
         return ("STOPPED at report: not met — "
-                + "; ".join(f"{u['step'].replace('->', '→')} reads {u['ratio']:.2f}x, and the low end of "
-                            f"its range, {u['low']:.3f}x, is {gap(u)} the {u['need']:.2f}x target"
+                + ". ".join(f"{u['step'].replace('->', '→')} " + L.low_end_words(u["ratio"], u["low"], u["need"])
                             for u in (suite.get("unsettledSteps") or []))
                 + ". More passes could change that; change nothing in the pipeline")
     if why in ("target-not-met", "claim-not-met"):   # the second: suites saved before 2026-10-13

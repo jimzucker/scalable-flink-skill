@@ -861,6 +861,19 @@ def _cmd_selftest(live=True, topic=None):
 
     # 2026-10-17, the author: broker network "should show % utilization also so
     # we can spot bottleneck on NIC". The share is of a stated link speed.
+    # 2026-10-17: the store switched on for a stack already up. prometheus.yml
+    # gained the loader's job; the running Prometheus kept its old config.
+    def stale_prometheus():
+        yml = B.prometheus_yml("st99", "redis")
+        targets = {"data": {"activeTargets": [{"labels": {"job": j}} for j in
+                                               ("flink-jobmanager", "flink-taskmanager", "containers", "kafka")]}}
+        missing = B.missing_scrape_jobs(yml, targets)
+        assert B.missing_scrape_jobs(yml, {"data": {"activeTargets": targets["data"]["activeTargets"]
+                                                    + [{"labels": {"job": "store"}}]}}) == []
+        if missing:
+            raise Refusal("rig", f"Prometheus does not scrape every job in its config: missing {missing}")
+    expect("dashboard: a Prometheus still on its old config is found", stale_prometheus, "missing ['store']")
+
     def link_speed_not_a_number():
         try:
             B.settings({"dashboard": {"brokerLinkGbps": "fast"}})

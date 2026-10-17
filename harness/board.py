@@ -475,6 +475,17 @@ def prometheus_yml(project, store):
     return "\n".join(out) + "\n"
 
 
+def missing_scrape_jobs(prometheus_yml_text, targets):
+    """Pure. The jobs prometheus.yml names that the running Prometheus does
+    not scrape. `targets` is /api/v1/targets as parsed JSON. 2026-10-17: the
+    store was switched on for a stack already up; the file gained the
+    loader's job, Prometheus kept its old config, and four store panels were
+    empty over the completeness run."""
+    wanted = re.findall(r"job_name:\s*(\S+)", prometheus_yml_text)
+    have = {t.get("labels", {}).get("job") for t in ((targets or {}).get("data") or {}).get("activeTargets") or []}
+    return [j for j in wanted if j not in have]
+
+
 def datasource_yml(project):
     return "\n".join([
         "apiVersion: 1", "datasources:", "  - name: Prometheus", f"    uid: {DS_UID}", "    type: prometheus",

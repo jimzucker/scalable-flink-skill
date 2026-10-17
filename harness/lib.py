@@ -1217,6 +1217,31 @@ def prepare_dashboard():
     return b
 
 
+def reload_prometheus():
+    """GUARD: the running Prometheus scrapes every job its file names.
+    `up` rewrites prometheus.yml, but a Prometheus already running from an
+    earlier `up` keeps the config it started with, so it is told to read the
+    file again, and the targets are read back."""
+    c = cfg()
+    if not c.dash:
+        return
+    base = f"http://localhost:{c.dash['ports']['prometheus']}"
+    text = open(os.path.join(c.dash_dir, "prometheus", "prometheus.yml")).read()
+    missing, last = None, ""
+    for _ in range(60):
+        try:
+            urllib.request.urlopen(urllib.request.Request(base + "/-/reload", method="POST"), timeout=5).read()
+            targets = json.loads(urllib.request.urlopen(base + "/api/v1/targets", timeout=5).read())
+            missing = B.missing_scrape_jobs(text, targets)
+            if not missing:
+                return
+        except Exception as e:
+            last = str(e)
+        time.sleep(1)
+    raise Refusal("rig", f"Prometheus at {base} does not scrape every job in its config after being told to read it "
+                  f"again: missing {missing if missing is not None else 'unknown'}{'; ' + last if last else ''}")
+
+
 def board_verdict(b, raw, names):
     """GUARD: the dashboard keeps the pattern -- its rows in order, a lag
     panel on every topic, no name from the shipped example."""
@@ -1333,6 +1358,7 @@ def stack_up():
     prepare_dashboard()
     p = compose_path()
     sh(f"docker compose -f {p} up -d", timeout=900)
+    reload_prometheus()
     # The flink entrypoint drops privileges to uid 9999; a named volume is
     # created root-owned, so the checkpoint coordinator cannot mkdir under it.
     sh(f"docker run --rm --user 0:0 -v {c.ckpt_vol}:/ckpt --entrypoint sh {c.flink_img} "

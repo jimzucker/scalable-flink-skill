@@ -1300,6 +1300,7 @@ the reader hovers over it.
 | 5. Broker | broker memory and its limit — filling to the limit is normal | the container exporter |
 | | broker CPU, cores — under its cap | the container exporter |
 | | broker network, bytes per second — in and out | the container exporter |
+| | broker network, share of its link — in and out, under 100% | the same bytes against `dashboard.brokerLinkGbps`, 10 Gbit/s unless set |
 | | broker disk, by topic | the broker's own report of its log directories |
 | 6. Flink | Flink CPU, cores, by container — the worker at its cap; Flink memory, by container | the container exporter |
 | | worker heap in use; garbage collection, share of the cores — under 5.5% | Flink's reporter |

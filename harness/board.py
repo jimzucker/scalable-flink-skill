@@ -46,6 +46,12 @@ ROWS = (
 ROW_TITLES = dict(ROWS)
 DS_UID = "harnessprom"
 DEFAULT_PORTS = {"grafana": 13000, "prometheus": 19090, "redisinsight": 15540}
+# The broker's network panel reads as a share of this link speed, so a NIC
+# near its limit shows before it caps the pipeline. A container's virtual
+# link on Docker Desktop reports 10 Gbit/s (read 2026-10-17 from the broker's
+# /sys/class/net/eth0/speed: 10000); a real broker's NIC is whatever
+# it is, and dashboard.brokerLinkGbps says so.
+DEFAULT_LINK_GBPS = 10
 IMAGES = {
     "grafana": "grafana/grafana:11.2.0",
     "prometheus": "prom/prometheus:v2.53.2",
@@ -92,7 +98,11 @@ def settings(raw):
                          '(dashboard.store = "redis")')
     ports = dict(DEFAULT_PORTS)
     ports.update({k: int(v) for k, v in (d.get("ports") or {}).items()})
-    return {"ports": ports, "store": store, "panels": panels}
+    link = d.get("brokerLinkGbps", DEFAULT_LINK_GBPS)
+    if isinstance(link, bool) or not isinstance(link, (int, float)) or link <= 0:
+        raise BoardError(f"dashboard.brokerLinkGbps is {link!r}; it is the broker's network link speed in "
+                         "gigabits per second, a number above 0, such as 10")
+    return {"ports": ports, "store": store, "panels": panels, "link_gbps": link}
 
 
 def topic_sets(raw):
@@ -200,7 +210,7 @@ def _stat(title, desc, targets, unit="short", red_above=None):
                         for i, (l, e) in enumerate(targets)]}
 
 
-def board(raw, project, gc_ceiling=0.055, store=None, extra_panels=None):
+def board(raw, project, gc_ceiling=0.055, store=None, extra_panels=None, link_gbps=DEFAULT_LINK_GBPS):
     """Pure. The dashboard, as Grafana's JSON, for this pipeline."""
     _, _, outs = topic_sets(raw)
     IN = input_regex(raw)
@@ -321,11 +331,23 @@ def board(raw, project, gc_ceiling=0.055, store=None, extra_panels=None):
                 [("in", f"sum(rate(docker_container_network_receive_bytes_total{{{KAFKA}}}[1m]))"),
                  ("out", f"sum(rate(docker_container_network_transmit_bytes_total{{{KAFKA}}}[1m]))")],
                 unit="Bps"), "broker", 12, 8)
+    bits = f"{link_gbps:g} Gbit/s"
+    L.place(_ts(f"Broker network, share of its {bits} link — in and out, under 100%",
+                f"The same bytes as a share of the broker's link speed, {bits} (dashboard.brokerLinkGbps). A "
+                "link carries its full speed each way at once, so in and out are each read against all of it. "
+                "A line that flattens near 100% while the pipeline falls short of its cores is the network "
+                "card being the constraint. On a laptop the broker and Flink share one machine, and their "
+                "traffic never reaches a real network card; the share is then a reference, not a limit.",
+                [("in", f"sum(rate(docker_container_network_receive_bytes_total{{{KAFKA}}}[1m])) * 8 "
+                        f"/ {link_gbps * 1e9:.0f} * 100"),
+                 ("out", f"sum(rate(docker_container_network_transmit_bytes_total{{{KAFKA}}}[1m])) * 8 "
+                         f"/ {link_gbps * 1e9:.0f} * 100")],
+                unit="percent", maxv=100, thresh=100), "broker", 12, 8)
     L.place(_ts("Broker disk, by topic — the backlog and the outputs",
                 "Bytes each topic holds on the broker's disk, as the broker reports its log directories. "
                 "Retention is what keeps the outputs from growing without limit.",
                 [("{{topic}}", "sum by (topic) (kafka_topic_log_bytes)")], unit="bytes", stack=True),
-            "broker", 12, 8)
+            "broker", 24, 8)
     extras("broker")
 
     L.row("flink")
@@ -548,7 +570,8 @@ def expected_keys_text(results_dir, key_sets):
 
 def write_files(dash_dir, raw, project, s, gc_ceiling):
     """Writes Prometheus's and Grafana's files under dash_dir; returns the board."""
-    b = board(raw, project, gc_ceiling=gc_ceiling, store=s.get("store"), extra_panels=s.get("panels"))
+    b = board(raw, project, gc_ceiling=gc_ceiling, store=s.get("store"), extra_panels=s.get("panels"),
+              link_gbps=s.get("link_gbps", DEFAULT_LINK_GBPS))
     for sub in ("prometheus", "grafana/provisioning/datasources", "grafana/provisioning/dashboards",
                 "grafana/dashboards"):
         os.makedirs(os.path.join(dash_dir, sub), exist_ok=True)

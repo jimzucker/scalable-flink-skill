@@ -859,6 +859,29 @@ def _cmd_selftest(live=True, topic=None):
     expect("dashboard: a run with its own Grafana keeps it; false turns it off (must not fire)",
            old_runs_keep_theirs, "", should_fire=False)
 
+    # 2026-10-17, the author: broker network "should show % utilization also so
+    # we can spot bottleneck on NIC". The share is of a stated link speed.
+    def link_speed_not_a_number():
+        try:
+            B.settings({"dashboard": {"brokerLinkGbps": "fast"}})
+        except B.BoardError as e:
+            raise Refusal("rig", str(e))
+    expect("dashboard: a broker link speed that is not a number is stopped", link_speed_not_a_number,
+           "link speed")
+
+    def link_share_follows_the_setting():
+        ex = json.load(open(os.path.join(L.HERE, "pipeline.example.json")))
+        for gbps, divisor in ((B.DEFAULT_LINK_GBPS, "/ 10000000000 * 100"), (25, "/ 25000000000 * 100")):
+            b = B.board(ex, "st99", link_gbps=gbps)
+            share = [x for x in b["panels"] if "share of its" in x.get("title", "")]
+            assert len(share) == 1 and share[0]["_row"] == "broker", share
+            assert share[0]["fieldConfig"]["defaults"]["unit"] == "percent"
+            assert all(divisor in t["expr"] for t in share[0]["targets"]), share[0]["targets"]
+            assert f"{gbps:g} Gbit/s" in share[0]["title"]
+        assert B.settings({})["link_gbps"] == B.DEFAULT_LINK_GBPS
+    expect("dashboard: the broker network's share is of the stated link speed (must not fire)",
+           link_share_follows_the_setting, "", should_fire=False)
+
     def services_named_and_capped():
         ex = json.load(open(os.path.join(L.HERE, "pipeline.example.json")))
         svcs = B.services(ex, "st99", {"ports": dict(B.DEFAULT_PORTS), "store": "redis"}, "/d", "/k", "/e",

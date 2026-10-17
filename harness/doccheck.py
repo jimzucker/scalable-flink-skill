@@ -531,7 +531,8 @@ def check_dashboard_rows(fail):
     for panel in ("records written per second, by input topic", "records waiting, by input topic",
                   "records waiting, by output topic", "distinct keys on each output topic",
                   "checkpoint duration", "failed checkpoints", "job restarts", "broker memory and its limit",
-                  "broker CPU", "broker network", "broker disk", "garbage collection"):
+                  "broker CPU", "broker network", "broker network, share of its link", "broker disk",
+                  "garbage collection"):
         if panel.lower() not in sec.lower():
             fail(f"SKILL.md \u00a77 no longer lists the {panel} panel")
     if "Consumer lag is required on every topic" not in sec:

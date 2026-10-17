@@ -42,6 +42,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lib as L  # noqa: E402
+import board as B  # noqa: E402
 from lib import (T, Refusal, CaseRefused, cfg, log, sh, rest, save_json, load_json,  # noqa: E402
                  build_hash, build_table, render_table, render_markdown)
 
@@ -811,6 +812,79 @@ def _cmd_selftest(live=True, topic=None):
     expect("dashboard: the Grafana service and its port are found among extraServices (must not fire)",
            service, "", should_fire=False)
 
+    def generated_board(which):
+        def go():
+            ex = json.load(open(os.path.join(L.HERE, which)))
+            names = B.example_names(json.load(open(os.path.join(L.HERE, "pipeline.example.json"))))
+            for store in (None, "redis"):
+                L.board_verdict(B.board(ex, "st99", store=store), ex, names)
+        return go
+    expect("dashboard: the board built from the fan-out example keeps the pattern (must not fire)",
+           generated_board("pipeline.example.json"), "", should_fire=False)
+    expect("dashboard: the board built from the windowed example keeps the pattern (must not fire)",
+           generated_board("pipeline.example.windowed.json"), "", should_fire=False)
+
+    def broken_board(how):
+        def go():
+            ex = json.load(open(os.path.join(L.HERE, "pipeline.example.json")))
+            b = B.board(ex, "st99", extra_panels={"output": [{"type": "timeseries", "title": "orders per second",
+                                                                "targets": [{"expr": "x"}]}]}
+                        if how == "name" else None)
+            ps = b["panels"]
+            if how == "lag":
+                b["panels"] = [p_ for p_ in ps if not (p_.get("_row") == "output"
+                                                       and "kafka_group_lag_records" in json.dumps(p_))]
+            if how == "order":
+                rows = [i for i, p_ in enumerate(ps) if p_.get("type") == "row"]
+                ps[rows[0]], ps[rows[1]] = ps[rows[1]], ps[rows[0]]
+            L.board_verdict(b, ex, ["orders"] if how == "name" else [])
+        return go
+    expect("dashboard: an output with no lag panel is stopped", broken_board("lag"), "no lag panel")
+    expect("dashboard: rows out of order are stopped", broken_board("order"), "out of order")
+    expect("dashboard: a panel naming another pipeline's topic is stopped", broken_board("name"),
+           "belongs to the shipped example")
+
+    def two_grafanas():
+        raw = {"dashboard": {}, "extraServices": {"g": {"image": "grafana/grafana:11.2.0"}}}
+        try:
+            B.settings(raw)
+        except B.BoardError as e:
+            raise Refusal("rig", str(e))
+    expect("dashboard: the harness's Grafana and the run's own together are stopped", two_grafanas, "keep one")
+
+    def old_runs_keep_theirs():
+        assert B.settings({"extraServices": {"g": {"image": "grafana/grafana:11.2.0"}}}) is None
+        assert B.settings({"dashboard": False}) is None
+        assert B.settings({})["ports"]["grafana"] == 13000
+    expect("dashboard: a run with its own Grafana keeps it; false turns it off (must not fire)",
+           old_runs_keep_theirs, "", should_fire=False)
+
+    def services_named_and_capped():
+        ex = json.load(open(os.path.join(L.HERE, "pipeline.example.json")))
+        svcs = B.services(ex, "st99", {"ports": dict(B.DEFAULT_PORTS), "store": "redis"}, "/d", "/k", "/e",
+                          "apache/kafka:3.9.0", "/opt/kafka/libs", "st99-kafka:9092")
+        for name, body in svcs.items():
+            assert body["container_name"].startswith("st99-"), name
+            assert body.get("cpus"), name
+            assert body.get("mem_limit"), name
+        outs = ex["topics"]["out"] + ex["topicsAlsoWritten"]
+        assert svcs["kafkametrics"]["environment"]["READ_TOPICS"] == ",".join(outs)
+    expect("dashboard: every service it adds is named for the project and capped (must not fire)",
+           services_named_and_capped, "", should_fire=False)
+
+    def expected_keys():
+        d = tempfile.mkdtemp()
+        try:
+            json.dump({"totalBySymbol": {"A": 1, "B": 2}, "accounts": ["x", "y", "z"]},
+                      open(os.path.join(d, "manifest-small.json"), "w"))
+            text = B.expected_keys_text(d, {"symbol": "totalBySymbol", "account": "accounts"})
+            assert 'pipeline_generator_keys{manifest="manifest-small.json",key_set="symbol"} 2' in text, text
+            assert 'key_set="account"} 3' in text, text
+        finally:
+            shutil.rmtree(d)
+    expect("dashboard: the generator's key counts are read from each manifest (must not fire)",
+           expected_keys, "", should_fire=False)
+
     def empties():
         got = L.empty_panels([("d", "full", 40, None), ("d", "empty", 0, None), ("d", "broken", 0, "bad query")])
         assert got == ['"empty"', '"broken" (bad query)'], got
@@ -900,8 +974,9 @@ def _cmd_selftest(live=True, topic=None):
         # The row's arithmetic from the example config: the worker's container
         # limit at its largest case, broker, job manager 2g and extra services;
         # an unreadable limit is named, not a crash.
-        saved = c.raw.get("extraServices")
+        saved, saved_dash = c.raw.get("extraServices"), c.dash
         try:
+            c.dash = None       # a run with its own dashboard, so these are the only extra services
             c.raw["extraServices"] = {"grafana": {"mem_limit": "224m"}, "prometheus": {"mem_limit": "192m"},
                                       "odd": {"mem_limit": "1.5g"}}
             _, limit = L.tm_memory_for(max(c.cases))
@@ -912,6 +987,7 @@ def _cmd_selftest(live=True, topic=None):
             assert "other services 416m" in line and "could not read the memory limit of odd" in line, line
             assert L.memory_budget_line(0).endswith("requested, VM size unknown"), L.memory_budget_line(0)
         finally:
+            c.dash = saved_dash
             if saved is None:
                 c.raw.pop("extraServices", None)
             else:
@@ -5129,7 +5205,7 @@ def cmd_suite():
                          # record says only true things
                          "tmProcessMemory": L.tm_memory_record(),
                          # anything else that was on the machine while this was measured
-                         "extraServices": sorted((c.raw.get("extraServices") or {}).keys()) or None},
+                         "extraServices": sorted(L.all_services().keys()) or None},
            "thresholds": dict(T), "harness": harness_version(),
            "startedAt": time.strftime("%Y-%m-%d %H:%M:%S %Z"), "startedAtEpoch": time.time(),
            "runs": [], "refusals": []}

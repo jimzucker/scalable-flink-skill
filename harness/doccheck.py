@@ -513,27 +513,29 @@ def check_broker_cpu_hook(fail):
 
 
 def check_dashboard_rows(fail):
-    """Section 7 lays the dashboard out in four rows: what the pipeline
-    delivered, whether it is keeping up, the broker, then the engine. The demo's
-    dashboard put the broker last and mixed lag in with the engine's busy
-    panels; the skill's old list put the backlog after the engine's internals.
-    The order is the argument, so it is held here, and so is the one panel
-    whose source this directory has to provide."""
+    """Section 7 lays the dashboard out in seven rows: the input, its lag, the
+    output, checkpoints, the broker, Flink, then the Redis store. The order is
+    the user's (2026-10-17), board.ROWS is what the harness builds and holds,
+    and the prose has to say the same rows in the same order."""
+    import board
     skill = read(ROOT, "SKILL.md")
     sec = skill[skill.index("## 7."):skill.index("## 8.")]
-    rows = ["| 1. Pipeline output |", "| 2. Lag and job health |", "| 3. Kafka |", "| 4. Flink |"]
+    rows = [f"| {title} |" for _, title in board.ROWS]
     at = [sec.find(r) for r in rows]
     if -1 in at:
-        fail("SKILL.md \u00a77 is missing a dashboard row: "
+        fail("SKILL.md \u00a77 is missing a dashboard row the harness builds: "
              + ", ".join(r.strip("| ") for r, i in zip(rows, at) if i == -1))
         return "dashboard rows: missing"
     if at != sorted(at):
-        fail("SKILL.md \u00a77's dashboard rows are out of order: pipeline, keeping up and staying up, Kafka, Flink")
-    for panel in ("input and output rate per stage", "records waiting in Kafka", "CPU by container",
-                  "broker memory and limit", "garbage collection",
-                  "checkpoint duration", "job restarts", "failed checkpoints"):
-        if f"| {panel}" not in sec:
+        fail("SKILL.md \u00a77's dashboard rows are out of order: " + ", ".join(t for _, t in board.ROWS))
+    for panel in ("records written per second, by input topic", "records waiting, by input topic",
+                  "records waiting, by output topic", "distinct keys on each output topic",
+                  "checkpoint duration", "failed checkpoints", "job restarts", "broker memory and its limit",
+                  "broker CPU", "broker network", "broker disk", "garbage collection"):
+        if panel.lower() not in sec.lower():
             fail(f"SKILL.md \u00a77 no longer lists the {panel} panel")
+    if "Consumer lag is required on every topic" not in sec:
+        fail("SKILL.md \u00a77 no longer says consumer lag is required on every topic")
     if "With nobody to ask, run the probe and the ceiling (below), report the step as not met" not in skill:
         fail("SKILL.md \u00a76 no longer tells an unattended agent what to do with a step whose range spans the target")
     if "**not met** when the low end is under 1.80× by more than 1%" not in skill:
@@ -558,7 +560,7 @@ def check_dashboard_rows(fail):
     for h in re.findall(r"^#{1,4} (.+)$", skill, re.M):
         if "?" in h or ";" in h:
             fail(f"SKILL.md heading reads as a slogan, not a name: {h!r}")
-    return "the dashboard reads pipeline output, lag and job health, Kafka, Flink; titles name what they measure"
+    return "the dashboard reads input, input lag, output, checkpoints, broker, Flink, store; titles name what they measure"
 
 
 def check_question_references(fail):
@@ -622,7 +624,7 @@ def check_section7_metrics(fail):
     skill = read(ROOT, "SKILL.md")
     i = skill.index("| panel | Prometheus series |")
     table = skill[i:skill.index("\n\n", i)]
-    named = set(re.findall(r"`((?:flink|docker)_[A-Za-z0-9_]+)`", table))
+    named = set(re.findall(r"`((?:flink|docker|kafka)_[A-Za-z0-9_]+)`", table))
     listed = set(lib.SECTION7_METRICS)
     for n in sorted(named - listed):
         fail(f"SKILL.md \u00a77 names {n}, which the harness's SECTION7_METRICS does not check")
@@ -1038,7 +1040,8 @@ def check_run41_lessons(fail):
         "Two of these rows do not apply": "\u00a76a does not say which levers a given pipeline cannot use",
         "assertion with nothing to compare is written down": "\u00a74 does not say what to do when an "
                                                              "assertion has nothing to compare",
-        "row is for a pipeline with fan-out": "\u00a77 does not say the first row assumes a fan-out",
+        "reads in bursts, once per window": "\u00a75 does not say how the output row reads for a windowed "
+                                            "pipeline",
     }
     for needle, why in wanted.items():
         if why and needle not in skill:

@@ -1,4 +1,5 @@
-"""Per-container CPU and memory for the dashboard's "CPU per component" panel.
+"""Per-container CPU, memory and network bytes for the dashboard's broker and
+Flink rows.
 
 Section 7 asks for a panel that shows which component is in the way, *including
 the idle one* -- section 5's broker at 0.48 cores that is still the ceiling. The
@@ -76,8 +77,11 @@ def poll():
                 cpu = stats.get("cpu_stats", {}).get("cpu_usage", {}).get("total_usage")
                 mem = stats.get("memory_stats", {}).get("usage")
                 limit = stats.get("memory_stats", {}).get("limit")
+                nets = (stats.get("networks") or {}).values()
+                rx = sum(n.get("rx_bytes", 0) for n in nets)
+                tx = sum(n.get("tx_bytes", 0) for n in nets)
                 if cpu is not None:
-                    out[name] = (cpu, mem or 0, limit or 0)
+                    out[name] = (cpu, mem or 0, limit or 0, rx, tx)
             SAMPLE.clear()
             SAMPLE.update(out)
         except Exception as e:                       # never silence it
@@ -95,11 +99,17 @@ class Metrics(BaseHTTPRequestHandler):
             "# TYPE docker_container_memory_bytes gauge",
             "# HELP docker_container_memory_limit_bytes Memory the container is allowed",
             "# TYPE docker_container_memory_limit_bytes gauge",
+            "# HELP docker_container_network_receive_bytes_total Bytes the container has received",
+            "# TYPE docker_container_network_receive_bytes_total counter",
+            "# HELP docker_container_network_transmit_bytes_total Bytes the container has sent",
+            "# TYPE docker_container_network_transmit_bytes_total counter",
         ]
-        for name, (cpu, mem, limit) in sorted(SAMPLE.items()):
+        for name, (cpu, mem, limit, rx, tx) in sorted(SAMPLE.items()):
             lines.append('docker_container_cpu_seconds_total{name="%s"} %.6f' % (name, cpu / 1e9))
             lines.append('docker_container_memory_bytes{name="%s"} %d' % (name, mem))
             lines.append('docker_container_memory_limit_bytes{name="%s"} %d' % (name, limit))
+            lines.append('docker_container_network_receive_bytes_total{name="%s"} %d' % (name, rx))
+            lines.append('docker_container_network_transmit_bytes_total{name="%s"} %d' % (name, tx))
         body = ("\n".join(lines) + "\n").encode()
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; version=0.0.4")

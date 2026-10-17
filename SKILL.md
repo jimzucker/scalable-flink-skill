@@ -731,7 +731,7 @@ is a working copy of all of it.
 | `outputsPerInput` | **do not set it** | a uniform generator makes any windowed pipeline look like it has a fan-out. It would be a property of your test data, not of the job |
 | `secondVantage` | `{"mode": "command", "cmd": …}` | the second, independent reading. Declaring neither stops the run |
 | the command's output | `{"inputRecordsProcessed": N}` | how much input the pipeline's own outputs account for |
-| the dashboard's rate panels | count rows per window, not rows per second against the input | the per-input panels in §7 assume a fan-out and read flat here |
+| the dashboard's output rate | rows per window, not rows per second against the input | the output row in §7 reads in bursts, once per window; the lag panels still apply |
 
 **The best signal is a count the pipeline already publishes.** If every row
 carries how many inputs it aggregated, the sum of that field over the topic is
@@ -859,12 +859,12 @@ had one wait run over. It exits 0 when the run passed, 1 when it stopped, and
 3 when it is still running after that many minutes. Exit 3 means run it again, not report. Your
 report is due after `results/DONE`, and it opens with the scorecard.
 
-**Start the fill the moment the tiny proof passes** and build the dashboard's
-panels while it runs. Nothing but the cases depends on them. The dashboard's
-*service* is not so free: `extraServices` is read when the stack comes up, so
-it has to be in `pipeline.json` before the first `up` — decide at §1a that
-there will be a dashboard, and write the service in then, even if the panels
-come later. **The same is true of `flinkProperties`**, and it fails more
+**Start the fill the moment the tiny proof passes.** The harness builds the
+dashboard at `up` (§7), so there is nothing to build while it runs except
+panels only your pipeline has, in `dashboard.panels`. Those, and the store
+option, are read when the stack comes up, so they have to be in
+`pipeline.json` before the first `up`.
+**The same is true of `flinkProperties`**, and it fails more
 quietly: it reaches the containers through the generated compose file, which is
 baked in at creation, so a setting added afterwards changes nothing and says
 nothing. Clean-room run 45 added `pipeline.max-parallelism` after `up`, watched
@@ -1239,38 +1239,127 @@ question. A slower table that means something beats a faster one that does not.
 
 ## 7. The dashboard
 
-**Add it through `extraServices` in `pipeline.json`** — a map of service name to
-a compose service body, spliced into the stack the harness generates. Two rules,
-because the measurement depends on them: the container name must start with the
-project prefix, or teardown leaves it behind and then fails for a survivor it
-did not create; and give it a CPU cap, because anything sharing the cores under
-test changes the number being measured. Whatever you add is recorded in the
-results header, so a reader knows what else was on the machine. That is the only
-sanctioned way — the harness is still not to be forked.
+**The harness builds it. Do not write one.** Every run used to build its own
+dashboard from this section's prose, and each answered the same questions
+differently or not at all: no rate per topic, no lag on the outputs, nothing
+about the broker's disk or network. `harness/board.py` now writes the same
+rows, in the same order, for every pipeline, from nothing but `pipeline.json`
+— its input topics, its output topics (`topics.out` and `topicsAlsoWritten`)
+and its key sets. It is a pattern for any streaming pipeline, so no name from
+the shipped example, or from any one pipeline, is in it. `up` starts it with
+the stack: Prometheus, Grafana on port 13000, a container exporter, and a
+Kafka metrics service. The Flink reporter it needs is added to
+`flinkProperties` for you.
 
-**Most of the panels below need engine metrics, and those need a reporter**: set one through `flinkProperties` in `pipeline.json`, which reaches the job manager and every task manager. On `flink:1.20.x` that is all you need: the reporters ship **already installed** as plugins in `/opt/flink/plugins/metrics-*`, so the factory class resolves with no further help. **Do not set `ENABLE_BUILT_IN_PLUGINS` on these images.** That variable tells the entrypoint to link a jar out of `/opt/flink/opt`, which on `flink:1.20.1-scala_2.12-java17` contains no reporter at all; the entrypoint prints `Plugin … does not exist. Exiting.` and the container dies before the job manager starts. Verified by listing both directories in the image. This paragraph previously said the opposite and gave the variable as the fix — clean-room run 43 followed it verbatim and lost its first `prove.py up` to it, which is worse than the forty minutes run 42 lost having no guidance at all. `flinkEnv` remains for images that do keep reporters in `/opt/flink/opt` (older tags and the slim variants) and for any other environment the engine needs. Clean-room run 32 had no such hook, could not fork the harness, and spent about fifty minutes rebuilding the numbers from outside the engine — Kafka offsets, a tail of each sink, the REST API and the docker socket. The settings the measurement depends on stop the run rather than being silently overridden.
+**The engine's metrics come from a reporter**, which reaches the job manager
+and every task manager through `flinkProperties`. On `flink:1.20.x` the
+reporters ship **already installed** as plugins in
+`/opt/flink/plugins/metrics-*`, so the factory class resolves with no further
+help. **Do not set `ENABLE_BUILT_IN_PLUGINS` on these images.** That variable
+tells the entrypoint to link a jar out of `/opt/flink/opt`, which on
+`flink:1.20.1-scala_2.12-java17` contains no reporter at all; the entrypoint
+prints `Plugin … does not exist. Exiting.` and the container dies before the
+job manager starts. Clean-room run 43 followed earlier advice to set it and
+lost its first `prove.py up`. `flinkEnv` remains for images that do keep
+reporters in `/opt/flink/opt` (older tags and the slim variants) and for any
+other environment the engine needs.
 
-**The CPU-per-component panel needs the broker, and no reporter can give it to
-you.** `flinkProperties` reaches the job manager and the workers; the panel's
-whole point is the component *beside* them — §5's broker at 0.48 cores that is
-still the ceiling. cAdvisor is the obvious answer and it does not work on
-Docker Desktop for macOS: its Docker factory registers against the socket and
-it still reports one series, because the cgroup tree it reads inside the VM
-does not contain the containers. Use
-**`harness/dashboard/docker_cpu_exporter.py`**, which ships with this skill:
-about a hundred lines that read cumulative CPU nanoseconds per container off
-the Docker API and serve them as a Prometheus counter. Copy it next to your
-provisioning files, mount that **directory** — a single-file bind mount breaks
-the moment the host file is rewritten by a tool that replaces the inode — and
-add the `extraServices` entry from `harness/README.md`. Clean-room run 36 spent
-half an hour on this, wrote the same thing, and said every run would write it
-again. Nothing off it is ever quoted as a result: the harness reads the cgroup
-counter directly for the table, and this is for looking at.
+Lay the panels out in seven rows, in this order: the input, then its lag, then
+the output, then checkpoints, then the broker, then Flink, then the Redis store
+when it is on. The first four are what someone checks on a pipeline left
+running; the last three are where they look when one of those is wrong. The
+order is enforced: the harness stops at `up` if a row is out of order.
 
-Build it, provision it from a file that ships with the stack, and never take a
-reported number off it — engine meters are ~60 s moving averages and its
-metric service starves at exactly the load you care about. Render images
-server-side, with the timezone passed explicitly, so the picture in the
+**Consumer lag is required on every topic, input and output.** It is read from
+the broker — every consumer group's committed position against each topic's
+end — so inputs and outputs are measured the same way. An output has no
+consumer of its own on a measuring rig, so the Kafka metrics service runs one
+reader over the outputs; its lag is the output's lag, and it counts each
+output's records and distinct keys as it goes. The harness stops at `up` if
+any topic has no lag panel, and deletes each case's consumer group when the
+case ends, so the panel shows only readers that are still reading.
+
+**A panel title is what it measures, then what to look for** — *"Checkpoint
+size — levels off"*, *"Job restarts — 0"*. No questions and no clever
+phrases. Why it matters goes in the panel's description, the text shown when
+the reader hovers over it.
+
+| row | panel title: what it measures — what to look for | where the number comes from |
+|---|---|---|
+| 1. Input | records written per second, by input topic — the generator, while it fills | the rise in each input topic's end offsets |
+| | records read per second, by input topic — flat during a case | the rise in each consumer group's committed position |
+| | records on each input topic — the backlog | end offsets |
+| | distinct keys the generator wrote, by backlog and key set — the interview's answer | each manifest's `keySets` fields, when `keySets` is set |
+| 2. Input lag | records waiting, by input topic and consumer group — falls steadily in each case | end offsets less the group's committed position |
+| 3. Output | records written per second, by output topic | end offsets |
+| | records waiting, by output topic and reader — near zero | the same lag, for the dashboard's reader and the store's loader |
+| | records on each output topic | end offsets |
+| | distinct keys on each output topic — the interview's answer | the dashboard's reader, committed records only |
+| 4. Checkpoints | checkpoints completed per minute — steady; checkpoint duration — flat; checkpoint size — levels off | Flink's job manager |
+| | failed checkpoints — 0; job restarts — 0 | Flink's job manager |
+| 5. Broker | broker memory and its limit — filling to the limit is normal | the container exporter |
+| | broker CPU, cores — under its cap | the container exporter |
+| | broker network, bytes per second — in and out | the container exporter |
+| | broker disk, by topic | the broker's own report of its log directories |
+| 6. Flink | Flink CPU, cores, by container — the worker at its cap; Flink memory, by container | the container exporter |
+| | worker heap in use; garbage collection, share of the cores — under 5.5% | Flink's reporter |
+| | busy time, by task — the busiest near 100%; back-pressured time, by task | Flink's reporter |
+| | free task slots; worker threads — not climbing | Flink's reporter |
+| 7. Redis store | records read and keys written per second; Redis memory; keys in Redis, by topic; times Redis did not answer — 0 | the store loader, only with the store on |
+
+Counts taken from offsets include one transaction marker per partition per
+checkpoint, so on an exactly-once topic they read very slightly high; the
+reader's counts are records actually read. Distinct keys are counted up to two
+million a topic.
+
+**Add what only your pipeline has, in the row it belongs to.** `dashboard.panels`
+in `pipeline.json` is a map of row (`input`, `input_lag`, `output`,
+`checkpoints`, `broker`, `flink`, `store`) to a list of Grafana panels; each is
+placed at the end of its row. A panel there that names a topic or operator of
+the shipped example, and not of this pipeline, stops the run: it was copied.
+The two paths' totals of a pipeline with two aggregations, or a count the job
+registers itself, go here. Flink exports no count of distinct keys inside an
+operator and no per-path totals, so those need gauges or counters the job
+registers (clean-room run 52 built both that way).
+
+**The Redis store is an option, off by default.** `"dashboard": {"store":
+"redis"}` adds Redis, a loader and RedisInsight (port 15540): the latest value
+of every key on every output, updated in place. The loader is
+`harness/dashboard/StoreLoader.java`. It reads the outputs as one more consumer
+group, committed records only, so it never slows the pipeline down: if Redis
+is slow or stopped it falls behind, Kafka holds the difference, and its lag is
+on the output row. Each batch is cut to the last record per key before
+anything is written, and a write lands only if its offset is newer than the
+one stored, so a key never moves back. It is off by default because anything
+sharing the cores under test changes the number being measured; one CPU core
+is its cap.
+
+**Every service the dashboard adds is named for the project and capped**, and
+listed in `suite.json`, so a reader knows what else was on the machine:
+
+| service | what | CPU cap |
+|---|---|---|
+| `<project>-kafkametrics` | `harness/dashboard/KafkaMetrics.java`: end offsets, disk per topic, every group's lag, and the reader over the outputs | 0.5 |
+| `<project>-statsexporter` | `harness/dashboard/docker_cpu_exporter.py`: CPU, memory and network bytes per container, off the Docker API | 0.2 |
+| `<project>-prometheus`, `<project>-grafana` | the metrics store, port 19090, and the dashboard, port 13000 | 0.3, 0.2 |
+| `<project>-redis`, `-storeloader`, `-redisinsight` | the store, only when it is on | 0.5, 1, 0.2 |
+
+cAdvisor does not work on Docker Desktop for macOS: its Docker factory
+registers against the socket and it still reports one series, because the
+cgroup tree it reads inside the VM does not contain the containers. That is
+why the container exporter reads the Docker API instead. The broker's own
+request metrics — produce request time, how busy its request handlers are —
+need an agent inside the broker, which the harness does not add; say so in the
+report if they matter.
+
+`"dashboard": false` turns it off. A run with a Grafana of its own in
+`extraServices` and no `dashboard` key keeps its own, as every run before this
+did; asking for both stops the run. On a managed service there is no dashboard:
+its stack is not the harness's to add to.
+
+Never take a reported number off it — engine meters are ~60 s moving averages
+and its metric service starves at exactly the load you care about. Render
+images server-side, with the timezone passed explicitly, so the picture in the
 write-up is the window the number came from.
 
 **The dashboard opens on the suite; the metrics store's retention must
@@ -1286,43 +1375,8 @@ reads the range back from Grafana, and says so on the report's `dashboard`
 line. Build the dashboard with any default; keep Prometheus's retention
 longer than the time between the run and whoever reads it.
 
-Lay the panels out in four rows, in this order: the pipeline's output, then
-lag and job health, then Kafka, then Flink. The first two rows are what
-someone checks on a pipeline left running; the last two are where they look
-when one of those is wrong.
-
-**A panel title is what it measures, then what to look for** — *"Checkpoint
-size — levels off"*, *"Job restarts — 0"*. No questions and no clever
-phrases. Why it matters goes in the panel's description, the text shown when
-the reader hovers over it.
-
-| row | panel title: what it measures — what to look for | why it matters (its description) | when |
-|---|---|---|---|
-| 1. Pipeline output | input and output rate per stage — lines a constant factor apart | a fan-out that is not constant is not the one the interview predicted | always |
-| | distinct keys per aggregation — equal to the interview's answer | a key count that differs means keys you did not intend, or ones that never arrived | always |
-| | the two paths' totals — lines on top of each other | two independent aggregations that disagree have lost or duplicated a record | always |
-| | end-to-end latency — flat, under the target | this is what a consumer waits for | when the target is about latency |
-| 2. Lag and job health | records waiting in Kafka — falls steadily in each case | flat at zero means the case ran out of input and measured nothing | always |
-| | event-time lag, seconds — flat | how stale the outputs are; in a drain it only reads the backlog's age | a pipeline left running |
-| | job restarts — 0 | readings taken across a failure are not a measurement | always |
-| | failed checkpoints — 0 | while they fail, a crash replays from further back | always |
-| 3. Kafka | CPU by container, cores — the pipeline at its cap, the rest low | shows which component is the constraint, including an idle one | always |
-| | broker memory and limit — page cache fills to the limit, which is normal | the harness's own broker-memory check says whether reads went to disk | always |
-| 4. Flink | task busy, back-pressured and idle time — busy near 100% | busy is at the limit, back-pressured is falling behind, idle with no back-pressure is **starved** | always |
-| | garbage collection, % of cores — under 5.5% | above 5.5% the harness calls the case a ceiling | always |
-| | checkpoint duration — flat; checkpoint size — levels off | the cost of the guarantee, and state growing without limit | always |
-| | network bytes and buffer use — below saturation | the network between workers becomes a constraint | only when a build runs more than one worker — never on this skill's axis, which is one machine with more cores (§1a) |
-| | late records dropped — 0 | a window is throwing data away as too late | windowed pipelines, with a caveat below |
-| | free slots; threads — not climbing | spare slots let a job restart (a measured case has none, on purpose); climbing threads are a leak | a pipeline left running |
-
-CPU by container opens the Kafka row because it shows the broker and the
-pipeline side by side, which is how you see which of the two is the
-constraint before reading the detail on either. Broker memory comes from the
-same exporter, which serves each container's memory and its limit beside its
-CPU.
-
 **Metric names that returned data on `flink:1.20.1`** with the Prometheus
-reporter and the shipped exporter, read through Grafana on 2026-09-28 and again on 2026-10-02. Match
+reporter and the shipped exporters, read through Grafana on 2026-09-28 and again on 2026-10-02. Match
 operators by the names your job gives them (`operator_name=~".*parse.*"`),
 **as the reporter spells them: it turns every character other than letters,
 digits, `:` and `_` into `_`** in operator, task and job names. Read back by
@@ -1341,17 +1395,10 @@ an empty panel. When it does, the stop message gives the spelling to use:
 | garbage collection | `flink_taskmanager_Status_JVM_GarbageCollector_All_TimeMsPerSecond` — every collector together, so it reads the same whichever one the JVM chose; per collector, `flink_taskmanager_Status_JVM_GarbageCollector_G1_Young_Generation_TimeMsPerSecond` and `flink_taskmanager_Status_JVM_GarbageCollector_G1_Old_Generation_TimeMsPerSecond` |
 | checkpoint duration; size | `flink_jobmanager_job_lastCheckpointDuration`; `flink_jobmanager_job_lastCheckpointSize` |
 | free slots; threads | `flink_jobmanager_taskSlotsAvailable`; `flink_taskmanager_Status_JVM_Threads_Count` |
-
-**The harness checks these names on every run.** Straight after
-completeness it asks Prometheus, through Grafana, for each series in this
-table, and the report says which, if any, the running image did not export —
-so a Flink upgrade that renames one shows on its first run. It is reported,
-never a reason to stop: a build may not use every panel.
-
-**Two panels need numbers only the job has.** Flink exports no count of
-distinct keys and no per-path totals, so *distinct keys per aggregation* and
-*the two paths' totals* need gauges or counters the job registers itself
-(clean-room run 52 built both that way). Budget for them when you write the job.
+| records and bytes per topic; lag per group | `kafka_topic_records_written_total`, `kafka_topic_log_bytes`, `kafka_group_records_committed_total`, `kafka_group_lag_records` (the Kafka metrics service) |
+| distinct keys and records on each output | `kafka_reader_unique_keys`, `kafka_reader_records_total` (its reader) |
+| network by container | `docker_container_network_receive_bytes_total`, `docker_container_network_transmit_bytes_total` (counters: take `rate`) |
+| heap; checkpoints completed; slots | `flink_taskmanager_Status_JVM_Memory_Heap_Used`, `flink_taskmanager_Status_JVM_Memory_Heap_Max`; `flink_jobmanager_job_numberOfCompletedCheckpoints`; `flink_jobmanager_taskSlotsTotal` |
 
 **Flink counts late records only in its own window operators**
 (`numLateRecordsDropped`). A window written by hand — a process function that
@@ -1359,21 +1406,6 @@ buckets on a timestamp and drops what arrives after its bucket closed — has no
 such counter, and the panel reads "No data". Measured on the reference
 pipeline, which does exactly that. Count the drops in the job and publish the
 counter, or leave the panel out and say why.
-
-**Two broker panels are not in the list because the stack cannot feed them
-yet:** the broker's write load (bytes in, produce request time) and its disk
-in use. §5's broker "ran out of write throughput, not CPU", and only those
-two would show it, but both need the broker's own metrics and the harness
-has no way to add them to the broker it starts. Do not fork it to get them;
-say in the report that they are missing.
-
-**The first row is for a pipeline with fan-out; yours may not have one.**
-Two of its panels ask a fan-out question — *rate per stage* and *the two
-paths overlaid* — and a pipeline with one aggregation and a throttled output
-can answer neither. Replace them with the same question in its own shape:
-records read per second against rows published per second on a log scale, and
-the parallel subtasks of the one aggregation overlaid. Keep the question, not
-the panel.
 
 **The harness tests the dashboard as it tests the job.** Preflight reads the
 provisioning files and stops if a panel asks for a data source the stack does
@@ -1396,7 +1428,6 @@ is a ratio of counters on different clocks or
 a signed sum, because both are unstable for reasons unrelated to the pipeline.
 **A panel you cannot explain is a liability** — either it says what the number
 means or it goes.
-
 
 **The job graph is not a dashboard panel.** Grafana shows how the job behaves
 over time; what the job *is* comes from the plan, in `results/graph.png` and

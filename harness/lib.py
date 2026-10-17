@@ -245,6 +245,7 @@ class Refusal(Exception):
 
 sys.path.insert(0, HERE)
 import platforms as P  # noqa: E402
+import board as B  # noqa: E402
 P.Refusal = Refusal     # a platform's refusal is the harness's own
 import platform_confluent  # noqa: E402
 platform_confluent.Refusal = Refusal
@@ -487,6 +488,20 @@ class Cfg:
                                                        _topicIn=self.topic_in))
         self.guarantee = c["guarantee"]
         self.log_path = os.path.join(self.results, "harness.log")
+        # The dashboard the harness builds from this file (board.py), or None:
+        # "dashboard": false, a Grafana of the run's own in extraServices, or a
+        # managed service, whose stack is not ours to add to.
+        try:
+            self.dash = None if self.plat else B.settings(c)
+        except B.BoardError as e:
+            raise Refusal("rig", str(e))
+        if self.dash:
+            # Its Flink panels need the Prometheus reporter; the image ships it.
+            self.flink_props.setdefault("metrics.reporter.prom.factory.class",
+                                        "org.apache.flink.metrics.prometheus.PrometheusReporterFactory")
+            self.flink_props.setdefault("metrics.reporter.prom.port", "9249")
+        self.dash_dir = os.path.join(self.stack_dir, "dashboard")
+        self.km_dir = os.path.join(self.stack_dir, "kafkametrics")
         # Three ways to run: no worker memory settings at all (the default, and
         # what the demo does -- memory can never be the thing that runs out),
         # tmMemoryPerCore so every subtask gets the same, or perCase. A flat
@@ -1151,7 +1166,7 @@ def extra_services_text():
     They are recorded in the results header, so a reader knows something else
     was on the machine.
     """
-    extra = cfg().raw.get("extraServices") or {}
+    extra = all_services()
     if not extra:
         return ""
     out = []
@@ -1160,6 +1175,100 @@ def extra_services_text():
         for line in yaml_block(body, indent=4):
             out.append(line)
     return "\n" + "\n".join(out) + "\n"
+
+
+def generated_services():
+    """The dashboard's services (board.py), or {} when the harness builds none."""
+    c = cfg()
+    if not c.dash:
+        return {}
+    return B.services(c.raw, c.project, c.dash, c.dash_dir, c.km_dir, os.path.join(HERE, "dashboard"),
+                      c.kafka_img, c.kafka_libs, c.boot_int)
+
+
+def all_services():
+    """Every service spliced in beside the harness's own: the dashboard's and
+    the run's extraServices. Two of the same name would be one service in
+    compose, silently, so that stops the run."""
+    gen, own = generated_services(), cfg().raw.get("extraServices") or {}
+    same = sorted(set(gen) & set(own))
+    if same:
+        raise Refusal("rig", f"extraServices names {', '.join(same)}, which the harness's dashboard already "
+                             'runs. Rename yours, or set "dashboard": false in pipeline.json to run your own')
+    return {**gen, **own}
+
+
+def prepare_dashboard():
+    """Writes the dashboard's files and compiles its Kafka metrics service,
+    before the stack starts. Stops if the board breaks the pattern: rows out
+    of order, a topic with no lag panel, or the shipped example's names."""
+    c = cfg()
+    if not c.dash:
+        return None
+    b = B.write_files(c.dash_dir, c.raw, c.project, c.dash, T["gcCeil"])
+    try:
+        example = json.load(open(os.path.join(HERE, "pipeline.example.json")))
+        names = B.example_names(example)
+    except Exception:
+        names = []
+    board_verdict(b, c.raw, names)
+    refresh_expected_keys()
+    build_dashboard_classes()
+    return b
+
+
+def board_verdict(b, raw, names):
+    """GUARD: the dashboard keeps the pattern -- its rows in order, a lag
+    panel on every topic, no name from the shipped example."""
+    problems = B.check(b, raw, names)
+    if problems:
+        raise Refusal("rig", "the dashboard breaks the pattern in SKILL.md section 7: " + "; ".join(problems))
+
+
+def refresh_expected_keys():
+    """The key counts in each manifest, for the dashboard's input row."""
+    c = cfg()
+    if not c.dash:
+        return
+    os.makedirs(c.dash_dir, exist_ok=True)
+    path = os.path.join(c.dash_dir, "extra.prom")
+    with open(path + ".tmp", "w") as f:
+        f.write(B.expected_keys_text(c.results, c.raw.get("keySets")))
+    os.replace(path + ".tmp", path)
+
+
+def build_dashboard_classes():
+    """Compile the Kafka metrics service and the store loader on the host JDK
+    against the broker image's own kafka-clients jar, like the offset sampler."""
+    c = cfg()
+    out = c.km_dir
+    srcs = [os.path.join(HERE, "dashboard", f) for f in ("KafkaMetrics.java", "StoreLoader.java")]
+    stamp = os.path.join(out, "KafkaMetrics.class")
+    if os.path.exists(stamp) and all(os.path.getmtime(stamp) >= os.path.getmtime(x) for x in srcs):
+        return out
+    os.makedirs(out, exist_ok=True)
+    jar = kafka_clients_jar(out)
+    sh(f"{c.jdk}/bin/javac --release 17 -cp {out}/{jar} -d {out} " + " ".join(srcs))
+    for cls in ("KafkaMetrics.class", "StoreLoader.class"):
+        if not os.path.exists(os.path.join(out, cls)):
+            raise Refusal("rig", f"the dashboard's {cls[:-6]} did not compile")
+    return out
+
+
+def kafka_clients_jar(out):
+    """Copies the broker image's kafka-clients jar into out; returns its name."""
+    c = cfg()
+    cid = sh(f"docker create {c.kafka_img}").stdout.strip()
+    try:
+        libs = sh(f"docker run --rm --entrypoint sh {c.kafka_img} -c 'ls {c.kafka_libs}'").stdout.split()
+        cl = [l for l in libs if l.startswith("kafka-clients-") and l.endswith(".jar")]
+        if not cl:
+            raise Refusal("rig", f"no kafka-clients jar under {c.kafka_libs} in {c.kafka_img} — "
+                                 f"set images.kafkaLibs to where this image keeps them")
+        sh(f"docker cp {cid}:{c.kafka_libs}/{cl[0]} {out}/{cl[0]}")
+    finally:
+        sh(f"docker rm -v {cid}", check=False)
+    return cl[0]
 
 
 def yaml_scalar(v):
@@ -1221,6 +1330,7 @@ def stack_up():
     if c.plat:
         return c.plat.up()
     save_json("volumes-before.json", dangling_anonymous_volumes())
+    prepare_dashboard()
     p = compose_path()
     sh(f"docker compose -f {p} up -d", timeout=900)
     # The flink entrypoint drops privileges to uid 9999; a named volume is
@@ -1648,6 +1758,7 @@ def fill(topic, count, seed, manifest_name):
         raise Refusal("rig", f"manifest says {m[c.count_field]} records, asked for {count}")
     verify_backlog(m, topic)
     log(f"backlog {topic}: {count:,} records read back over {c.partitions} partitions")
+    refresh_expected_keys()
     return m
 
 
@@ -4639,6 +4750,9 @@ def run_case(cores, pass_id, run_id, shape_ref, is_baseline, manifest,
                 rec["ticks"] = None
             stop_sampler()
             stop_tm()
+            # The case's consumer is gone, so its group goes too: left behind,
+            # its lag would sit on the dashboard as a reader that never reads.
+            delete_group(group)
 
 
 # ------------------------------------------------------------------ the table
@@ -5446,7 +5560,7 @@ def dashboard_here():
     Compose resolves a relative host path against the compose file's own
     directory, so this does the same."""
     c = cfg()
-    svc = dashboard_service(c.raw.get("extraServices"))
+    svc = dashboard_service(all_services())
     if svc:
         svc["mounts"] = {k: (v if os.path.isabs(v) else os.path.normpath(os.path.join(c.stack_dir, v)))
                          for k, v in svc["mounts"].items()}
@@ -5609,7 +5723,7 @@ def memory_budget_line(vm):
     broker = _mib(c.kafka_mem)
     jm = 2048.0
     extras, unread = 0.0, []
-    for name, b in (c.raw.get("extraServices") or {}).items():
+    for name, b in all_services().items():
         if isinstance(b, dict) and b.get("mem_limit"):
             try:
                 extras += _mib(str(b["mem_limit"]))
@@ -5661,6 +5775,18 @@ SECTION7_METRICS = (
     "flink_jobmanager_job_lastCheckpointSize",
     "flink_jobmanager_taskSlotsAvailable",
     "flink_taskmanager_Status_JVM_Threads_Count",
+    "kafka_topic_records_written_total",
+    "kafka_topic_log_bytes",
+    "kafka_group_records_committed_total",
+    "kafka_group_lag_records",
+    "kafka_reader_unique_keys",
+    "kafka_reader_records_total",
+    "docker_container_network_receive_bytes_total",
+    "docker_container_network_transmit_bytes_total",
+    "flink_taskmanager_Status_JVM_Memory_Heap_Used",
+    "flink_taskmanager_Status_JVM_Memory_Heap_Max",
+    "flink_jobmanager_job_numberOfCompletedCheckpoints",
+    "flink_jobmanager_taskSlotsTotal",
 )
 
 

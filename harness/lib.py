@@ -125,6 +125,13 @@ T = {
     # It makes a case wait, never throws one out after it was measured; every
     # case now records otherCoresOpen/Close so it can be set from data later.
     "busyCoresFrac": 0.25,
+    # memory moved out to disk at a case's start. Replayed 2026-10-18 over 292
+    # recorded passes in 25 suites: under 3 GB, 3 of 248 read 15% or more under
+    # their case's best; at 3 GB or more, 15 of 44. 3 GB would have held up the
+    # 2026-10-18 reference run, which passed with passes at 3.0-3.4 GB; at 4 GB
+    # the only suites touched are four that ended with no result anyway
+    # (clean-room runs 54 and 56, reference runs 2026-10-11 and 2026-10-17).
+    "swapWaitMB": 4096,
     "busyRecheckS": 30.0,
     # the claim, as opposed to the measurement. A table can be beyond reproach
     # and still say the pipeline does not scale: the demo's own job reads 1.99x
@@ -4675,6 +4682,78 @@ def wait_until_quiet(before, sample=None, sleep=None, now=None, say=None, stop=T
             return {"otherCores": round(cores, 2), "waitedS": round(waited)}
 
 
+def top_memory(ps_text, n=3):
+    """Pure. The n programs using the most memory, from `ps -axo rss=,comm=`,
+    as (name, GB), leaving out Docker's own virtual machine, whose memory is
+    the run's."""
+    rows = []
+    for line in (ps_text or "").splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) != 2 or not parts[0].isdigit():
+            continue
+        name = os.path.basename(parts[1].strip())
+        if "Virtualization" in parts[1] or "com.docker" in name or "qemu" in name:
+            continue
+        rows.append((name, int(parts[0]) / 1048576.0))
+    rows.sort(key=lambda r: -r[1])
+    return rows[:n]
+
+
+def memory_sentence(mb, top):
+    who = ", ".join(f"{name} {gb:.1f} GB" for name, gb in top)
+    return f"the machine has {mb / 1024:.1f} GB of its memory moved out to disk" + (f" ({who})" if who else "")
+
+
+def _memory_now():
+    mb = host_swap_mb()
+    try:
+        ps = subprocess.run(["ps", "-axo", "rss=,comm="], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        ps = ""
+    return mb, top_memory(ps)
+
+
+def wait_for_memory(before, sample=None, sleep=None, now=None, say=None):
+    """GUARD: before a case, wait while the machine has swapMB or more of its
+    memory moved out to disk, then stop the run if it does not come down.
+
+    Clean-room run 56's two suites both ended with no result: the slow passes
+    opened with 4.5-5.5 GB moved out to disk while Chrome, Numbers, ChatGPT and
+    Mail were open, and its fast passes at 1.6-2.4 GB (finding F5). Whether the
+    memory is what slowed them is not measured; the record says passes at 4 GB
+    or more read slow often enough that a suite started there is not worth
+    the hour. The same wait and the same time limit as a busy CPU
+    (wait_until_quiet), and the same way past it, --measure-when-busy."""
+    c = cfg()
+    sample = sample or _memory_now
+    sleep = sleep or time.sleep
+    now = now or time.time
+    say = say or (lambda line: log("  " + progress(line)))
+    limit = T["swapWaitMB"]
+    t0 = now()
+    mb, top = sample()
+    if mb is None or mb < limit:
+        return {"swapMB": mb, "waitedS": 0}
+    if MEASURE_WHEN_BUSY:
+        say(f"{memory_sentence(mb, top)}; measuring {before} anyway, as --measure-when-busy asks")
+        return {"swapMB": mb, "waitedS": 0, "measuredWhenBusy": True}
+    while True:
+        say(f"waiting before {before}: {memory_sentence(mb, top)}. Close them, or the case will be "
+            f"measured on a machine short of memory.")
+        if now() - t0 >= c.busy_wait_s:
+            raise Refusal("rig", f"the machine was short of memory before {before}: after "
+                                 f"{c.busy_wait_s / 60:.0f} minutes of waiting, {memory_sentence(mb, top)}, "
+                                 f"and {limit / 1024:.0f} GB or more reads slow too often to measure on. "
+                                 f"Close them and run again, or pass --measure-when-busy to measure anyway.")
+        sleep(T["busyRecheckS"])
+        mb, top = sample()
+        if mb is None or mb < limit:
+            waited = now() - t0
+            say(f"memory back under {limit / 1024:.0f} GB moved out to disk after {waited / 60:.1f} minutes; "
+                f"starting {before}")
+            return {"swapMB": mb, "waitedS": round(waited)}
+
+
 def run_case(cores, pass_id, run_id, shape_ref, is_baseline, manifest,
              min_boundaries=None, min_window_s=None, ckpt_ms=None, warmup_max_s=None, reporter_s=None,
              kafka_cap=None, parallelism=None, manifest_path=None):
@@ -4697,6 +4776,7 @@ def run_case(cores, pass_id, run_id, shape_ref, is_baseline, manifest,
     rec = {"cores": cores, "pass": pass_id, "group": group}
     # GUARD: a busy machine waits before the case, not after it was measured
     rec["busyBefore"] = wait_until_quiet(f"the {cores}-core case")
+    rec["memoryBefore"] = wait_for_memory(f"the {cores}-core case")
     try:
         free = host_free_bytes()
         rec["hostFreeGB"] = round(free / 1e9, 1)

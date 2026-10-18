@@ -128,7 +128,9 @@ A reader can then see what was assumed rather than agreed.
    harness owns exactly one input — the one it fills, measures and drains, the
    one being scaled to capacity — and the outputs whose growth is a constant
    multiple of it. A price feed is a topic you create, fill and read, named in
-   neither list, and the harness leaves it alone. The same goes for the
+   neither list, and the harness leaves the topic alone — **but its source
+   runs at the case's core count like every other operator**, or the tiny
+   proof stops (clean-room run 56 ran its price source on one core). The same goes for the
    timer-driven market value on the way out. Three clean-room runs each stopped
    to work this out and each reached the same answer, because the contract said
    "the input topic" and "every topic it writes" and left the rest to be
@@ -916,6 +918,7 @@ for it.
 | no job is actually running | engine reports RUNNING with the expected parallelism |
 | the cluster is still busy from the last case | assert idle by asking the engine, not by killing what you think is there |
 | the machine is busy before a case | before every case (short proof, suite, ceiling, each completeness arm), other programs' CPU averaged over three seconds. Over a quarter of the cores, the case **waits**: `results/PROGRESS.txt` says *"waiting before the 4-core case: other programs are using 2.3 of 8 cores (photoanalysisd 71%, mds_stores 48%). Close them, or the case will be measured on a busy machine."*, and checks again every 30 s. Still busy after `busyWaitS` (10 minutes), the chain stops with the same sentence. `--measure-when-busy` measures anyway and says so. The quarter is a starting value, not measured |
+| the machine is short of memory before a case | before every measured case, the memory the machine has moved out to disk. At 4 GB or more the case **waits**, naming the biggest programs (*"waiting before the 4-core case: the machine has 5.1 GB of its memory moved out to disk (Google Chrome 2.1 GB, Numbers 0.8 GB, Mail 0.5 GB)"*), and checks again every 30 s; still there after `busyWaitS`, the chain stops. With nobody to ask, that stop is the result: report it. Replayed over 292 recorded passes: under 3 GB, 1% read 15% or more slow; at 3 GB or more, 34%. 4 GB, not 3, because a valid run passed at 3.0–3.4 GB. Clean-room run 56 lost both its suites to passes at 4.5–5.5 GB |
 | the backlog lacks headroom at window close | a full checkpoint interval of records remains **at the measured rate** — not merely `remaining > 0` |
 | the window is not anchored on commit boundaries | ≥3 boundaries inside the window |
 | two vantage points disagree | transport and manifest agree within a stated tolerance |

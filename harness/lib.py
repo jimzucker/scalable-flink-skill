@@ -3144,7 +3144,11 @@ def broker_advice_fits(want_mb):
             f"as a pipeline that does not scale. Three ways out, in order: raise the virtual "
             f"machine to about {need/1024:.0f} GB; or drop the {top}-core case and set the target on "
             f"the step into {smaller[-1] if smaller else top} cores; or keep the broker where it is, let "
-            f"the {top}-core case come back as a ceiling, and report it as where scaling stops.")
+            f"the {top}-core case come back as a ceiling, and report it as where scaling stops. "
+            f"With nobody to ask, take the third and carry on: the tiny proof's short window over a "
+            f"fresh backlog is not the suite's, and the suite decides whether the case is a ceiling. "
+            f"Clean-room run 55 was told the same, and its suite's 4-core case read 99.4% of its cap "
+            f"with no ceiling (finding F6).")
 
 
 def tm_memory_record():

@@ -1025,6 +1025,24 @@ def _cmd_selftest(live=True, topic=None):
     expect("sleep: the clocks, and the power source read from pmset (must not fire)",
            sleep_clocks, "", should_fire=False)
 
+    # Preflight's disk row stops only on a measured record size; a guess is
+    # left to the tiny proof's measured check (2026-10-18: the reference
+    # pipeline from an empty broker, 121 GB projected, 114 free, 29 needed).
+    def disk_measured_short():
+        stop, text = L.disk_row(121e9, 114e9, "900,000,000 records at 120 bytes each", True)
+        if stop:
+            raise Refusal("rig", text)
+    expect("disk: a measured record size that does not fit stops the run", disk_measured_short,
+           "not enough disk space")
+
+    def disk_guessed_short():
+        stop, text = L.disk_row(121e9, 114e9, "900,000,000 records at 120 bytes each", False)
+        assert not stop and "guessed record size" in text and "tiny proof" in text, text
+        stop, text = L.disk_row(29e9, 114e9, "x", False)
+        assert not stop and text.startswith("114.0 GB free"), text
+    expect("disk: a guessed record size that does not fit is reported, not a stop (must not fire)",
+           disk_guessed_short, "", should_fire=False)
+
     def memory_row():
         # The row's arithmetic from the example config: the worker's container
         # limit at its largest case, broker, job manager 2g and extra services;
@@ -4096,14 +4114,10 @@ def cmd_preflight():
         shape = (f"{c.backlog:,} records at {per_rec:.0f} bytes each ({how}) "
                  f"= {in_bytes/1e9:.1f} GB, plus {per_case_out/1e9:.1f} GB of outputs, "
                  f"2 GB of checkpoints and 10 GB spare")
-        if free < need:
-            raise Exception(f"there is not enough disk space. This run needs about "
-                            f"{need/1e9:.0f} GB and only {free/1e9:.0f} GB is free: {shape}. "
-                            f"Either free up space or lower backlog.count in pipeline.json"
-                            + ("" if how.startswith("measured") else
-                               ". Note the record size above is a guess; if your records are "
-                               "smaller, or compressed on the way in, the real need is lower"))
-        return f"{free/1e9:.1f} GB free, about {need/1e9:.1f} GB needed: {shape}"
+        stop, text = L.disk_row(need, free, shape, how.startswith("measured"))
+        if stop:
+            raise Exception(text)
+        return text
 
     def retention():
         L.recreate_output_topics()

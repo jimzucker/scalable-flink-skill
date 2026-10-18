@@ -533,6 +533,48 @@ def _cmd_selftest(live=True, topic=None):
         assert got == [("p1-desc", [4, 2, 1]), ("p2-asc", [1, 2, 4]), ("p3-desc", [4, 2, 1]),
                        ("sentinel", [4])], got
         assert passes_plan([1, 2, 4], 2, None) == [("p1-desc", [4, 2, 1]), ("p2-asc", [1, 2, 4])]
+    def tiny_stops_on_rig():
+        seen = []
+        def measure(cores, again):
+            seen.append(cores)
+            return "stop" if cores == 4 else None
+        got = largest_first([1, 2, 4], measure, lambda a, b: True)
+        assert got == ("rig", [4]) and seen == [4], (got, seen)
+    expect("tiny proof: a check about the rig on the largest case stops before the smaller ones (must not fire)",
+           tiny_stops_on_rig, "", should_fire=False)
+
+    def memory_fake(readings):
+        clock = {"t": 0.0}
+        it = iter(readings)
+        return dict(sample=lambda: (next(it), [("Chrome", 2.1), ("Numbers", 0.8)]),
+                    sleep=lambda s: clock.__setitem__("t", clock["t"] + s),
+                    now=lambda: clock["t"], say=lambda line: None)
+
+    def memory_low():
+        got = L.wait_for_memory("the 4-core case", **memory_fake([1600.0]))
+        assert got == {"swapMB": 1600.0, "waitedS": 0}, got
+    expect("memory: under 4 GB moved out to disk, the case starts at once (must not fire)",
+           memory_low, "", should_fire=False)
+
+    def memory_clears():
+        got = L.wait_for_memory("the 4-core case", **memory_fake([5200.0, 4800.0, 2100.0]))
+        assert got["swapMB"] == 2100.0 and got["waitedS"] > 0, got
+    expect("memory: the case waits until memory comes back under 4 GB (must not fire)",
+           memory_clears, "", should_fire=False)
+
+    def memory_stays():
+        L.wait_for_memory("the 4-core case", **memory_fake([5200.0] * 1000))
+    expect("memory: still 4 GB or more after the wait stops the run", memory_stays,
+           "short of memory before the 4-core case")
+
+    def memory_names():
+        ps = "  2202000 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome\n 900000 Numbers\n" \
+             " 9000000 com.apple.Virtualization.VirtualMachine\n  50000 Mail\n"
+        got = L.top_memory(ps)
+        assert [n for n, _ in got] == ["Google Chrome", "Numbers", "Mail"], got
+    expect("memory: names the biggest programs, leaving out Docker's own machine (must not fire)",
+           memory_names, "", should_fire=False)
+
     expect("suite: the largest case first, and the sentinel repeats it at the end (must not fire)",
            suite_largest_first, "", should_fire=False)
     expect("settle: after the sentinel, 2->4 alternates 2, 4, 2, 4 (must not fire)",
@@ -4604,8 +4646,12 @@ def largest_first(cases, measure, ok):
         return ok(a, b) is not False
 
     for i, cores in enumerate(order):
-        measure(cores, False)
+        stop = measure(cores, False)
         done.append(cores)
+        # a check about the rig reads the same at every size: the smaller
+        # cases would only spend their minutes on it (run 56, F1)
+        if stop == "stop":
+            return "rig", done
         if i and not settle(cores, order[i - 1]):
             return (cores, order[i - 1]), done
     # the whole span, judged last: two adjacent steps each just in bounds can
@@ -4697,6 +4743,9 @@ def cmd_tinyproof():
                     log(f"  STOPPED ({e.refusal.scope}): {e.refusal.msg}")
                     out["result"] = "FAIL"
                     rc = 1
+                    if e.refusal.scope == "rig":
+                        log("  not measuring the smaller cases: a check about the rig reads the same at every size")
+                        return "stop"
 
         def in_bounds(a, b):
             if a not in recs or b not in recs:
@@ -4718,6 +4767,8 @@ def cmd_tinyproof():
         if first:
             out["remeasured"] = {str(k): {"first": v, "second": recs[k]["recordsPerSec"]}
                                  for k, v in first.items() if k in recs}
+        if stopped == "rig":
+            stopped = None
         if stopped:
             a, b = stopped
             log(f"  {a}->{b} out of bounds twice; not measuring the smaller cases -- they cannot change it")

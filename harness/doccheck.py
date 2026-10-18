@@ -710,6 +710,22 @@ def check_agent_waits_in_turn(fail):
     return "an agent waits for results/DONE inside its turn, with watch.sh's time limit"
 
 
+def check_run55_findings(fail):
+    """Clean-room run 55's findings F6-F8, each fixed in the text an agent
+    reads at the moment it needs it."""
+    skill = read(ROOT, "SKILL.md")
+    readme = read(HERE, "README.md")
+    lib = read(HERE, "lib.py")
+    if "With nobody to ask, take the third and carry on" not in skill \
+            or "With nobody to ask, take the third and carry on" not in lib:
+        fail("F6: the broker advice in SKILL.md and lib.py does not say what to do with nobody to ask")
+    if "At the start of `all`, during `tinyproof`, and at `down`" not in readme:
+        fail("F7: harness/README.md does not warn that the start of `all` kills a watcher")
+    if "Name every sink so its operator name contains the topic it writes" not in readme:
+        fail("F8: harness/README.md's design row does not give the sink-name rule")
+    return "run 55's findings F6-F8 are still written where an agent reads them"
+
+
 def check_no_duplicate_keys(fail):
     """A JSON object with the same key twice keeps the last one, so the other
     is dead text nobody sees. pipeline.example.json carried two
@@ -1090,7 +1106,8 @@ def main():
                   check_examples_pass_arm,
                   check_reporter_spelling,
                   check_fill_in_names,
-                  check_agent_waits_in_turn):
+                  check_agent_waits_in_turn,
+                  check_run55_findings):
         lines.append(check(problems.append))
     for p in problems:
         print(f"doccheck: {p}")

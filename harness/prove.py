@@ -3833,7 +3833,7 @@ def _cmd_selftest(live=True, topic=None):
             raise Exception("6,400m of broker was called affordable on a 9,937 MiB machine")
         raise Refusal("rig", why)
     expect("broker advice says when the machine cannot give it",
-           broker_advice_on_a_small_machine, "cannot give it that")
+           broker_advice_on_a_small_machine, "With nobody to ask, take the third and carry on")
 
     def broker_advice_on_a_big_machine():
         class FakeRun:
@@ -4810,7 +4810,8 @@ def cmd_tinyproof():
                 if a not in recs or b not in recs:
                     x = a if a not in recs else b
                     log(f"  {a}->{b}: not bounded — {x} cores "
-                        + ("was a ceiling" if x in ran else "was not measured: a larger step stopped the proof first"))
+                        + ("was a ceiling here, so the suite measures this step for the first time"
+                           if x in ran else "was not measured: a larger step stopped the proof first"))
                     continue
                 ratio = recs[b]["recordsPerSec"] / recs[a]["recordsPerSec"]
                 ideal = b / a
@@ -5121,7 +5122,9 @@ def cmd_completeness():
             log(f"  job graph: results/graph.md, {info['tasks']} tasks, {info['operators']} operators; {said}"
                 if g else "  job graph: not drawn, the plan was empty")
             if info.get("unconnected"):
-                log(f"  job graph: drawn without a line, no operator names them: {', '.join(info['unconnected'])}")
+                log(f"  job graph: drawn without a line, no operator names them: {', '.join(info['unconnected'])}. "
+                    f"Name each sink so its operator name contains the topic it writes (harness/README.md, "
+                    f"the design row)")
         except Exception as e:
             log(f"  job graph not drawn: {e}")
         # One real record per topic, for the README to link to: on 2026-10-10

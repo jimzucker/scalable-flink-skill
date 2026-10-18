@@ -1027,7 +1027,11 @@ three ways out, in order: **raise the virtual machine**; or **drop the largest
 case** and set the target on the step below it; or **keep the broker where it is, let the
 largest case come back as a ceiling, and report it as where scaling stops.**
 The third is a result, not a failure — it is the honest answer on a machine
-that cannot hold both.
+that cannot hold both. **With nobody to ask, take the third and carry on.** The tiny
+proof's short window over a fresh backlog is not the suite's, so it is the
+suite that decides whether the case is a ceiling: clean-room run 55's tiny
+proof called its 4-core case one, and the suite then read it at 99.4% of cap
+with no ceiling.
 
 **A failed check stops the suite — when it is about the rig.** A cap that did not
 apply at one core will not apply at two; a busy cluster, a bad window anchor,

@@ -533,7 +533,7 @@ class Cfg:
             raise Refusal("rig", f"baseline {self.baseline} is not one of the cases {self.cases}")
         if QUICK:
             # quick look: one pass per case, still followed by the sentinel, so
-            # the baseline is measured twice and drift is visible. Every per-case
+            # the largest case is measured twice and drift is visible. Every per-case
             # guard stays live; what is lost is the spread, and with it the right
             # to publish. Replayed against the record 2026-09-04: single passes of
             # the recorded suites read 2.039-2.273x where the suite reported
@@ -5037,7 +5037,8 @@ def build_table(runs, cases_order=None, quick=False):
         if asc and desc:
             o["descOverAsc"] = round((sum(desc) / len(desc)) / (sum(asc) / len(asc)), 4)
         order[cores] = o
-    # sentinel: the baseline measured first and last. No threshold of its own —
+    # sentinel: the first case measured once more at the end (the largest,
+    # since 2026-10-18; the baseline before). No threshold of its own —
     # a drift shows up as baseline spread against the 20% ceiling, which the
     # record has replayed; plan 12 phase 1 measured a 10% spread with no drift.
     sentinel = None

@@ -726,6 +726,19 @@ def check_run55_findings(fail):
     return "run 55's findings F6-F8 are still written where an agent reads them"
 
 
+def check_largest_first(fail):
+    """The author, 2026-10-18: "make that a rule run largest first and work
+    backwards to fail fast". The rule in SKILL.md, and the suite's order in
+    prove.py, which the self-test pins."""
+    skill = read(ROOT, "SKILL.md")
+    prove = read(HERE, "prove.py")
+    if "Run the largest case first and work backwards, to fail fast" not in skill:
+        fail("SKILL.md does not state the rule: run the largest case first and work backwards")
+    if '"p1-desc", [4, 2, 1]' not in prove:
+        fail("prove.py's self-test no longer pins the suite's first pass to the largest case first")
+    return "the largest case runs first, in the rule and in the suite's order"
+
+
 def check_no_duplicate_keys(fail):
     """A JSON object with the same key twice keeps the last one, so the other
     is dead text nobody sees. pipeline.example.json carried two
@@ -1107,7 +1120,8 @@ def main():
                   check_reporter_spelling,
                   check_fill_in_names,
                   check_agent_waits_in_turn,
-                  check_run55_findings):
+                  check_run55_findings,
+                  check_largest_first):
         lines.append(check(problems.append))
     for p in problems:
         print(f"doccheck: {p}")

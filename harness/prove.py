@@ -528,6 +528,13 @@ def _cmd_selftest(live=True, topic=None):
     RUN4 = [(1, 838186, "p1"), (2, 1574122, "p1"), (4, 2728757, "p1"), (4, 2846468, "p2"),
             (2, 1522041, "p2"), (1, 768518, "p2"), (1, 776678, "p3"), (2, 1558714, "p3"),
             (4, 2703505, "p3"), (1, 835127, "sentinel")]
+    def suite_largest_first():
+        got = passes_plan([1, 2, 4], 3, 1)
+        assert got == [("p1-desc", [4, 2, 1]), ("p2-asc", [1, 2, 4]), ("p3-desc", [4, 2, 1]),
+                       ("sentinel", [4])], got
+        assert passes_plan([1, 2, 4], 2, None) == [("p1-desc", [4, 2, 1]), ("p2-asc", [1, 2, 4])]
+    expect("suite: the largest case first, and the sentinel repeats it at the end (must not fire)",
+           suite_largest_first, "", should_fire=False)
     expect("settle: after the sentinel, 2->4 alternates 2, 4, 2, 4 (must not fire)",
            settles(RUN4, [2, 4, 2, 4]), "", should_fire=False)
     expect("settle: after a 2-core case, 2->4 starts at 4 (must not fire)",
@@ -5221,17 +5228,24 @@ def cmd_completeness():
 # ----------------------------------------------------------------------- suite
 
 def passes_plan(cases, n, baseline=None):
-    """Alternating order, then the sentinel: the baseline case once more at the
-    very end, so the suite's first and last measurements are the same case. A
-    rig that drifts across the suite shows up as baseline spread instead of
-    hiding inside the alternation (plan 12: 4c read 688k-776k across a suite
-    and 801k ten minutes later)."""
+    """Largest case first, alternating, then the sentinel: the first case once
+    more at the very end, so the suite's first and last measurements are the
+    same case. A rig that drifts across the suite shows up as that case's
+    spread instead of hiding inside the alternation (plan 12: 4c read
+    688k-776k across a suite and 801k ten minutes later).
+
+    The largest case first because it is the one that fails: a ceiling, a
+    broker out of memory, a rate that never settles. The tiny proof already
+    measures it first for that reason; the suite ran it third, after ten
+    minutes of smaller cases (the author, 2026-10-18: "we should always do
+    4 CPU first ... to save time"). `baseline` only says whether to add the
+    sentinel."""
     plan = []
     for i in range(n):
-        asc = (i % 2 == 0)
-        plan.append((f"p{i+1}-{'asc' if asc else 'desc'}", list(cases) if asc else list(reversed(cases))))
-    if baseline is not None:
-        plan.append(("sentinel", [baseline]))
+        desc = (i % 2 == 0)
+        plan.append((f"p{i+1}-{'desc' if desc else 'asc'}", list(reversed(cases)) if desc else list(cases)))
+    if baseline is not None and plan:
+        plan.append(("sentinel", [plan[0][1][0]]))
     return plan
 
 

@@ -275,7 +275,7 @@ been asked:
 | what is measured | the drain rate of a fixed backlog at each core count, read from committed broker offsets, with the resource columns beside it |
 | what is proved first | completeness with no tolerances, re-checked after killing the pipeline mid-run; no throughput table is published for a build that has not passed |
 | what is built | the pipeline, a deterministic generator, a verifier, and the dashboard |
-| the shape of the suite | the passes per case from `pipeline.json`, ascending then descending, then the baseline once more as a drift check. State the number — it is most of the wall clock |
+| the shape of the suite | the passes per case from `pipeline.json`, **largest case first**, then back up, alternating, then the largest case once more as a drift check. State the number — it is most of the wall clock |
 | the guarantee | exactly-once checkpointing at the configured interval; an at-least-once sink made idempotent by emitting the absolute value per key. State both, and the interval |
 | how long it takes | state an estimate in hours. Clean-room runs have taken two to three, and a user who expected twenty minutes will stop it halfway |
 | what it writes | the three backlogs from `pipeline.json` — suite, tiny proof and completeness — as record counts, and that they are tens of gigabytes of Kafka log. Host free disk is checked before every case, but a user who did not know should not find out from a guard |
@@ -786,8 +786,20 @@ it does not void the suite. One run's 1-core case spread 14–42% in
 seven consecutive suites while its 2- and 4-core cases held under 6%, and a
 failing the whole suite threw away six valid 2→4 measurements.
 
-**Ascending then descending.** If the curve differs, something warms or
-accumulates between cases and the shape is partly the order.
+**Run the largest case first and work backwards, to fail fast.** The
+largest case is the one that fails — a ceiling, a broker out of memory, a
+rate that never settles — so it goes first everywhere: the tiny proof
+measures it first, and the suite's first pass runs largest to smallest, the
+next smallest to largest, alternating. A problem then shows in the first few
+minutes, not after the smaller cases have spent them. The same goes for any
+experiment: run the case that can show the effect first, then work back
+(the author, 2026-10-18).
+
+**Alternate the direction.** If the curve differs between a pass that goes
+down and one that goes up, something warms or accumulates between cases and
+the shape is partly the order. The suite ends with the largest case once
+more, so its first and last measurements are the same case and a drift
+across the suite shows as that case's spread.
 
 **To find the ceiling, starve the other component.** Hold the component under
 test at its largest size and cap the thing beside it in steps. The handover is

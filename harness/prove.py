@@ -1014,6 +1014,7 @@ def _cmd_selftest(live=True, topic=None):
         # 2026-10-18: two readings on the Mac, five minutes asleep between them.
         assert L.slept_s((1000.0, 900.0), (1360.0, 960.0)) == 300.0
         assert L.slept_s((1000.0, 900.0), (1060.0, 960.0)) == 0.0
+        assert str(L.slept_s((1000.0, 900.0), (1060.0, 960.04))) == "0.0"   # not -0.0
         assert L.slept_s(None, (1.0, 1.0)) is None and L.slept_s((1.0, 1.0), None) is None
         ac = "Now drawing from 'AC Power'\n -InternalBattery-0 (id=36110435)\t95%; AC attached; not charging present: true"
         batt = "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=36110435)\t85%; discharging; 4:10 remaining"

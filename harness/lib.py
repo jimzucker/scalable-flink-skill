@@ -3981,7 +3981,9 @@ def slept_s(open_clocks, close_clocks):
     the pipeline but not the window's clock, and the case reads slow."""
     if not open_clocks or not close_clocks:
         return None
-    return round((close_clocks[0] - open_clocks[0]) - (close_clocks[1] - open_clocks[1]), 1)
+    # Never below zero: the clocks are read a moment apart, and the 2026-10-18
+    # reference run recorded -0.0 for two steps that did not sleep.
+    return max(0.0, round((close_clocks[0] - open_clocks[0]) - (close_clocks[1] - open_clocks[1]), 1))
 
 
 def power_source(pmset_batt):

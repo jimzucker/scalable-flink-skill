@@ -108,6 +108,11 @@ T = {
     # two vantage points: 0.5% measured after anchoring on commit boundaries (run 7);
     # 5% is ten times that
     "vantageTol": 0.05,
+    # time the host spent asleep inside a measuring window. Measured 2026-10-18
+    # on the M-series Mac the runs use: awake, the two clocks moved apart by
+    # 0.0 s in 30 s; since boot they were 90,820 s apart against 91,694 s of
+    # sleep in `pmset -g log`. The shortest sleep in that log is 1 s.
+    "sleepTolS": 1.0,
     # pass-to-pass spread. Measured over 13 suites in runs 9-10: 2- and 4-core
     # cases 0.1%-15.8%, one-core cases up to 42%, one broken suite at 86%.
     # 20% sits above the whole valid band and below every outlier. The 10% it
@@ -3925,6 +3930,43 @@ def wait_flat(deadline_s, jid=None):
                           f"drifting {detail.get('drift')} with scatter {detail.get('scatter')}.")
 
 
+def host_clocks():
+    """(total, awake) seconds from two clocks that differ only while the host
+    is asleep, or None where there are not two such clocks. On macOS
+    CLOCK_MONOTONIC keeps counting through sleep and CLOCK_UPTIME_RAW stops; on
+    Linux CLOCK_BOOTTIME counts through suspend and CLOCK_MONOTONIC stops.
+    Measured on the Mac 2026-10-18: the two were 90,820 s apart since boot,
+    against 91,694 s of sleep in `pmset -g log`."""
+    try:
+        if hasattr(time, "CLOCK_UPTIME_RAW"):
+            return time.clock_gettime(time.CLOCK_MONOTONIC), time.clock_gettime(time.CLOCK_UPTIME_RAW)
+        if hasattr(time, "CLOCK_BOOTTIME"):
+            return time.clock_gettime(time.CLOCK_BOOTTIME), time.clock_gettime(time.CLOCK_MONOTONIC)
+    except OSError:
+        pass
+    return None
+
+
+def slept_s(open_clocks, close_clocks):
+    """Pure. Seconds the host was asleep between two host_clocks() readings,
+    or None if either is missing. Clean-room run 55's Mac slept five minutes in
+    the middle of a chain (finding F5); inside a measuring window that stops
+    the pipeline but not the window's clock, and the case reads slow."""
+    if not open_clocks or not close_clocks:
+        return None
+    return round((close_clocks[0] - open_clocks[0]) - (close_clocks[1] - open_clocks[1]), 1)
+
+
+def power_source(pmset_batt):
+    """Pure. (on mains, battery percent or None) from `pmset -g batt`, or None
+    if the text says neither."""
+    m = re.search(r"Now drawing from '([^']+)'", pmset_batt or "")
+    if not m:
+        return None
+    pct = re.search(r"(\d+)%", pmset_batt)
+    return m.group(1) == "AC Power", int(pct.group(1)) if pct else None
+
+
 def host_swap_mb():
     """How much of the host's memory is moved out to disk right now, in MB.
 
@@ -4002,6 +4044,12 @@ def check_case(rec, cores, is_baseline):
         raise Refusal("case", f"measured rate is not positive: {rec['recordsConsumed']} records in {rec['elapsedS']}s")
     if rec.get("rateSource", "").startswith("engine"):
         raise Refusal("case", "rate came from the engine, not the transport")
+    # GUARD: the machine slept inside the window. Missing on records from
+    # before 2026-10-18, which then pass as they always did.
+    if (rec.get("hostSleptS") or 0) >= T["sleepTolS"]:
+        raise Refusal("case", f"the machine was asleep for {rec['hostSleptS']:.0f} s inside the measuring "
+                      f"window, so the pipeline stopped while the window's clock ran on and the rate reads low. "
+                      f"Keep the machine plugged in with its lid open")
     if rec["vantageDisagreement"] > T["vantageTol"]:
         # Two causes account for nearly every case of this, and neither is
         # obvious from the numbers. Clean-room run 41 spent about 35 minutes
@@ -4660,6 +4708,7 @@ def run_case(cores, pass_id, run_id, shape_ref, is_baseline, manifest,
         mem0_k = cgroup_mem(c.kafka)
         rec["tOpen"] = time.time()
         rec["open"] = open_tick
+        clocks_open = host_clocks()
         want_progress = c.vantage_mode == "command"
         mpath = manifest_path or manifest_path_of(manifest)
         open_progress = progress_from_outputs(mpath) if want_progress else None
@@ -4692,6 +4741,7 @@ def run_case(cores, pass_id, run_id, shape_ref, is_baseline, manifest,
         rec["brokerLimitBytes"] = mem1_k.get("limitBytes") or 0
         rec["tClose"] = time.time()
         rec["close"] = close_tick
+        rec["hostSleptS"] = slept_s(clocks_open, host_clocks())
         close_progress = progress_from_outputs(mpath) if want_progress else None
         try:
             rec["hostLoadClose"] = round(os.getloadavg()[0], 2)

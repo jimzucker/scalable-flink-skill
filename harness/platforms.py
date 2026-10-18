@@ -122,6 +122,7 @@ LAPTOP_ONLY = {
     "CPU cap mechanism chosen once": "the size is the service's unit, read back every case",
     "memory is per subtask, not per container": "the service sizes memory with its unit",
     "other programs' use of the cores (reported)": "the cores measured are not this machine's",
+    "power source (reported)": "the machine measured is not this one",
     "what this host's own cores do": "the cores measured are not this machine's",
     "the Docker VM against the machine's memory (reported)": "there is no Docker VM in the stack",
     "pipeline, broker and job manager against the VM (reported)": "there is no Docker VM in the stack",

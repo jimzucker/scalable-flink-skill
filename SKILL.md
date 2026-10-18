@@ -380,6 +380,7 @@ bad window voids one case — so anything checkable now is checked now.
 | the interview and the plan were written down | `ASSUMPTIONS.md` and `PLAN.md` exist before the stack does, and the plan names every disclosure | a run that never wrote down what it decided leaves a reader unable to tell what was agreed from what was assumed — and the six answers are the spec |
 | the README names every topic and operator | `README.md` at the project root exists and contains, as text, every topic in `topics.in`, `topics.out`, `topicsAlsoWritten` and `design.inputs`, and every `design.operators` entry. A missing name stops the run, and the message names it | a pipeline nobody else can build, run or read — the 2026-10-10 run left none |
 | other programs' use of the cores | other programs' CPU — the Docker VM and the run's own processes left out — against the core count, and the three busiest. **Reported here; each case checks again before it starts** (§6). When it says busy, show the user the programs and ask: *wait for them, or measure anyway?* With no human to ask, wait | a cap is a **share**, not a promise of cycles: on a busy host every case reads 100% of its cap and does less work for it, and no other column shows it |
+| power source | mains or battery, and the charge. **Reported, never a stop** | `all` keeps a Mac awake, but on battery macOS can still sleep; a case whose window spans a sleep is thrown out |
 | the VM trim command is known | `docker run --rm --privileged --pid=host alpine nsenter -t 1 -m -u -n -i -- fstrim -v /var/lib/docker` | space freed inside a Docker Desktop VM never returns to the host |
 
 **Then the tiny proof, before any fill.** It is called tiny because it is short, **not because it is small**: it measures the drain rate that sizes everything else, so it needs enough data to warm up and hold a steady window at the fastest case. That is `rate x (warm-up + window + headroom)`, which for a fast pipeline is hundreds of millions of records — clean-room run 42 ran 400,000,000 and run 43 was told to run 391,613,400. This line used to say "a few thousand records", which is out by five orders of magnitude and led two runs to budget for a smoke test and get a second full one. Budget the disk and the minutes for it, and know that **every tuning change re-creates it**. End to end:
@@ -570,6 +571,14 @@ the host has left, so the case still pins at its cap and simply does less
 work per cycle — the one failure mode every resource column in the table is
 blind to. The load average is recorded at the open and close of every window
 for exactly this reason.
+
+**Keep it awake and plugged in.** A machine asleep inside a window stops
+the pipeline while the window's clock runs on, and the case reads slow.
+Clean-room run 55's Mac slept five minutes on battery in the middle of a
+chain. `prove.py all` keeps a Mac awake until the chain ends, preflight
+reports whether it is on mains or battery, every case records how long the
+machine slept inside its window (`hostSleptS`) and is thrown out at one
+second or more, and `all.json` says how long it slept in each step.
 
 **Check before every case, not once.** Preflight is one moment. On 2026-10-10
 it said "quiet" (other programs on 0.50 of 8 cores) and Photos analysis and

@@ -320,6 +320,10 @@ def _cmd_selftest(live=True, topic=None):
             assert got == "ok" and st["n"] == 2, f"expected 2 attempts, took {st['n']}"
         return go
 
+    expect("a case whose window spans a sleep is thrown out", case(hostSleptS=300.0), "asleep for 300 s")
+    expect("a case that did not sleep passes (must not fire)", case(hostSleptS=0.0), "", should_fire=False)
+    expect("a case recorded before the sleep reading passes (must not fire)", case(hostSleptS=None), "",
+           should_fire=False)
     expect("a transient case is retried and passes (must not fire)", flaky("case", 1), "",
            should_fire=False)
     expect("a case that fails twice is not retried again", flaky("case", 5), "attempt 2")
@@ -1005,6 +1009,21 @@ def _cmd_selftest(live=True, topic=None):
         assert L.keep_awake_argv(4242, "darwin", lambda name: None) is None
     expect("all: the chain keeps a Mac awake until it ends, and only on a Mac (must not fire)",
            keep_awake, "", should_fire=False)
+
+    def sleep_clocks():
+        # 2026-10-18: two readings on the Mac, five minutes asleep between them.
+        assert L.slept_s((1000.0, 900.0), (1360.0, 960.0)) == 300.0
+        assert L.slept_s((1000.0, 900.0), (1060.0, 960.0)) == 0.0
+        assert L.slept_s(None, (1.0, 1.0)) is None and L.slept_s((1.0, 1.0), None) is None
+        ac = "Now drawing from 'AC Power'\n -InternalBattery-0 (id=36110435)\t95%; AC attached; not charging present: true"
+        batt = "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=36110435)\t85%; discharging; 4:10 remaining"
+        assert L.power_source(ac) == (True, 95) and L.power_source(batt) == (False, 85)
+        assert L.power_source("") is None and L.power_source(None) is None
+        clocks = L.host_clocks()
+        if sys.platform == "darwin":
+            assert clocks and clocks[0] >= clocks[1], clocks
+    expect("sleep: the clocks, and the power source read from pmset (must not fire)",
+           sleep_clocks, "", should_fire=False)
 
     def memory_row():
         # The row's arithmetic from the example config: the worker's container
@@ -4191,6 +4210,25 @@ def cmd_preflight():
             raise Exception(problem)
         return f"README.md names all {len(L.readme_names(c))} topics and operators"
 
+    def power():
+        """Mains or battery. Reported, never a reason to stop. `prove.py all`
+        keeps the Mac awake, but on battery macOS still sleeps: clean-room run
+        55's Mac slept five minutes on battery in the middle of a chain (F5),
+        and a case whose window spans a sleep is thrown out."""
+        try:
+            r = subprocess.run(["pmset", "-g", "batt"], capture_output=True, text=True, timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            return "not a Mac: nothing reads the power source here"
+        got = L.power_source(r.stdout)
+        if got is None:
+            return "pmset did not say"
+        mains, pct = got
+        charge = f", battery {pct}%" if pct is not None else ""
+        if mains:
+            return "on mains power" + charge
+        return (f"on battery{charge}. A Mac on battery can still sleep during the run, and a case "
+                f"that sleeps is thrown out. Plug it in before starting")
+
     def quiet_machine():
         """Nothing else should be competing for the cores under test.
 
@@ -4457,6 +4495,7 @@ def cmd_preflight():
     # Named for what it reports, not for the answer it hopes for: clean-room run
     # 54 read "nothing else is using the cores ... PASS ... busy: 2.20 of 8".
     check("other programs' use of the cores (reported)", quiet_machine)
+    check("power source (reported)", power)
     check("what this host's own cores do", host_ceiling)
     check("backlog covers warm-up, window and headroom", backlog_sizing_hint)
     check("the interview and the plan were written down", interview_and_plan)
@@ -5832,6 +5871,7 @@ def cmd_all(steps=None, results=None, dashboard_check=None, teardown=None):
     try:
         for i, (name, fn) in enumerate(steps):
             t0 = time.time()
+            clocks0 = L.host_clocks()
             mark(f"phase={name} start")
             if results == c.results:
                 L.progress(f"step {i + 1} of {len(steps)}: {say.get(name, name)}", pct=i / len(steps))
@@ -5886,7 +5926,16 @@ def cmd_all(steps=None, results=None, dashboard_check=None, teardown=None):
                     log(report_log_line((load_json("suite.json") or {}).get("reportVerdict")))
                 except Exception:
                     log(report_log_line(None))
-            out["steps"].append({"step": name, "rc": rc, "seconds": round(time.time() - t0, 1)})
+            slept = L.slept_s(clocks0, L.host_clocks())
+            out["steps"].append({"step": name, "rc": rc, "seconds": round(time.time() - t0, 1),
+                                 "sleptS": slept})
+            # Reported, never a reason to stop: a measured case checks its own
+            # window (check_case), and the rest of a step compares records, not
+            # times. Clean-room run 55 slept five minutes in completeness and
+            # nothing said so (F5).
+            if slept is not None and slept >= T["sleepTolS"]:
+                log(f"  the machine was asleep for {slept:.0f} s during {name}. Each measured case checks "
+                    f"its own window and is thrown out if it slept; keep the machine plugged in with its lid open")
             mark(f"phase={name} end rc={rc} {time.time() - t0:.0f}s")
             save_all()
             if rc:

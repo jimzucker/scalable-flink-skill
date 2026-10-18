@@ -797,6 +797,29 @@ def topic_exists(topic):
     return topic in (r.stdout or "").split()
 
 
+def disk_row(need, free, shape, measured):
+    """Pure. Preflight's disk row: (stop?, text).
+
+    Stops only on a measured record size. On an empty broker the size is a
+    guess (120 bytes), and the tiny proof measures it and checks the disk
+    again before the fill (disk_projection), so a guess that does not fit is
+    reported and left to that check. The guess stopped clean-room run 43 on a
+    run that would have fitted three times over, came within 10 GB of
+    stopping run 44's (18 bytes measured, 108 GB projected for 16), and on
+    2026-10-18 stopped the reference pipeline from an empty broker: 121 GB
+    projected against 114 GB free, for a run that needs about 29.
+    """
+    if free >= need:
+        return False, f"{free/1e9:.1f} GB free, about {need/1e9:.1f} GB needed: {shape}"
+    if measured:
+        return True, (f"there is not enough disk space. This run needs about {need/1e9:.0f} GB and only "
+                      f"{free/1e9:.0f} GB is free: {shape}. Either free up space or lower backlog.count "
+                      f"in pipeline.json")
+    return False, (f"{free/1e9:.1f} GB free against about {need/1e9:.0f} GB, but only on a guessed record "
+                   f"size: {shape}. Not a reason to stop: the tiny proof measures the size and checks "
+                   f"the disk again before the fill, and stops there if it does not fit")
+
+
 def measured_bytes_per_record():
     """How many bytes one record of input actually takes on the broker, or None.
 

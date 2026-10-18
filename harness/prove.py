@@ -3578,9 +3578,15 @@ def _cmd_selftest(live=True, topic=None):
     expect("job graph: a picture read back too small to use is said so", graph_tiny_png, "10 x 10 pixels")
 
     def disk_input_already_there():
-        need_cold = projected(10_000)["neededBytes"]
-        need_warm = projected(10_000, on_disk_gb=50)["neededBytes"]
-        assert need_cold - need_warm == int(50e9), (need_cold, need_warm)   # run 36: not asked for twice
+        # Half the run's own input on the broker, whatever its backlog.count.
+        # A fixed 50 GB assumed a backlog of at least 250,000,000 records here,
+        # and clean-room run 56's 180,000,000 failed this test with nothing
+        # wrong (2026-10-18).
+        cold = projected(10_000)
+        half_gb = cold["inputBytes"] / 2 / 1e9
+        need_warm = projected(10_000, on_disk_gb=half_gb)["neededBytes"]
+        assert abs((cold["neededBytes"] - need_warm) - cold["inputBytes"] / 2) <= 1, \
+            (cold["neededBytes"], need_warm)                                  # run 36: not asked for twice
     expect("disk: input already on the broker is not asked for twice (must not fire)",
            disk_input_already_there, "", should_fire=False)
 

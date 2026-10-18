@@ -44,6 +44,10 @@ and spent 20 minutes between commands).
 On a Mac, `all` runs `caffeinate -i -s -w` on itself, so the Mac does not sleep until the
 chain ends: not when idle, and not at all while plugged in. Clean-room run 55's Mac slept
 five minutes in the middle of completeness. Closing the lid still puts it to sleep.
+Every case records how long the machine slept inside its measuring window
+(`hostSleptS`, from two clocks that differ only while it sleeps) and is thrown out at one
+second or more; each step in `all.json` carries `sleptS`, and `harness.log` says when
+the machine slept during a step. Preflight reports whether it is on mains or battery.
 Wait with `watch.sh`, giving it the run directory in an environment variable:
 `PROJECT_DIR=/path/to/run sh $(dirname $H)/watch.sh`. It prints progress, writes the same
 lines to `watch.log` in the run directory, and exits when `results/DONE` appears: 0 if the
